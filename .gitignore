@@ -1,0 +1,26 @@
+# Node (root)
+node_modules/
+package-lock.json
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+*.suo
+*.sln.docstates
+
+# Frontend wird als separates Repo gepflegt
+frontend/
+
+# Secrets — NIEMALS committen
+.env
+appsettings.Production.json
+appsettings.*.local.json
+
+# Publish output
+**/publish/
+
+# OS
+.DS_Store
+Thumbs.db

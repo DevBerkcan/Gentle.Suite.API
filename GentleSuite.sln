@@ -1,0 +1,15 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.Domain", "src\GentleSuite.Domain\GentleSuite.Domain.csproj", "{A1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.Application", "src\GentleSuite.Application\GentleSuite.Application.csproj", "{A2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.Infrastructure", "src\GentleSuite.Infrastructure\GentleSuite.Infrastructure.csproj", "{A3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.API", "src\GentleSuite.API\GentleSuite.API.csproj", "{A4}"
+EndProject
+Global
+  GlobalSection(SolutionConfigurationPlatforms) = preSolution
+    Debug|Any CPU = Debug|Any CPU
+    Release|Any CPU = Release|Any CPU
+  EndGlobalSection
+EndGlobal

@@ -1,0 +1,261 @@
+using AutoMapper;
+using GentleSuite.Application.DTOs;
+using GentleSuite.Application.Interfaces;
+using GentleSuite.Domain.Entities;
+using GentleSuite.Domain.Enums;
+using GentleSuite.Domain.Interfaces;
+using GentleSuite.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace GentleSuite.Infrastructure.Services;
+
+public class InvoiceServiceImpl : IInvoiceService
+{
+    private readonly AppDbContext _db;
+    private readonly IMapper _mapper;
+    private readonly IPdfService _pdf;
+    private readonly IEmailService _email;
+    private readonly IActivityLogService _activity;
+    private readonly INumberSequenceService _seq;
+
+    public InvoiceServiceImpl(AppDbContext db, IMapper mapper, IPdfService pdf, IEmailService email, IActivityLogService activity, INumberSequenceService seq)
+    { _db = db; _mapper = mapper; _pdf = pdf; _email = email; _activity = activity; _seq = seq; }
+
+    public async Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(PaginationParams p, InvoiceStatus? status, Guid? customerId, CancellationToken ct)
+    {
+        var q = _db.Invoices.Include(i => i.Customer).Include(i => i.Lines).AsQueryable();
+        if (status.HasValue) q = q.Where(i => i.Status == status.Value);
+        if (customerId.HasValue) q = q.Where(i => i.CustomerId == customerId.Value);
+        if (!string.IsNullOrWhiteSpace(p.Search)) q = q.Where(i => i.InvoiceNumber.Contains(p.Search) || i.Customer.CompanyName.ToLower().Contains(p.Search.ToLower()));
+        var total = await q.CountAsync(ct);
+        var items = await q.OrderByDescending(i => i.InvoiceDate).Skip((p.Page-1)*p.PageSize).Take(p.PageSize).ToListAsync(ct);
+        return new PagedResult<InvoiceListDto>(_mapper.Map<List<InvoiceListDto>>(items), total, p.Page, p.PageSize);
+    }
+
+    public async Task<InvoiceDetailDto?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        var inv = await _db.Invoices.Include(i => i.Customer).ThenInclude(c => c.Contacts).Include(i => i.Lines.OrderBy(l => l.SortOrder)).Include(i => i.Payments).FirstOrDefaultAsync(i => i.Id == id, ct);
+        return inv == null ? null : _mapper.Map<InvoiceDetailDto>(inv);
+    }
+
+    public async Task<InvoiceDetailDto> CreateAsync(CreateInvoiceRequest req, CancellationToken ct)
+    {
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+        var year = DateTime.UtcNow.Year;
+        var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
+        var inv = new Invoice
+        {
+            InvoiceNumber = invoiceNumber,
+            CustomerId = req.CustomerId,
+            QuoteId = req.QuoteId,
+            Subject = req.Subject,
+            IntroText = req.IntroText ?? co?.InvoiceIntroTemplate,
+            OutroText = req.OutroText ?? co?.InvoiceOutroTemplate,
+            Notes = req.Notes,
+            TaxMode = req.TaxMode,
+            InvoiceDate = DateTimeOffset.UtcNow,
+            DueDate = DateTimeOffset.UtcNow.AddDays(req.PaymentTermDays),
+            ServiceDateFrom = req.ServiceDateFrom ?? DateTimeOffset.UtcNow,
+            ServiceDateTo = req.ServiceDateTo ?? DateTimeOffset.UtcNow,
+            SellerTaxId = co?.TaxId,
+            SellerVatId = co?.VatId,
+            Status = InvoiceStatus.Draft,
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+        };
+        if (req.Lines != null)
+            foreach (var l in req.Lines)
+                inv.Lines.Add(new InvoiceLine { Title = l.Title, Description = l.Description, Unit = l.Unit, Quantity = l.Quantity, UnitPrice = l.UnitPrice, VatPercent = l.VatPercent, SortOrder = l.SortOrder });
+        inv.RecalculateTotals();
+        _db.Invoices.Add(inv);
+        await _db.SaveChangesAsync(ct);
+        await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "Created", $"Rechnung {inv.InvoiceNumber} erstellt", ct: ct);
+        return (await GetByIdAsync(inv.Id, ct))!;
+    }
+
+    public async Task<InvoiceDetailDto> UpdateAsync(Guid id, UpdateInvoiceRequest req, CancellationToken ct)
+    {
+        var inv = await _db.Invoices.Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
+        if (inv.IsFinalized || inv.Status != InvoiceStatus.Draft) throw new InvalidOperationException("Nur Entwurfsrechnungen koennen bearbeitet werden.");
+        ValidateUpdateRequest(req);
+
+        inv.Subject = req.Subject;
+        inv.IntroText = req.IntroText;
+        inv.OutroText = req.OutroText;
+        inv.Notes = req.Notes;
+        inv.TaxMode = req.TaxMode;
+        inv.InvoiceDate = req.InvoiceDate;
+        inv.DueDate = req.DueDate;
+        inv.ServiceDateFrom = req.ServiceDateFrom;
+        inv.ServiceDateTo = req.ServiceDateTo;
+
+        var existingLines = inv.Lines.OrderBy(l => l.SortOrder).ToList();
+        var targetLines = req.Lines ?? new List<UpdateInvoiceLineRequest>();
+        var sharedCount = Math.Min(existingLines.Count, targetLines.Count);
+
+        for (var i = 0; i < sharedCount; i++)
+        {
+            var existing = existingLines[i];
+            var line = targetLines[i];
+            existing.Title = line.Title;
+            existing.Description = line.Description;
+            existing.Unit = line.Unit;
+            existing.Quantity = line.Quantity;
+            existing.UnitPrice = line.UnitPrice;
+            existing.VatPercent = line.VatPercent;
+            existing.SortOrder = i;
+        }
+
+        if (existingLines.Count > targetLines.Count)
+        {
+            var toRemove = existingLines.Skip(targetLines.Count).ToList();
+            _db.InvoiceLines.RemoveRange(toRemove);
+            foreach (var line in toRemove) inv.Lines.Remove(line);
+        }
+
+        if (targetLines.Count > existingLines.Count)
+        {
+            foreach (var line in targetLines.Skip(existingLines.Count))
+            {
+                inv.Lines.Add(new InvoiceLine
+                {
+                    Title = line.Title,
+                    Description = line.Description,
+                    Unit = line.Unit,
+                    Quantity = line.Quantity,
+                    UnitPrice = line.UnitPrice,
+                    VatPercent = line.VatPercent,
+                    SortOrder = inv.Lines.Count
+                });
+            }
+        }
+
+        inv.RecalculateTotals();
+        await _db.SaveChangesAsync(ct);
+        await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "Updated", $"Rechnung {inv.InvoiceNumber} aktualisiert", ct: ct);
+        return (await GetByIdAsync(inv.Id, ct))!;
+    }
+
+    private static void ValidateUpdateRequest(UpdateInvoiceRequest req)
+    {
+        if (req.Lines == null || req.Lines.Count == 0) throw new ArgumentException("Mindestens eine Position ist erforderlich.");
+        if (req.DueDate < req.InvoiceDate) throw new ArgumentException("Faelligkeitsdatum darf nicht vor dem Rechnungsdatum liegen.");
+        if (req.ServiceDateTo < req.ServiceDateFrom) throw new ArgumentException("Leistungsende darf nicht vor Leistungsbeginn liegen.");
+
+        for (var i = 0; i < req.Lines.Count; i++)
+        {
+            var line = req.Lines[i];
+            if (string.IsNullOrWhiteSpace(line.Title)) throw new ArgumentException($"Position {i + 1}: Titel ist erforderlich.");
+            if (line.Quantity <= 0) throw new ArgumentException($"Position {i + 1}: Menge muss groesser als 0 sein.");
+            if (line.UnitPrice < 0) throw new ArgumentException($"Position {i + 1}: Preis darf nicht negativ sein.");
+            if (line.VatPercent < 0 || line.VatPercent > 100) throw new ArgumentException($"Position {i + 1}: MwSt muss zwischen 0 und 100 liegen.");
+        }
+    }
+
+    public async Task<InvoiceDetailDto> FinalizeAsync(Guid id, FinalizeInvoiceRequest req, CancellationToken ct)
+    {
+        var inv = await _db.Invoices.Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
+        if (inv.IsFinalized) throw new InvalidOperationException("Already finalized");
+        inv.RecalculateTotals();
+        inv.Status = InvoiceStatus.Final;
+        inv.IsFinalized = true;
+        inv.FinalizedAt = DateTimeOffset.UtcNow;
+        // GoBD hash chain
+        var lastHash = await _db.Invoices.Where(i => i.IsFinalized && i.Id != inv.Id).OrderByDescending(i => i.FinalizedAt).Select(i => i.DocumentHash).FirstOrDefaultAsync(ct);
+        var content = $"{inv.InvoiceNumber}|{inv.GrossTotal}|{inv.InvoiceDate:O}|{lastHash ?? "GENESIS"}";
+        using var sha = SHA256.Create();
+        inv.DocumentHash = Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(content)));
+        inv.PreviousDocumentHash = lastHash;
+        await _db.SaveChangesAsync(ct);
+        if (req.SendEmail) await SendAsync(id, ct);
+        return (await GetByIdAsync(inv.Id, ct))!;
+    }
+
+    public async Task<InvoiceDetailDto> RecordPaymentAsync(Guid id, RecordPaymentRequest req, CancellationToken ct)
+    {
+        var inv = await _db.Invoices
+            .AsNoTracking()
+            .Select(i => new { i.Id, i.GrossTotal, i.Status })
+            .FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
+
+        _db.InvoicePayments.Add(new InvoicePayment
+        {
+            InvoiceId = id,
+            Amount = req.Amount,
+            PaymentDate = req.PaymentDate ?? DateTimeOffset.UtcNow,
+            PaymentMethod = req.PaymentMethod,
+            Reference = req.Reference,
+            Note = req.Note
+        });
+        await _db.SaveChangesAsync(ct);
+
+        var totalPaid = await _db.InvoicePayments
+            .Where(p => p.InvoiceId == id)
+            .SumAsync(p => p.Amount, ct);
+
+        if (totalPaid >= inv.GrossTotal)
+        {
+            await _db.Invoices
+                .Where(i => i.Id == id)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(i => i.Status, InvoiceStatus.Paid)
+                    .SetProperty(i => i.PaidAt, DateTimeOffset.UtcNow), ct);
+        }
+
+        return (await GetByIdAsync(id, ct))!;
+    }
+
+    public async Task<InvoiceDetailDto> CreateCancellationAsync(Guid id, CreateCancellationRequest req, CancellationToken ct)
+    {
+        var orig = await _db.Invoices.Include(i => i.Customer).Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
+        if (!orig.IsFinalized) throw new InvalidOperationException("Only finalized invoices can be cancelled");
+        orig.Status = InvoiceStatus.Cancelled;
+        var year = DateTime.UtcNow.Year;
+        var stornoNumber = await _seq.NextNumberAsync("CancellationInvoice", year, "SR", 4, ct, includeYear: false);
+        var storno = new Invoice
+        {
+            InvoiceNumber = stornoNumber,
+            Type = InvoiceType.Cancellation,
+            CustomerId = orig.CustomerId,
+            CancellationOfInvoiceId = orig.Id,
+            Subject = $"Storno zu {orig.InvoiceNumber}",
+            Notes = req.Reason,
+            TaxMode = orig.TaxMode,
+            InvoiceDate = DateTimeOffset.UtcNow,
+            DueDate = DateTimeOffset.UtcNow.AddDays(14),
+            ServiceDateFrom = orig.ServiceDateFrom,
+            ServiceDateTo = orig.ServiceDateTo,
+            Status = InvoiceStatus.Final,
+            IsFinalized = true,
+            FinalizedAt = DateTimeOffset.UtcNow,
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+        };
+        foreach (var l in orig.Lines) storno.Lines.Add(new InvoiceLine { Title = l.Title, Description = $"Storno: {l.Description}", Quantity = l.Quantity, UnitPrice = -l.UnitPrice, VatPercent = l.VatPercent, SortOrder = l.SortOrder });
+        storno.RecalculateTotals();
+        _db.Invoices.Add(storno);
+        await _db.SaveChangesAsync(ct);
+        return (await GetByIdAsync(storno.Id, ct))!;
+    }
+
+    public async Task<byte[]> GeneratePdfAsync(Guid id, CancellationToken ct)
+    {
+        var inv = await _db.Invoices.Include(i => i.Customer).ThenInclude(c => c.Contacts).Include(i => i.Customer).ThenInclude(c => c.Locations).Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "GentleSuite" };
+        return await _pdf.GenerateInvoicePdfAsync(inv, co, ct);
+    }
+
+    public async Task SendAsync(Guid id, CancellationToken ct)
+    {
+        var inv = await _db.Invoices.Include(i => i.Customer).ThenInclude(c => c.Contacts).Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
+        var contact = inv.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? inv.Customer.Contacts.First();
+        if (inv.Status == InvoiceStatus.Final) inv.Status = InvoiceStatus.Sent;
+        await _db.SaveChangesAsync(ct);
+        await _email.SendTemplatedEmailAsync(contact.Email, "invoice-sent", new Dictionary<string, object>
+        {
+            ["CustomerName"] = inv.Customer.CompanyName, ["ContactName"] = contact.FirstName,
+            ["InvoiceNumber"] = inv.InvoiceNumber, ["Amount"] = inv.GrossTotal.ToString("N2"),
+            ["DueDate"] = inv.DueDate.ToString("dd.MM.yyyy")
+        }, inv.CustomerId, ct: ct);
+    }
+}

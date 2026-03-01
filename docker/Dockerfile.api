@@ -1,0 +1,16 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY GentleSuite.sln .
+COPY src/GentleSuite.Domain/GentleSuite.Domain.csproj src/GentleSuite.Domain/
+COPY src/GentleSuite.Application/GentleSuite.Application.csproj src/GentleSuite.Application/
+COPY src/GentleSuite.Infrastructure/GentleSuite.Infrastructure.csproj src/GentleSuite.Infrastructure/
+COPY src/GentleSuite.API/GentleSuite.API.csproj src/GentleSuite.API/
+RUN dotnet restore
+COPY . .
+RUN dotnet publish src/GentleSuite.API -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY --from=build /app .
+EXPOSE 5000
+ENTRYPOINT ["dotnet", "GentleSuite.API.dll"]
