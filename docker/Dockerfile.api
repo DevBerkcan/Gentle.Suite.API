@@ -1,4 +1,5 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+ARG TARGETARCH
 WORKDIR /src
 COPY GentleSuite.sln .
 COPY src/GentleSuite.Domain/GentleSuite.Domain.csproj src/GentleSuite.Domain/
@@ -7,7 +8,10 @@ COPY src/GentleSuite.Infrastructure/GentleSuite.Infrastructure.csproj src/Gentle
 COPY src/GentleSuite.API/GentleSuite.API.csproj src/GentleSuite.API/
 RUN dotnet restore
 COPY . .
-RUN dotnet publish src/GentleSuite.API -c Release -o /app
+RUN if [ "$TARGETARCH" = "arm64" ]; then RID="linux-arm64"; \
+    elif [ "$TARGETARCH" = "amd64" ]; then RID="linux-x64"; \
+    else RID="linux-x64"; fi && \
+    dotnet publish src/GentleSuite.API -c Release -r "$RID" --self-contained false -p:UseAppHost=false -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app

@@ -447,6 +447,46 @@ public class SystemController : ControllerBase
         RecurringJob.TriggerJob("generate-subscription-invoices");
         return NoContent();
     }
+    [HttpPost("trigger-bank-sync")]
+    public IActionResult TriggerBankSync()
+    {
+        RecurringJob.TriggerJob("sync-bank-transactions");
+        return NoContent();
+    }
+}
+
+[ApiController, Route("api/integrations"), Authorize(Policy = "AdminOnly")]
+public class IntegrationsController(IIntegrationService svc) : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<IntegrationSettingsDto>> Get() => Ok(await svc.GetAsync());
+
+    [HttpPut("paypal")]
+    public async Task<IActionResult> UpdatePayPal(UpdatePayPalRequest req)
+    { await svc.UpdatePayPalAsync(req); return NoContent(); }
+
+    [HttpDelete("paypal")]
+    public async Task<IActionResult> DisconnectPayPal()
+    { await svc.DisconnectPayPalAsync(); return NoContent(); }
+
+    [HttpPost("bank/setup")]
+    public async Task<ActionResult<object>> SetupBank(SetupBankRequest req)
+    {
+        var authUrl = await svc.SetupBankAsync(req);
+        return Ok(new { authUrl });
+    }
+
+    [HttpPost("bank/confirm")]
+    public async Task<IActionResult> ConfirmBank(ConfirmBankRequest req)
+    { await svc.ConfirmBankAsync(req); return NoContent(); }
+
+    [HttpDelete("bank")]
+    public async Task<IActionResult> DisconnectBank()
+    { await svc.DisconnectBankAsync(); return NoContent(); }
+
+    [HttpPost("sync")]
+    public IActionResult TriggerSync()
+    { RecurringJob.TriggerJob("sync-bank-transactions"); return NoContent(); }
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
@@ -518,6 +558,163 @@ public class CrmActivitiesController(ICrmActivityService svc) : ControllerBase
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
 }
 
+
+// === Berichte ===
+[ApiController, Route("api/[controller]"), Authorize]
+public class ReportsController(AppDbContext db) : ControllerBase
+{
+    [HttpGet("revenue-by-customer")]
+    public async Task<IActionResult> RevenueByCustomer([FromQuery] int? year)
+    {
+        var y = year ?? DateTimeOffset.UtcNow.Year;
+        var result = await db.Invoices
+            .Where(i => i.InvoiceDate.Year == y && i.Status != GentleSuite.Domain.Enums.InvoiceStatus.Cancelled)
+            .Include(i => i.Customer)
+            .GroupBy(i => new { i.CustomerId, i.Customer.CompanyName })
+            .Select(g => new RevenueByCustomerDto(g.Key.CompanyName, g.Key.CustomerId, g.Sum(i => i.GrossTotal), g.Count()))
+            .OrderByDescending(x => x.Revenue)
+            .Take(15)
+            .ToListAsync();
+        return Ok(result);
+    }
+
+    [HttpGet("expense-by-category")]
+    public async Task<IActionResult> ExpenseByCategory([FromQuery] int? year, [FromQuery] int? month)
+    {
+        var y = year ?? DateTimeOffset.UtcNow.Year;
+        var query = db.Expenses.Include(e => e.Category).Where(e => e.ExpenseDate.Year == y);
+        if (month.HasValue) query = query.Where(e => e.ExpenseDate.Month == month.Value);
+        var result = await query
+            .GroupBy(e => e.Category != null ? e.Category.Name : "Unkategorisiert")
+            .Select(g => new ExpenseByCategoryDto(g.Key, g.Sum(e => e.GrossAmount), g.Count()))
+            .OrderByDescending(x => x.Amount)
+            .ToListAsync();
+        return Ok(result);
+    }
+
+    [HttpGet("monthly-finance")]
+    public async Task<IActionResult> MonthlyFinance([FromQuery] int? year)
+    {
+        var y = year ?? DateTimeOffset.UtcNow.Year;
+        var revenues = await db.Invoices
+            .Where(i => i.InvoiceDate.Year == y && i.Status != GentleSuite.Domain.Enums.InvoiceStatus.Cancelled)
+            .GroupBy(i => i.InvoiceDate.Month)
+            .Select(g => new { Month = g.Key, Amount = g.Sum(i => i.GrossTotal) })
+            .ToListAsync();
+        var expenses = await db.Expenses
+            .Where(e => e.ExpenseDate.Year == y)
+            .GroupBy(e => e.ExpenseDate.Month)
+            .Select(g => new { Month = g.Key, Amount = g.Sum(e => e.GrossAmount) })
+            .ToListAsync();
+        var result = Enumerable.Range(1, 12).Select(m => new
+        {
+            month = m,
+            revenue = revenues.FirstOrDefault(r => r.Month == m)?.Amount ?? 0m,
+            expenses = expenses.FirstOrDefault(e => e.Month == m)?.Amount ?? 0m
+        });
+        return Ok(result);
+    }
+}
+
+// === Globale Suche ===
+[ApiController, Route("api/[controller]"), Authorize]
+public class SearchController(AppDbContext db) : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<GlobalSearchResultDto>> Search([FromQuery] string q, [FromQuery] int limit = 5)
+    {
+        if (string.IsNullOrWhiteSpace(q) || q.Length < 2) return Ok(new GlobalSearchResultDto([], [], [], []));
+        var search = q.Trim().ToLower();
+        var customers = await db.Customers
+            .Where(c => c.CompanyName.ToLower().Contains(search) || (c.CustomerNumber != null && c.CustomerNumber.ToLower().Contains(search)))
+            .OrderBy(c => c.CompanyName)
+            .Take(limit)
+            .Select(c => new SearchHitDto(c.Id, c.CompanyName, c.CustomerNumber, $"/customers/{c.Id}"))
+            .ToListAsync();
+        var invoices = await db.Invoices
+            .Where(i => i.InvoiceNumber.ToLower().Contains(search) || i.Customer.CompanyName.ToLower().Contains(search))
+            .Include(i => i.Customer)
+            .OrderByDescending(i => i.InvoiceDate)
+            .Take(limit)
+            .Select(i => new SearchHitDto(i.Id, i.InvoiceNumber, i.Customer.CompanyName, $"/invoices/{i.Id}"))
+            .ToListAsync();
+        var quotes = await db.Quotes
+            .Where(q2 => q2.QuoteNumber.ToLower().Contains(search) || q2.Customer.CompanyName.ToLower().Contains(search))
+            .Include(q2 => q2.Customer)
+            .OrderByDescending(q2 => q2.CreatedAt)
+            .Take(limit)
+            .Select(q2 => new SearchHitDto(q2.Id, q2.QuoteNumber, q2.Customer.CompanyName, $"/quotes/{q2.Id}"))
+            .ToListAsync();
+        var projects = await db.Projects
+            .Where(p => p.Name.ToLower().Contains(search) || (p.Customer != null && p.Customer.CompanyName.ToLower().Contains(search)))
+            .Include(p => p.Customer)
+            .OrderByDescending(p => p.CreatedAt)
+            .Take(limit)
+            .Select(p => new SearchHitDto(p.Id, p.Name, p.Customer != null ? p.Customer.CompanyName : null, $"/projects/{p.Id}"))
+            .ToListAsync();
+        return Ok(new GlobalSearchResultDto(customers, invoices, quotes, projects));
+    }
+}
+
+// === Kalender ===
+[ApiController, Route("api/[controller]"), Authorize]
+public class CalendarController(AppDbContext db) : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<List<CalendarEventDto>>> GetEvents([FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? to)
+    {
+        var start = from ?? new DateTimeOffset(DateTimeOffset.UtcNow.Year, DateTimeOffset.UtcNow.Month, 1, 0, 0, 0, TimeSpan.Zero);
+        var end = to ?? start.AddMonths(1);
+        var events = new List<CalendarEventDto>();
+
+        var invoices = await db.Invoices
+            .Where(i => i.DueDate >= start && i.DueDate < end && i.Status != GentleSuite.Domain.Enums.InvoiceStatus.Paid && i.Status != GentleSuite.Domain.Enums.InvoiceStatus.Cancelled)
+            .Include(i => i.Customer)
+            .Select(i => new { i.Id, i.InvoiceNumber, i.Customer.CompanyName, i.DueDate })
+            .ToListAsync();
+        events.AddRange(invoices.Select(i => new CalendarEventDto(i.Id.ToString(), i.DueDate, $"Rechnung fällig: {i.InvoiceNumber}", i.CompanyName, "invoice", $"/invoices/{i.Id}", "#ef4444")));
+
+        var milestones = await db.Milestones
+            .Where(m => m.DueDate >= start && m.DueDate < end && !m.IsCompleted)
+            .Include(m => m.Project)
+            .Select(m => new { m.Id, m.Title, ProjectName = m.Project.Name, m.DueDate })
+            .ToListAsync();
+        events.AddRange(milestones.Where(m => m.DueDate.HasValue).Select(m => new CalendarEventDto(m.Id.ToString(), m.DueDate!.Value, $"Meilenstein: {m.Title}", m.ProjectName, "milestone", $"/projects/{m.Id}", "#3b82f6")));
+
+        var activities = await db.CrmActivities
+            .Where(a => a.DueDate >= start && a.DueDate < end && a.Status == GentleSuite.Domain.Enums.CrmActivityStatus.Open)
+            .Include(a => a.Customer)
+            .Select(a => new { a.Id, a.Subject, CustomerName = a.Customer != null ? a.Customer.CompanyName : null, a.DueDate })
+            .ToListAsync();
+        events.AddRange(activities.Where(a => a.DueDate.HasValue).Select(a => new CalendarEventDto(a.Id.ToString(), a.DueDate!.Value, a.Subject, a.CustomerName, "activity", a.CustomerName != null ? $"/customers/{a.Id}" : "/customers", "#22c55e")));
+
+        var subs = await db.CustomerSubscriptions
+            .Where(s => s.NextBillingDate >= start && s.NextBillingDate < end && s.Status == GentleSuite.Domain.Enums.SubscriptionStatus.Active)
+            .Include(s => s.Customer)
+            .Include(s => s.Plan)
+            .Select(s => new { s.Id, PlanName = s.Plan.Name, CustomerName = s.Customer.CompanyName, s.NextBillingDate })
+            .ToListAsync();
+        events.AddRange(subs.Select(s => new CalendarEventDto(s.Id.ToString(), s.NextBillingDate, $"Serienrechnung: {s.PlanName}", s.CustomerName, "subscription", $"/subscriptions", "#a855f7")));
+
+        return Ok(events.OrderBy(e => e.Date).ToList());
+    }
+}
+
+// === Kundendokumente ===
+[ApiController, Route("api/customers/{customerId}/documents"), Authorize]
+public class CustomerDocumentsController(ICustomerDocumentService svc) : ControllerBase
+{
+    [HttpGet] public async Task<ActionResult<List<CustomerDocumentDto>>> List(Guid customerId) => Ok(await svc.GetDocumentsAsync(customerId));
+    [HttpPost] public async Task<ActionResult<CustomerDocumentDto>> Upload(Guid customerId, IFormFile file, [FromForm] string? notes)
+        => Ok(await svc.UploadAsync(customerId, file.OpenReadStream(), file.FileName, file.ContentType, file.Length, notes));
+    [HttpGet("{docId}/download")]
+    public async Task<IActionResult> Download(Guid customerId, Guid docId)
+    {
+        var (stream, fileName, contentType) = await svc.DownloadAsync(customerId, docId);
+        return File(stream, contentType, fileName);
+    }
+    [HttpDelete("{docId}")] public async Task<IActionResult> Delete(Guid customerId, Guid docId) { await svc.DeleteAsync(customerId, docId); return NoContent(); }
+}
 
 // === Customer Intake (öffentlich, kein Auth) ===
 [ApiController, Route("api/intake")]

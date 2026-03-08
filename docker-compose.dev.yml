@@ -1,0 +1,11 @@
+services:
+  db:
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    user: "0:0"
+    volumes:
+      - mssqldata:/var/opt/mssql
+      - mssqlsystem:/.system
+
+volumes:
+  mssqldata:
+  mssqlsystem:

@@ -97,6 +97,7 @@ public class Customer : BaseEntity
     public List<Opportunity> Opportunities { get; set; } = new();
     public List<SupportTicket> SupportTickets { get; set; } = new();
     public List<CrmActivity> CrmActivities { get; set; } = new();
+    public List<CustomerDocument> Documents { get; set; } = new();
 }
 
 public class Contact : BaseEntity
@@ -140,6 +141,17 @@ public class CustomerService : BaseEntity
     public Customer Customer { get; set; } = null!;
     public Guid ServiceCatalogItemId { get; set; }
     public ServiceCatalogItem ServiceCatalogItem { get; set; } = null!;
+}
+
+public class CustomerDocument : BaseEntity
+{
+    public Guid CustomerId { get; set; }
+    public Customer Customer { get; set; } = null!;
+    public string FileName { get; set; } = "";
+    public string ContentType { get; set; } = "";
+    public long FileSizeBytes { get; set; }
+    public string StoragePath { get; set; } = "";
+    public string? Notes { get; set; }
 }
 
 public class ActivityLog : BaseEntity

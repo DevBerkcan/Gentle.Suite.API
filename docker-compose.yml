@@ -1,14 +1,14 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
-      POSTGRES_DB: gentlesuite
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
     ports:
-      - "5433:5432"
+      - "1433:1433"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - mssqldata:/var/opt/mssql
 
   api:
     build:
@@ -17,9 +17,11 @@ services:
     ports:
       - "9000:5000"
     environment:
-      ConnectionStrings__Default: "Host=db;Database=gentlesuite;Username=postgres;Password=postgres"
+      ConnectionStrings__Default: "Server=db,1433;Database=gentlesuite;User Id=sa;Password=YourStrong!Passw0rd;Encrypt=False;TrustServerCertificate=True"
       Smtp__Host: mailpit
       Smtp__Port: 1025
+      Smtp__FromEmail: noreply@gentlegroup.de
+      Smtp__FromName: GentleGroup
       FrontendBaseUrl: http://localhost:3000
     depends_on:
       - db
@@ -45,4 +47,4 @@ services:
       - "8025:8025"
 
 volumes:
-  pgdata:
+  mssqldata:

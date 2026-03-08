@@ -10,6 +10,7 @@ using GentleSuite.Infrastructure.Services;
 using GentleSuite.API.Hubs;
 using Hangfire;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Data.SqlClient;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -23,7 +24,8 @@ var builder = WebApplication.CreateBuilder(args);
 Log.Logger = new LoggerConfiguration().ReadFrom.Configuration(builder.Configuration).CreateLogger();
 builder.Host.UseSerilog();
 
-var connStr = builder.Configuration.GetConnectionString("Default") ?? "Host=localhost;Database=gentlesuite;Username=postgres;Password=postgres";
+var connStr = builder.Configuration.GetConnectionString("Default") ?? "Server=localhost,1433;Database=gentlesuite;User Id=sa;Password=YourStrong!Passw0rd;Encrypt=False;TrustServerCertificate=True";
+EnsureSqlServerDatabaseExists(connStr);
 builder.Services.AddDbContext<AppDbContext>(o => o.UseSqlServer(connStr));
 builder.Services.AddIdentity<AppUser, IdentityRole>(o => { o.Password.RequireDigit = true; o.Password.RequiredLength = 8; o.Password.RequireNonAlphanumeric = false; }).AddEntityFrameworkStores<AppDbContext>().AddDefaultTokenProviders();
 
@@ -78,6 +80,10 @@ builder.Services.AddScoped<IEmailLogService, EmailLogServiceImpl>();
 builder.Services.AddScoped<IUserService, UserServiceImpl>();
 builder.Services.AddScoped<IJournalService, JournalServiceImpl>();
 builder.Services.AddScoped<IBankTransactionService, BankTransactionServiceImpl>();
+builder.Services.AddScoped<IIntegrationService, IntegrationServiceImpl>();
+builder.Services.AddScoped<ICustomerDocumentService, CustomerDocumentServiceImpl>();
+builder.Services.AddScoped<BankSyncJob>();
+builder.Services.AddHttpClient();
 builder.Services.AddScoped<IChartOfAccountService, ChartOfAccountServiceImpl>();
 builder.Services.AddScoped<IEmailTemplateService, EmailTemplateServiceImpl>();
 builder.Services.AddScoped<IContactListService, ContactListServiceImpl>();
@@ -242,6 +248,48 @@ try
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='OnboardingIntakeDone') ALTER TABLE "Customers" ADD "OnboardingIntakeDone" BIT NOT NULL DEFAULT 0;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractDurationMonths') ALTER TABLE "CustomerSubscriptions" ADD "ContractDurationMonths" INT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ConfirmedAt') ALTER TABLE "CustomerSubscriptions" ADD "ConfirmedAt" DATETIMEOFFSET NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='IntegrationSettings')
+    CREATE TABLE "IntegrationSettings" (
+        "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+        "PayPalClientId" NVARCHAR(512) NULL,
+        "PayPalClientSecret" NVARCHAR(512) NULL,
+        "PayPalEnabled" BIT NOT NULL DEFAULT 0,
+        "PayPalLastSync" DATETIMEOFFSET NULL,
+        "GoCardlessSecretId" NVARCHAR(512) NULL,
+        "GoCardlessSecretKey" NVARCHAR(512) NULL,
+        "BankRequisitionId" NVARCHAR(512) NULL,
+        "BankAccountId" NVARCHAR(512) NULL,
+        "BankEnabled" BIT NOT NULL DEFAULT 0,
+        "BankLastSync" DATETIMEOFFSET NULL,
+        "CreatedAt" DATETIMEOFFSET NOT NULL DEFAULT GETUTCDATE(),
+        "UpdatedAt" DATETIMEOFFSET NOT NULL DEFAULT GETUTCDATE(),
+        "IsDeleted" BIT NOT NULL DEFAULT 0,
+        CONSTRAINT "PK_IntegrationSettings" PRIMARY KEY ("Id")
+    );
+    """);
+
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='CustomerDocuments')
+    CREATE TABLE "CustomerDocuments" (
+        "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+        "CustomerId" UNIQUEIDENTIFIER NOT NULL,
+        "FileName" NVARCHAR(512) NOT NULL,
+        "ContentType" NVARCHAR(256) NOT NULL,
+        "FileSizeBytes" BIGINT NOT NULL DEFAULT 0,
+        "StoragePath" NVARCHAR(1024) NOT NULL,
+        "Notes" NVARCHAR(MAX) NULL,
+        "CreatedAt" DATETIMEOFFSET NOT NULL DEFAULT GETUTCDATE(),
+        "CreatedBy" NVARCHAR(MAX) NULL,
+        "UpdatedAt" DATETIMEOFFSET NULL,
+        "UpdatedBy" NVARCHAR(MAX) NULL,
+        "IsDeleted" BIT NOT NULL DEFAULT 0,
+        "DeletedAt" DATETIMEOFFSET NULL,
+        CONSTRAINT "PK_CustomerDocuments" PRIMARY KEY ("Id"),
+        CONSTRAINT "FK_CustomerDocuments_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id") ON DELETE CASCADE
+    );
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerDocuments_CustomerId' AND object_id=OBJECT_ID('CustomerDocuments')) CREATE INDEX "IX_CustomerDocuments_CustomerId" ON "CustomerDocuments" ("CustomerId");""");
 
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
@@ -287,5 +335,29 @@ app.MapHangfireDashboard("/hangfire");
 RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOverdueInvoicesAsync(), Cron.Daily(8));
 RecurringJob.AddOrUpdate<ReminderJobs>("check-open-quotes", j => j.CheckOpenQuotesAsync(), Cron.Daily(9));
 RecurringJob.AddOrUpdate<ReminderJobs>("generate-subscription-invoices", j => j.GenerateSubscriptionInvoicesAsync(), Cron.Daily(6));
+RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
 
 app.Run();
+
+static void EnsureSqlServerDatabaseExists(string connectionString)
+{
+    var csb = new SqlConnectionStringBuilder(connectionString);
+    if (string.IsNullOrWhiteSpace(csb.InitialCatalog))
+        return;
+
+    var dbName = csb.InitialCatalog;
+    csb.InitialCatalog = "master";
+
+    using var conn = new SqlConnection(csb.ConnectionString);
+    conn.Open();
+    using var cmd = conn.CreateCommand();
+    cmd.CommandText = """
+        IF DB_ID(@db) IS NULL
+        BEGIN
+            DECLARE @sql NVARCHAR(MAX) = N'CREATE DATABASE ' + QUOTENAME(@db);
+            EXEC(@sql);
+        END
+        """;
+    cmd.Parameters.AddWithValue("@db", dbName);
+    cmd.ExecuteNonQuery();
+}

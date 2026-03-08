@@ -211,6 +211,14 @@ public record DatevExportRequest(int Year, int Month, bool IncludeInvoices = tru
 public record BankTransactionDto(Guid Id, DateTimeOffset TransactionDate, string? Description, decimal Amount, string? Sender, string? Recipient, string? Reference, BankTransactionStatus Status, Guid? MatchedInvoiceId);
 public record MatchBankTransactionRequest(Guid? InvoiceId, Guid? ExpenseId);
 
+// === Integrations (PayPal + GoCardless / Fyrst) ===
+public record IntegrationSettingsDto(
+    bool PayPalEnabled, string? PayPalClientId, bool PayPalHasSecret, DateTimeOffset? PayPalLastSync,
+    bool BankEnabled, string? BankAccountId, string? BankRequisitionId, DateTimeOffset? BankLastSync);
+public record UpdatePayPalRequest(string ClientId, string ClientSecret);
+public record SetupBankRequest(string GoCardlessSecretId, string GoCardlessSecretKey, string Iban);
+public record ConfirmBankRequest(string RequisitionId);
+
 // === Subscription ===
 public record SubscriptionPlanDto(Guid Id, string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category, bool IsActive, WorkScopeRuleDto? WorkScopeRule, SupportPolicyDto? SupportPolicy);
 public record WorkScopeRuleDto(string? FairUseDescription, List<string> IncludedItems, List<string> ExcludedItems, int? MaxHoursPerMonth);
@@ -349,3 +357,17 @@ public record CrmActivityDetailDto(Guid Id, Guid? CustomerId, string? CustomerNa
 public record CreateCrmActivityRequest(Guid? CustomerId, Guid? ProjectId, Guid? OpportunityId, Guid? TicketId, CrmActivityType Type, string Subject, string? Description, DateTimeOffset? DueDate, int? Duration, CallDirection? Direction, Guid? AssignedToTeamMemberId);
 public record UpdateCrmActivityRequest(string Subject, string? Description, DateTimeOffset? DueDate, int? Duration, CallDirection? Direction, Guid? AssignedToTeamMemberId);
 public record CompleteCrmActivityRequest(DateTimeOffset? CompletedAt = null);
+
+// === Berichte ===
+public record RevenueByCustomerDto(string CustomerName, Guid CustomerId, decimal Revenue, int InvoiceCount);
+public record ExpenseByCategoryDto(string CategoryName, decimal Amount, int Count);
+
+// === Globale Suche ===
+public record GlobalSearchResultDto(List<SearchHitDto> Customers, List<SearchHitDto> Invoices, List<SearchHitDto> Quotes, List<SearchHitDto> Projects);
+public record SearchHitDto(Guid Id, string Title, string? Subtitle, string Route);
+
+// === Kalender ===
+public record CalendarEventDto(string Id, DateTimeOffset Date, string Title, string? Subtitle, string Type, string Route, string Color);
+
+// === Kundendokumente ===
+public record CustomerDocumentDto(Guid Id, Guid CustomerId, string FileName, string ContentType, long FileSizeBytes, string? Notes, DateTimeOffset CreatedAt);

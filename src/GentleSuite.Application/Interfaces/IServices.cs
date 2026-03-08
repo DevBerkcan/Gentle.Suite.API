@@ -209,6 +209,26 @@ public interface IBankTransactionService
     Task MatchAsync(Guid id, MatchBankTransactionRequest req, CancellationToken ct = default);
 }
 
+public interface ICustomerDocumentService
+{
+    Task<List<CustomerDocumentDto>> GetDocumentsAsync(Guid customerId, CancellationToken ct = default);
+    Task<CustomerDocumentDto> UploadAsync(Guid customerId, Stream stream, string fileName, string contentType, long fileSize, string? notes, CancellationToken ct = default);
+    Task<(Stream Stream, string FileName, string ContentType)> DownloadAsync(Guid customerId, Guid docId, CancellationToken ct = default);
+    Task DeleteAsync(Guid customerId, Guid docId, CancellationToken ct = default);
+}
+
+public interface IIntegrationService
+{
+    Task<IntegrationSettingsDto> GetAsync(CancellationToken ct = default);
+    Task UpdatePayPalAsync(UpdatePayPalRequest req, CancellationToken ct = default);
+    Task<string> SetupBankAsync(SetupBankRequest req, CancellationToken ct = default);
+    Task ConfirmBankAsync(ConfirmBankRequest req, CancellationToken ct = default);
+    Task DisconnectPayPalAsync(CancellationToken ct = default);
+    Task DisconnectBankAsync(CancellationToken ct = default);
+    Task SyncPayPalAsync(CancellationToken ct = default);
+    Task SyncBankAsync(CancellationToken ct = default);
+}
+
 public interface IChartOfAccountService
 {
     Task<List<ChartOfAccountDto>> GetAllAsync(CancellationToken ct = default);

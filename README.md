@@ -53,9 +53,9 @@ Vollwertiges CRM + Buchhaltung für Werbeagenturen. GoBD-konform, Self-Hosted.
 |-------|-------------|
 | Backend | .NET 8, ASP.NET Core Web API, Clean Architecture |
 | Auth | ASP.NET Identity + JWT |
-| Database | PostgreSQL + EF Core |
+| Database | SQL Server + EF Core |
 | Background Jobs | Hangfire |
-| Email | SMTP + Fluid Templates + MailKit + MailHog |
+| Email | SMTP + Fluid Templates + MailKit + Mailpit |
 | PDF | QuestPDF |
 | Frontend | Next.js 14 + TypeScript + Tailwind CSS |
 | Containerisierung | Docker Compose |
@@ -63,14 +63,25 @@ Vollwertiges CRM + Buchhaltung für Werbeagenturen. GoBD-konform, Self-Hosted.
 ## Schnellstart
 
 ```bash
-# 1. Starten
-docker-compose up -d
+# 1. Starten (Standard)
+docker compose up -d
+
+# 1a. Starten lokal auf Apple Silicon / ARM (empfohlen auf Mac M1/M2/M3)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # 2. Öffnen
 # Frontend: http://localhost:3000
-# API + Swagger: http://localhost:5000/swagger
-# Hangfire Dashboard: http://localhost:5000/hangfire
-# MailHog (E-Mails): http://localhost:8025
+# API + Swagger: http://localhost:9000/swagger
+# Hangfire Dashboard: http://localhost:9000/hangfire
+# Mailpit (E-Mails): http://localhost:8025
+```
+
+Alternativ über NPM-Skripte:
+
+```bash
+npm run dev:up
+npm run dev:logs
+npm run dev:down
 ```
 
 ## Login-Daten

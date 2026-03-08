@@ -52,6 +52,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
     public DbSet<VatPeriod> VatPeriods => Set<VatPeriod>();
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
     public DbSet<CompanySettings> CompanySettings => Set<CompanySettings>();
+    public DbSet<IntegrationSettings> IntegrationSettings => Set<IntegrationSettings>();
     public DbSet<ReminderSettings> ReminderSettings => Set<ReminderSettings>();
     public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
     public DbSet<EmailLog> EmailLogs => Set<EmailLog>();
@@ -66,6 +67,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
     public DbSet<SupportTicket> SupportTickets => Set<SupportTicket>();
     public DbSet<TicketComment> TicketComments => Set<TicketComment>();
     public DbSet<CrmActivity> CrmActivities => Set<CrmActivity>();
+    public DbSet<CustomerDocument> CustomerDocuments => Set<CustomerDocument>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -146,6 +148,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<CrmActivity>().HasOne(x => x.Opportunity).WithMany().HasForeignKey(x => x.OpportunityId).OnDelete(DeleteBehavior.ClientSetNull);
         mb.Entity<CrmActivity>().HasOne(x => x.Ticket).WithMany().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.ClientSetNull);
         mb.Entity<CrmActivity>().HasOne(x => x.AssignedTo).WithMany().HasForeignKey(x => x.AssignedToTeamMemberId).OnDelete(DeleteBehavior.ClientSetNull);
+        mb.Entity<CustomerDocument>().HasOne(x => x.Customer).WithMany(x => x.Documents).HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
 
         // Decimal precision
         foreach (var prop in mb.Model.GetEntityTypes().SelectMany(t => t.GetProperties()).Where(p => p.ClrType == typeof(decimal) || p.ClrType == typeof(decimal?)))

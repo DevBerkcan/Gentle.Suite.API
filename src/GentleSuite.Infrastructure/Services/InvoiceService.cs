@@ -9,6 +9,8 @@ using Microsoft.EntityFrameworkCore;
 using s2industries.ZUGFeRD;
 using System.Security.Cryptography;
 using System.Text;
+using DomainInvoiceType = GentleSuite.Domain.Enums.InvoiceType;
+using ZUGFeRDProfile = s2industries.ZUGFeRD.Profile;
 
 namespace GentleSuite.Infrastructure.Services;
 
@@ -217,7 +219,7 @@ public class InvoiceServiceImpl : IInvoiceService
         var storno = new Invoice
         {
             InvoiceNumber = stornoNumber,
-            Type = InvoiceType.Cancellation,
+            Type = DomainInvoiceType.Cancellation,
             CustomerId = orig.CustomerId,
             CancellationOfInvoiceId = orig.Id,
             Subject = $"Storno zu {orig.InvoiceNumber}",
@@ -254,11 +256,11 @@ public class InvoiceServiceImpl : IInvoiceService
             .FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "GentleSuite" };
 
-        var desc = InvoiceDescriptor.CreateInvoice(inv.InvoiceNumber, inv.InvoiceDate, CurrencyCodes.EUR);
-        desc.BusinessProcess = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0";
+        var desc = InvoiceDescriptor.CreateInvoice(inv.InvoiceNumber, inv.InvoiceDate.UtcDateTime, CurrencyCodes.EUR);
 
         // Seller
         desc.SetSeller(
+            id: "",
             name: co.LegalName ?? co.CompanyName,
             postcode: co.ZipCode ?? "",
             city: co.City ?? "",
@@ -280,10 +282,9 @@ public class InvoiceServiceImpl : IInvoiceService
             id: inv.Customer.CustomerNumber);
 
         // Delivery date
-        desc.ActualDeliveryDate = inv.ServiceDateFrom ?? inv.InvoiceDate;
+        desc.ActualDeliveryDate = inv.ServiceDateFrom.UtcDateTime;
 
         // Payment terms
-        desc.AddTradePaymentTerms(inv.PaymentTerms ?? "", inv.DueDate);
 
         // Bank account
         if (!string.IsNullOrEmpty(co.Iban))
@@ -320,7 +321,6 @@ public class InvoiceServiceImpl : IInvoiceService
                 netUnitPrice: line.UnitPrice,
                 billedQuantity: line.Quantity,
                 unitCode: MapUnit(line.Unit),
-                lineTotalAmount: line.NetTotal,
                 taxPercent: line.VatPercent,
                 taxType: TaxTypes.VAT,
                 categoryCode: vatCategory);
@@ -335,7 +335,7 @@ public class InvoiceServiceImpl : IInvoiceService
             duePayableAmount: inv.GrossTotal);
 
         using var ms = new MemoryStream();
-        desc.Save(ms, ZUGFeRDVersion.Version23, Profile.XRechnung);
+        desc.Save(ms, ZUGFeRDVersion.Version21, ZUGFeRDProfile.XRechnung);
         return ms.ToArray();
     }
 

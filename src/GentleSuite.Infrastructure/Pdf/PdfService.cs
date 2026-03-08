@@ -134,16 +134,15 @@ public class PdfService : IPdfService
                         // Company contact details right
                         row.RelativeItem(2).AlignRight().Column(company =>
                         {
-                            if (!string.IsNullOrEmpty(co.ManagingDirector))
-                                company.Item().AlignRight().Text(co.ManagingDirector).FontSize(9).FontColor("#444444");
+                            company.Item().AlignRight().Text(co.CompanyName).Bold().FontSize(9).FontColor("#1a1a1a");
                             company.Item().AlignRight().Text(co.Street).FontSize(9).FontColor("#444444");
                             company.Item().AlignRight().Text($"{co.ZipCode} {co.City}").FontSize(9).FontColor("#444444");
                             if (!string.IsNullOrEmpty(co.Phone))
                                 company.Item().AlignRight().Text($"Tel.: {co.Phone}").FontSize(9).FontColor("#444444");
                             if (!string.IsNullOrEmpty(co.Email))
-                                company.Item().AlignRight().Text($"E-Mail: {co.Email}").FontSize(9).FontColor("#444444");
+                                company.Item().AlignRight().Text(co.Email).FontSize(9).FontColor("#444444");
                             if (!string.IsNullOrEmpty(co.Website))
-                                company.Item().AlignRight().Text($"Web: {co.Website}").FontSize(9).FontColor("#444444");
+                                company.Item().AlignRight().Text(co.Website).FontSize(9).FontColor("#444444");
                         });
                     });
                 });
@@ -155,8 +154,7 @@ public class PdfService : IPdfService
                 // Intro text
                 if (!string.IsNullOrEmpty(inv.Subject))
                     col.Item().Text($"Betr.: {inv.Subject}").Bold().FontSize(11);
-                if (!string.IsNullOrEmpty(inv.IntroText))
-                    col.Item().PaddingTop(8).Text(inv.IntroText).FontSize(9);
+                col.Item().PaddingTop(8).Text(inv.IntroText ?? "Unsere Lieferungen/Leistungen stellen wir Ihnen wie folgt in Rechnung.").FontSize(9);
 
                 // === POSITIONS TABLE ===
                 col.Item().PaddingTop(14).Table(table =>
@@ -181,8 +179,8 @@ public class PdfService : IPdfService
                             hd.Cell().Background("#2d2d2d").Padding(6).Text("Bezeichnung").Style(hs);
                             hd.Cell().Background("#2d2d2d").Padding(6).AlignRight().Text("Menge").Style(hs);
                             hd.Cell().Background("#2d2d2d").Padding(6).Text("Einheit").Style(hs);
-                            hd.Cell().Background("#2d2d2d").Padding(6).AlignRight().Text("Einzelpreis").Style(hs);
-                            hd.Cell().Background("#2d2d2d").Padding(6).AlignRight().Text("Gesamt").Style(hs);
+                            hd.Cell().Background("#2d2d2d").Padding(6).AlignRight().Text("Einzel €").Style(hs);
+                            hd.Cell().Background("#2d2d2d").Padding(6).AlignRight().Text("Gesamt €").Style(hs);
                         });
 
                         for (int i = 0; i < lines.Count; i++)
@@ -192,7 +190,7 @@ public class PdfService : IPdfService
                             table.Cell().Background(bg).Padding(6).Text($"{i + 1}").FontSize(9);
                             table.Cell().Background(bg).Padding(6).Column(cc =>
                             {
-                                cc.Item().Text(l.Title).FontSize(9);
+                                cc.Item().Text(l.Title).Bold().FontSize(9);
                                 if (!string.IsNullOrEmpty(l.Description))
                                     cc.Item().Text(l.Description).FontSize(8).FontColor("#666666");
                             });
@@ -259,7 +257,7 @@ public class PdfService : IPdfService
                         {
                             tc.Item().Row(tr =>
                             {
-                                tr.RelativeItem().Text("Gesamtbetrag").Bold().FontSize(12);
+                                tr.RelativeItem().Text("Gesamtbetrag*").Bold().FontSize(12);
                                 tr.RelativeItem().AlignRight().Text($"{inv.GrossTotal:N2} €").Bold().FontSize(12);
                             });
                         });
@@ -310,24 +308,25 @@ public class PdfService : IPdfService
                 // === QR CODE + BANK INFO ===
                 if (!string.IsNullOrEmpty(co.Iban))
                 {
-                    col.Item().PaddingTop(16).Row(qrRow =>
+                    col.Item().PaddingTop(16).Border(0.5f).BorderColor("#cccccc").Padding(10).Row(qrRow =>
                     {
                         // EPC QR Code left
                         qrRow.ConstantItem(120).Column(qrCol =>
                         {
                             qrCol.Item().Text("Überweisen per Code").Bold().FontSize(8).FontColor("#444444");
-                            qrCol.Item().PaddingTop(4).Width(100).Height(100).Image(GenerateEpcQrCode(co, inv));
+                            qrCol.Item().PaddingTop(2).Text("Ganz bequem Code mit der Banking-App scannen.").FontSize(7).FontColor("#666666");
+                            qrCol.Item().PaddingTop(6).Width(90).Height(90).Image(GenerateEpcQrCode(co, inv));
                         });
 
-                        qrRow.ConstantItem(20); // Spacer
+                        qrRow.ConstantItem(16); // Spacer
 
                         // Bank details right
-                        qrRow.RelativeItem().PaddingTop(14).Column(bank =>
+                        qrRow.RelativeItem().Column(bank =>
                         {
                             bank.Item().Text("Bankverbindung").Bold().FontSize(9);
                             bank.Item().PaddingTop(4).Table(bt =>
                             {
-                                bt.ColumnsDefinition(cd => { cd.ConstantColumn(100); cd.RelativeColumn(); });
+                                bt.ColumnsDefinition(cd => { cd.ConstantColumn(110); cd.RelativeColumn(); });
                                 if (!string.IsNullOrEmpty(co.BankName))
                                 {
                                     bt.Cell().Text("Bank:").FontSize(9).FontColor("#666666");
