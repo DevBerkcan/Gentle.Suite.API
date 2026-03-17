@@ -20,6 +20,10 @@ public class Expense : GobdEntity
     public string? ReceiptPath { get; set; }        // Beleg Upload
     public Guid? AccountId { get; set; }            // Booking account (SKR03)
     public ChartOfAccount? Account { get; set; }
+    public bool IsRecurring { get; set; }
+    public RecurringInterval? RecurringInterval { get; set; }
+    public DateTimeOffset? RecurringNextDate { get; set; }
+    public Guid? RecurringParentId { get; set; }
 
     public void Recalculate()
     {

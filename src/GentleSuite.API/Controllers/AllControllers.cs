@@ -35,6 +35,28 @@ public class AuthController(UserManager<AppUser> userManager, IConfiguration con
         var token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(claims: claims, expires: expiry.UtcDateTime, signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
         return Ok(new LoginResponse(token, user.Email!, user.FullName, roles.ToList(), expiry));
     }
+
+    [HttpPost("forgot-password"), AllowAnonymous]
+    public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest req, [FromServices] GentleSuite.Domain.Interfaces.IEmailService email)
+    {
+        var user = await userManager.FindByEmailAsync(req.Email);
+        if (user == null) return Ok(); // no user disclosure
+        var token = await userManager.GeneratePasswordResetTokenAsync(user);
+        var encodedToken = Uri.EscapeDataString(token);
+        var resetUrl = $"{config["FrontendBaseUrl"] ?? "http://localhost:3000"}/reset-password?email={Uri.EscapeDataString(req.Email)}&token={encodedToken}";
+        try { await email.SendTemplatedEmailAsync(req.Email, "password-reset", new() { ["ResetUrl"] = resetUrl, ["FullName"] = user.FullName }, ct: CancellationToken.None); } catch { }
+        return Ok();
+    }
+
+    [HttpPost("reset-password"), AllowAnonymous]
+    public async Task<IActionResult> ResetPassword(ResetPasswordConfirmRequest req)
+    {
+        var user = await userManager.FindByEmailAsync(req.Email);
+        if (user == null) return BadRequest("Ungültiger Link.");
+        var result = await userManager.ResetPasswordAsync(user, req.Token, req.NewPassword);
+        if (!result.Succeeded) return BadRequest(result.Errors.FirstOrDefault()?.Description ?? "Fehler beim Zurücksetzen.");
+        return Ok();
+    }
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
@@ -55,6 +77,14 @@ public class CustomersController(ICustomerService svc) : ControllerBase
         await db.SaveChangesAsync();
         return NoContent();
     }
+    [HttpPost("{id}/resend-intake")] public async Task<IActionResult> ResendIntake(Guid id) { await svc.ResendIntakeAsync(id); return NoContent(); }
+    [HttpPost("{id}/send-email")]
+    public async Task<IActionResult> SendEmail(Guid id, SendCustomerEmailRequest req, [FromServices] GentleSuite.Domain.Interfaces.IEmailService email)
+    {
+        if (string.IsNullOrWhiteSpace(req.To) || string.IsNullOrWhiteSpace(req.Subject)) return BadRequest("Empfänger und Betreff sind erforderlich.");
+        await email.SendEmailAsync(req.To, req.Subject, req.Body ?? "");
+        return NoContent();
+    }
     [HttpPost("{id}/gdpr-export")] public async Task<ActionResult<GdprExportDto>> GdprExport(Guid id) => Ok(await svc.ExportGdprAsync(id));
     [HttpPost("{id}/gdpr-erase"), Authorize(Policy = "AdminOnly")] public async Task<IActionResult> GdprErase(Guid id, GdprEraseRequest req) { await svc.EraseGdprAsync(id, req); return NoContent(); }
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
@@ -65,6 +95,21 @@ public class CustomersController(ICustomerService svc) : ControllerBase
     [HttpPut("{id}/locations/{locationId}")] public async Task<ActionResult<LocationDto>> UpdateLocation(Guid id, Guid locationId, UpdateLocationRequest req) => Ok(await svc.UpdateLocationAsync(id, locationId, req));
     [HttpDelete("{id}/locations/{locationId}")] public async Task<IActionResult> DeleteLocation(Guid id, Guid locationId) { await svc.DeleteLocationAsync(id, locationId); return NoContent(); }
 
+    [HttpGet("export.csv")]
+    public async Task<IActionResult> ExportCsv([FromServices] AppDbContext db, [FromQuery] CustomerStatus? status)
+    {
+        var q = db.Customers.Include(c => c.Contacts).AsQueryable();
+        if (status.HasValue) q = q.Where(c => c.Status == status.Value);
+        var items = await q.OrderBy(c => c.CompanyName).ToListAsync();
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Kundennummer;Firmenname;Status;Branche;Website;Ansprechpartner;E-Mail;Telefon");
+        foreach (var c in items)
+        {
+            var primary = c.Contacts.FirstOrDefault(x => x.IsPrimary) ?? c.Contacts.FirstOrDefault();
+            sb.AppendLine($"{c.CustomerNumber};{c.CompanyName};{c.Status};{c.Industry};{c.Website};{primary?.FullName};{primary?.Email};{primary?.Phone}");
+        }
+        return File(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(sb.ToString())).ToArray(), "text/csv", $"Kunden_{DateTime.Today:yyyy-MM-dd}.csv");
+    }
     [HttpPost("import-csv"), Consumes("multipart/form-data")]
     public async Task<ActionResult<CsvImportResultDto>> ImportCsv(IFormFile file, CancellationToken ct)
     {
@@ -250,7 +295,21 @@ public class InvoicesController(IInvoiceService svc) : ControllerBase
         return NoContent();
     }
     [HttpPost("{id}/send")] public async Task<IActionResult> Send(Guid id) { await svc.SendAsync(id); return NoContent(); }
+    [HttpPost("{id}/send-reminder")] public async Task<IActionResult> SendReminder(Guid id) { await svc.SendReminderAsync(id); return NoContent(); }
+    [HttpPost("from-time-entries")] public async Task<ActionResult<InvoiceDetailDto>> FromTimeEntries(CreateInvoiceFromTimeEntriesRequest req) => Ok(await svc.CreateFromTimeEntriesAsync(req));
     [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) => File(await svc.GeneratePdfAsync(id), "application/pdf", $"Rechnung.pdf");
+    [HttpGet("export.csv")]
+    public async Task<IActionResult> ExportCsv([FromServices] AppDbContext db, [FromQuery] InvoiceStatus? status)
+    {
+        var q = db.Invoices.Include(i => i.Customer).AsQueryable();
+        if (status.HasValue) q = q.Where(i => i.Status == status.Value);
+        var items = await q.OrderByDescending(i => i.InvoiceDate).ToListAsync();
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Rechnungsnummer;Kunde;Status;Datum;Faellig;Netto;MwSt;Brutto;Bezahlt");
+        foreach (var i in items)
+            sb.AppendLine($"{i.InvoiceNumber};{i.Customer?.CompanyName};{i.Status};{i.InvoiceDate:dd.MM.yyyy};{i.DueDate:dd.MM.yyyy};{i.NetTotal:F2};{i.VatAmount:F2};{i.GrossTotal:F2};{(i.PaidAt.HasValue ? i.PaidAt.Value.ToString("dd.MM.yyyy") : "")}");
+        return File(System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(sb.ToString())).ToArray(), "text/csv", $"Rechnungen_{DateTime.Today:yyyy-MM-dd}.csv");
+    }
     [HttpGet("{id}/xrechnung")] public async Task<IActionResult> XRechnung(Guid id)
     {
         var xml = await svc.GenerateXRechnungXmlAsync(id);
@@ -442,6 +501,17 @@ public class SettingsController(ICompanySettingsService svc, GentleSuite.Domain.
 public class ActivityController(IActivityLogService svc) : ControllerBase
 {
     [HttpGet("customer/{customerId}")] public async Task<ActionResult<PagedResult<ActivityLogDto>>> ByCustomer(Guid customerId, [FromQuery] PaginationParams p) => Ok(await svc.GetByCustomerAsync(customerId, p));
+    [HttpGet("recent")]
+    public async Task<ActionResult<List<ActivityLogDto>>> Recent([FromServices] AppDbContext db, [FromQuery] int limit = 10)
+    {
+        var items = await db.ActivityLogs
+            .Include(a => a.Customer)
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(Math.Min(limit, 50))
+            .Select(a => new ActivityLogDto(a.Id, a.EntityType, a.EntityId, a.Action, a.Description, a.UserName, a.CreatedAt))
+            .ToListAsync();
+        return Ok(items);
+    }
 }
 
 [ApiController, Route("api/[controller]"), Authorize]

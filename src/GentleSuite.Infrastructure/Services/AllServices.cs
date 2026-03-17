@@ -235,6 +235,21 @@ public class CustomerServiceImpl : ICustomerService
         await _act.LogAsync(cust.Id, "Customer", cust.Id, "IntakeCompleted", $"Kunde hat Erstinformations-Formular ausgefüllt", ct: ct);
     }
 
+    public async Task ResendIntakeAsync(Guid customerId, CancellationToken ct)
+    {
+        var cust = await _db.Customers.Include(c => c.Contacts).FirstOrDefaultAsync(c => c.Id == customerId, ct) ?? throw new KeyNotFoundException("Kunde nicht gefunden.");
+        if (cust.OnboardingIntakeDone) throw new InvalidOperationException("Intake bereits abgeschlossen.");
+        if (cust.OnboardingToken == null)
+        {
+            cust.OnboardingToken = Guid.NewGuid();
+            await _db.SaveChangesAsync(ct);
+        }
+        var email = cust.Contacts.FirstOrDefault(c => c.IsPrimary)?.Email ?? cust.Contacts.FirstOrDefault()?.Email ?? throw new InvalidOperationException("Keine E-Mail-Adresse vorhanden.");
+        var intakeUrl = $"{_frontendBaseUrl}/intake/{cust.OnboardingToken}";
+        await _em.SendTemplatedEmailAsync(email, "customer-intake", new() { ["IntakeUrl"] = intakeUrl, ["CompanyName"] = cust.CompanyName }, cust.Id, ct: ct);
+        await _act.LogAsync(cust.Id, "Customer", cust.Id, "IntakeResent", $"Intake-E-Mail erneut gesendet an {email}", ct: ct);
+    }
+
     private static string Normalize(string? value) => (value ?? string.Empty).Trim().ToLowerInvariant();
     private static string NormalizePhone(string? value) => new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
 }
@@ -338,7 +353,14 @@ public class ProjectServiceImpl : IProjectService
         var total = await q.CountAsync(ct); var items = await q.OrderByDescending(x => x.CreatedAt).Skip((p.Page-1)*p.PageSize).Take(p.PageSize).ToListAsync(ct);
         return new PagedResult<ProjectListDto>(_m.Map<List<ProjectListDto>>(items), total, p.Page, p.PageSize);
     }
-    public async Task<ProjectDetailDto?> GetByIdAsync(Guid id, CancellationToken ct) { var p = await _db.Projects.Include(x => x.Milestones).Include(x => x.Comments.OrderByDescending(c => c.CreatedAt)).FirstOrDefaultAsync(x => x.Id == id, ct); return p == null ? null : _m.Map<ProjectDetailDto>(p); }
+    public async Task<ProjectDetailDto?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        var p = await _db.Projects.Include(x => x.Milestones).Include(x => x.Comments.OrderByDescending(c => c.CreatedAt)).FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (p == null) return null;
+        var dto = _m.Map<ProjectDetailDto>(p);
+        dto.TotalLoggedHours = await _db.TimeEntries.Where(t => t.ProjectId == id).SumAsync(t => t.Hours, ct);
+        return dto;
+    }
     public async Task<ProjectDetailDto> CreateAsync(CreateProjectRequest req, CancellationToken ct)
     {
         if (!await _db.Customers.AnyAsync(c => c.Id == req.CustomerId, ct)) throw new ArgumentException("Kunde wurde nicht gefunden.");
@@ -346,13 +368,13 @@ public class ProjectServiceImpl : IProjectService
         if (!await _db.OnboardingWorkflowTemplates.AnyAsync(t => t.Id == req.OnboardingTemplateId, ct)) throw new ArgumentException("Onboarding-Template wurde nicht gefunden.");
         ValidateProjectDates(req.StartDate, req.DueDate);
         if (string.IsNullOrWhiteSpace(req.Name)) throw new ArgumentException("Projektname ist erforderlich.");
-        var p = new Project { CustomerId = req.CustomerId, Name = req.Name, Description = req.Description, StartDate = req.StartDate, DueDate = req.DueDate, ManagerId = req.ManagerId };
+        var p = new Project { CustomerId = req.CustomerId, Name = req.Name, Description = req.Description, StartDate = req.StartDate, DueDate = req.DueDate, ManagerId = req.ManagerId, BudgetHours = req.BudgetHours };
         _db.Projects.Add(p);
         await _db.SaveChangesAsync(ct);
         await _ob.StartWorkflowAsync(req.CustomerId, req.OnboardingTemplateId, p.Id, ct);
         return (await GetByIdAsync(p.Id, ct))!;
     }
-    public async Task<ProjectDetailDto> UpdateAsync(Guid id, UpdateProjectRequest req, CancellationToken ct) { var p = await _db.Projects.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); if (string.IsNullOrWhiteSpace(req.Name)) throw new ArgumentException("Projektname ist erforderlich."); ValidateProjectDates(req.StartDate, req.DueDate); p.Name = req.Name; p.Description = req.Description; p.Status = req.Status; p.StartDate = req.StartDate; p.DueDate = req.DueDate; await _db.SaveChangesAsync(ct); return (await GetByIdAsync(id, ct))!; }
+    public async Task<ProjectDetailDto> UpdateAsync(Guid id, UpdateProjectRequest req, CancellationToken ct) { var p = await _db.Projects.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); if (string.IsNullOrWhiteSpace(req.Name)) throw new ArgumentException("Projektname ist erforderlich."); ValidateProjectDates(req.StartDate, req.DueDate); p.Name = req.Name; p.Description = req.Description; p.Status = req.Status; p.StartDate = req.StartDate; p.DueDate = req.DueDate; p.BudgetHours = req.BudgetHours; await _db.SaveChangesAsync(ct); return (await GetByIdAsync(id, ct))!; }
     public async Task DeleteAsync(Guid id, CancellationToken ct) { var p = await _db.Projects.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); p.IsDeleted = true; p.DeletedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
 
     public async Task<MilestoneDto> AddMilestoneAsync(Guid projectId, CreateMilestoneRequest req, CancellationToken ct)
@@ -567,7 +589,7 @@ public class ExpenseServiceImpl : IExpenseService
     {
         await ValidateExpenseRequestAsync(req.ExpenseCategoryId, req.NetAmount, req.VatPercent, ct);
         var count = await _db.Expenses.CountAsync(ct);
-        var exp = new Expense { ExpenseNumber = $"AU-{DateTime.UtcNow.Year}-{(count+1):D4}", Supplier = req.Supplier, SupplierTaxId = req.SupplierTaxId, ExpenseCategoryId = req.ExpenseCategoryId, Description = req.Description, NetAmount = req.NetAmount, VatPercent = req.VatPercent, ExpenseDate = req.ExpenseDate ?? DateTimeOffset.UtcNow, RetentionUntil = DateTimeOffset.UtcNow.AddYears(10) };
+        var exp = new Expense { ExpenseNumber = $"AU-{DateTime.UtcNow.Year}-{(count+1):D4}", Supplier = req.Supplier, SupplierTaxId = req.SupplierTaxId, ExpenseCategoryId = req.ExpenseCategoryId, Description = req.Description, NetAmount = req.NetAmount, VatPercent = req.VatPercent, ExpenseDate = req.ExpenseDate ?? DateTimeOffset.UtcNow, RetentionUntil = DateTimeOffset.UtcNow.AddYears(10), IsRecurring = req.IsRecurring, RecurringInterval = req.RecurringInterval, RecurringNextDate = req.IsRecurring ? (req.RecurringNextDate ?? DateTimeOffset.UtcNow.AddMonths(1)) : null };
         exp.Recalculate(); _db.Expenses.Add(exp); await _db.SaveChangesAsync(ct); return (await GetByIdAsync(exp.Id, ct))!;
     }
     public async Task<ExpenseDetailDto> UpdateAsync(Guid id, UpdateExpenseRequest req, CancellationToken ct)
@@ -576,6 +598,7 @@ public class ExpenseServiceImpl : IExpenseService
         if (e.Status != ExpenseStatus.Draft) throw new InvalidOperationException("Nur Entwuerfe koennen bearbeitet werden.");
         await ValidateExpenseRequestAsync(req.ExpenseCategoryId, req.NetAmount, req.VatPercent, ct);
         e.Supplier = req.Supplier; e.SupplierTaxId = req.SupplierTaxId; e.ExpenseCategoryId = req.ExpenseCategoryId; e.Description = req.Description; e.NetAmount = req.NetAmount; e.VatPercent = req.VatPercent; if (req.ExpenseDate.HasValue) e.ExpenseDate = req.ExpenseDate.Value;
+        e.IsRecurring = req.IsRecurring; e.RecurringInterval = req.RecurringInterval; e.RecurringNextDate = req.IsRecurring ? (req.RecurringNextDate ?? e.RecurringNextDate ?? DateTimeOffset.UtcNow.AddMonths(1)) : null;
         e.Recalculate(); await _db.SaveChangesAsync(ct); return (await GetByIdAsync(id, ct))!;
     }
     public async Task DeleteAsync(Guid id, CancellationToken ct) { var e = await _db.Expenses.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); if (e.IsFinalized) throw new InvalidOperationException("Gebuchte Ausgaben koennen nicht geloescht werden."); e.IsDeleted = true; e.DeletedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }

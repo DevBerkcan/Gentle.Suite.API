@@ -291,6 +291,15 @@ try
     """);
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerDocuments_CustomerId' AND object_id=OBJECT_ID('CustomerDocuments')) CREATE INDEX "IX_CustomerDocuments_CustomerId" ON "CustomerDocuments" ("CustomerId");""");
 
+    // Feature: Projektbudget
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Projects' AND COLUMN_NAME='BudgetHours') ALTER TABLE "Projects" ADD "BudgetHours" DECIMAL(10,2) NULL;""");
+
+    // Feature: Wiederkehrende Ausgaben
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Expenses' AND COLUMN_NAME='IsRecurring') ALTER TABLE "Expenses" ADD "IsRecurring" BIT NOT NULL DEFAULT 0;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Expenses' AND COLUMN_NAME='RecurringInterval') ALTER TABLE "Expenses" ADD "RecurringInterval" INT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Expenses' AND COLUMN_NAME='RecurringNextDate') ALTER TABLE "Expenses" ADD "RecurringNextDate" DATETIMEOFFSET NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Expenses' AND COLUMN_NAME='RecurringParentId') ALTER TABLE "Expenses" ADD "RecurringParentId" UNIQUEIDENTIFIER NULL;""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)
@@ -336,6 +345,7 @@ RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOve
 RecurringJob.AddOrUpdate<ReminderJobs>("check-open-quotes", j => j.CheckOpenQuotesAsync(), Cron.Daily(9));
 RecurringJob.AddOrUpdate<ReminderJobs>("generate-subscription-invoices", j => j.GenerateSubscriptionInvoicesAsync(), Cron.Daily(6));
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
+RecurringJob.AddOrUpdate<ReminderJobs>("generate-recurring-expenses", j => j.GenerateRecurringExpensesAsync(), Cron.Daily(7));
 
 app.Run();
 

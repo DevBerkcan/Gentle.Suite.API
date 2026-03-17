@@ -25,7 +25,8 @@ public class MappingProfile : Profile
                 0m
             ));
         CreateMap<Customer, CustomerDetailDto>()
-            .ForMember(d => d.DesiredServiceIds, o => o.MapFrom(s => s.DesiredServices.Select(ds => ds.ServiceCatalogItemId).ToList()));
+            .ForMember(d => d.DesiredServiceIds, o => o.MapFrom(s => s.DesiredServices.Select(ds => ds.ServiceCatalogItemId).ToList()))
+            .ForMember(d => d.IntakePending, o => o.MapFrom(s => s.OnboardingToken != null && !s.OnboardingIntakeDone));
         CreateMap<Contact, ContactDto>();
         CreateMap<Location, LocationDto>();
         CreateMap<CustomerNote, CustomerNoteDto>();
@@ -38,7 +39,7 @@ public class MappingProfile : Profile
             .ConstructUsing(s => new ProjectListDto(
                 s.Id, s.Name, s.Status, s.Customer.CompanyName, s.StartDate, s.DueDate
             ));
-        CreateMap<Project, ProjectDetailDto>();
+        CreateMap<Project, ProjectDetailDto>().ForMember(d => d.TotalLoggedHours, o => o.Ignore());
         CreateMap<Milestone, MilestoneDto>();
         CreateMap<ProjectComment, ProjectCommentDto>();
         CreateMap<ProjectBoardTask, ProjectBoardTaskDto>();

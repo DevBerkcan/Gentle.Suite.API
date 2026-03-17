@@ -134,4 +134,45 @@ public class ReminderJobs
             }
         }
     }
+
+    public async Task GenerateRecurringExpensesAsync()
+    {
+        var due = await _db.Expenses
+            .Where(e => e.IsRecurring && e.RecurringNextDate <= DateTimeOffset.UtcNow && !e.IsDeleted)
+            .ToListAsync();
+        foreach (var parent in due)
+        {
+            try
+            {
+                var count = await _db.Expenses.CountAsync();
+                var newExp = new Expense
+                {
+                    ExpenseNumber = $"AU-{DateTime.UtcNow.Year}-{(count + 1):D4}",
+                    Supplier = parent.Supplier,
+                    SupplierTaxId = parent.SupplierTaxId,
+                    ExpenseCategoryId = parent.ExpenseCategoryId,
+                    Description = parent.Description,
+                    NetAmount = parent.NetAmount,
+                    VatPercent = parent.VatPercent,
+                    ExpenseDate = parent.RecurringNextDate!.Value,
+                    RetentionUntil = DateTimeOffset.UtcNow.AddYears(10),
+                    IsRecurring = true,
+                    RecurringInterval = parent.RecurringInterval,
+                    RecurringParentId = parent.Id
+                };
+                newExp.Recalculate();
+                _db.Expenses.Add(newExp);
+                parent.RecurringNextDate = parent.RecurringInterval switch
+                {
+                    RecurringInterval.Monthly => parent.RecurringNextDate!.Value.AddMonths(1),
+                    RecurringInterval.Quarterly => parent.RecurringNextDate!.Value.AddMonths(3),
+                    RecurringInterval.Yearly => parent.RecurringNextDate!.Value.AddYears(1),
+                    _ => parent.RecurringNextDate!.Value.AddMonths(1)
+                };
+                await _db.SaveChangesAsync();
+                _log.LogInformation("Generated recurring expense {Nr} from parent {ParentId}", newExp.ExpenseNumber, parent.Id);
+            }
+            catch (Exception ex) { _log.LogError(ex, "Recurring expense generation failed for {Id}", parent.Id); }
+        }
+    }
 }

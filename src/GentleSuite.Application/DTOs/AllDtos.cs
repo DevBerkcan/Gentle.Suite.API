@@ -30,6 +30,8 @@ public class CustomerDetailDto
     public List<ContactDto> Contacts { get; set; } = new();
     public List<LocationDto> Locations { get; set; } = new();
     public List<Guid> DesiredServiceIds { get; set; } = new();
+    public bool OnboardingIntakeDone { get; set; }
+    public bool IntakePending { get; set; }
 }
 public record CreateCustomerRequest(string CompanyName, string? Industry, string? Website, string? TaxId, string? VatId, CreateContactRequest PrimaryContact, CreateLocationRequest? PrimaryLocation, List<Guid>? DesiredServiceIds);
 public record CreateCustomerQuickRequest(string Email, string? CompanyName);
@@ -70,8 +72,21 @@ public record OnboardingTemplateListDto(Guid Id, string Name, bool IsDefault, in
 
 // === Project ===
 public record ProjectListDto(Guid Id, string Name, ProjectStatus Status, string CustomerName, DateTimeOffset? StartDate, DateTimeOffset? DueDate);
-public record ProjectDetailDto(Guid Id, Guid CustomerId, string Name, string? Description, ProjectStatus Status, DateTimeOffset? StartDate, DateTimeOffset? DueDate, List<MilestoneDto> Milestones, List<ProjectCommentDto> Comments);
-public record CreateProjectRequest(Guid CustomerId, string Name, string? Description, DateTimeOffset? StartDate, DateTimeOffset? DueDate, string? ManagerId, Guid OnboardingTemplateId);
+public class ProjectDetailDto
+{
+    public Guid Id { get; set; }
+    public Guid CustomerId { get; set; }
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public ProjectStatus Status { get; set; }
+    public DateTimeOffset? StartDate { get; set; }
+    public DateTimeOffset? DueDate { get; set; }
+    public decimal? BudgetHours { get; set; }
+    public decimal TotalLoggedHours { get; set; }
+    public List<MilestoneDto> Milestones { get; set; } = new();
+    public List<ProjectCommentDto> Comments { get; set; } = new();
+}
+public record CreateProjectRequest(Guid CustomerId, string Name, string? Description, DateTimeOffset? StartDate, DateTimeOffset? DueDate, string? ManagerId, Guid OnboardingTemplateId, decimal? BudgetHours = null);
 public record MilestoneDto(Guid Id, string Title, int SortOrder, DateTimeOffset? DueDate, bool IsCompleted);
 public record ProjectCommentDto(Guid Id, string Content, string? AuthorName, DateTimeOffset CreatedAt);
 public record CreateMilestoneRequest(string Title, int SortOrder = 0, DateTimeOffset? DueDate = null, bool IsCompleted = false);
@@ -171,7 +186,7 @@ public record RecordPaymentRequest(decimal Amount, DateTimeOffset? PaymentDate, 
 public record CreateCancellationRequest(string? Reason);
 
 // === Expense ===
-public record ExpenseListDto(Guid Id, string? ExpenseNumber, string? Supplier, string? CategoryName, decimal GrossAmount, int VatPercent, DateTimeOffset ExpenseDate, ExpenseStatus Status);
+public record ExpenseListDto(Guid Id, string? ExpenseNumber, string? Supplier, string? CategoryName, decimal GrossAmount, int VatPercent, DateTimeOffset ExpenseDate, ExpenseStatus Status, bool IsRecurring = false);
 public class ExpenseDetailDto
 {
     public Guid Id { get; set; }
@@ -189,8 +204,11 @@ public class ExpenseDetailDto
     public DateTimeOffset ExpenseDate { get; set; }
     public ExpenseStatus Status { get; set; }
     public string? AccountNumber { get; set; }
+    public bool IsRecurring { get; set; }
+    public RecurringInterval? RecurringInterval { get; set; }
+    public DateTimeOffset? RecurringNextDate { get; set; }
 }
-public record CreateExpenseRequest(string? Supplier, string? SupplierTaxId, Guid? ExpenseCategoryId, string? Description, decimal NetAmount, int VatPercent = 19, DateTimeOffset? ExpenseDate = null, string? AccountNumber = null);
+public record CreateExpenseRequest(string? Supplier, string? SupplierTaxId, Guid? ExpenseCategoryId, string? Description, decimal NetAmount, int VatPercent = 19, DateTimeOffset? ExpenseDate = null, string? AccountNumber = null, bool IsRecurring = false, RecurringInterval? RecurringInterval = null, DateTimeOffset? RecurringNextDate = null);
 public record ExpenseCategoryDto(Guid Id, string Name, string? AccountNumber, int SortOrder);
 
 // === Journal ===
@@ -279,14 +297,24 @@ public record UpdateUserRequest(string FirstName, string LastName, bool IsActive
 public record ResetPasswordRequest(string NewPassword);
 
 // === Expense Update ===
-public record UpdateExpenseRequest(string? Supplier, string? SupplierTaxId, Guid? ExpenseCategoryId, string? Description, decimal NetAmount, int VatPercent, DateTimeOffset? ExpenseDate);
+public record UpdateExpenseRequest(string? Supplier, string? SupplierTaxId, Guid? ExpenseCategoryId, string? Description, decimal NetAmount, int VatPercent, DateTimeOffset? ExpenseDate, bool IsRecurring = false, RecurringInterval? RecurringInterval = null, DateTimeOffset? RecurringNextDate = null);
 
 // === Expense Category CRUD ===
 public record CreateExpenseCategoryRequest(string Name, string? AccountNumber, int SortOrder = 0);
 public record UpdateExpenseCategoryRequest(string Name, string? AccountNumber, int SortOrder);
 
 // === Project Update ===
-public record UpdateProjectRequest(string Name, string? Description, ProjectStatus Status, DateTimeOffset? StartDate, DateTimeOffset? DueDate);
+public record UpdateProjectRequest(string Name, string? Description, ProjectStatus Status, DateTimeOffset? StartDate, DateTimeOffset? DueDate, decimal? BudgetHours = null);
+
+// === Time-to-Invoice ===
+public record CreateInvoiceFromTimeEntriesRequest(Guid CustomerId, List<Guid> TimeEntryIds, string? Subject = null, int PaymentTermDays = 14);
+
+// === Customer Email ===
+public record SendCustomerEmailRequest(string To, string Subject, string Body);
+
+// === Password Reset ===
+public record ForgotPasswordRequest(string Email);
+public record ResetPasswordConfirmRequest(string Email, string Token, string NewPassword);
 
 // === Service Catalog CRUD ===
 public record CreateServiceCategoryRequest(string Name, string? Description, int SortOrder = 0);

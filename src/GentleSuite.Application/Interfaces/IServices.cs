@@ -22,6 +22,7 @@ public interface ICustomerService
     Task<CustomerDetailDto> CreateQuickAsync(CreateCustomerQuickRequest req, CancellationToken ct = default);
     Task<CustomerIntakeInfoDto?> GetIntakeInfoAsync(Guid token, CancellationToken ct = default);
     Task CompleteIntakeAsync(Guid token, CustomerIntakeSubmitRequest req, CancellationToken ct = default);
+    Task ResendIntakeAsync(Guid customerId, CancellationToken ct = default);
 }
 
 public interface ICustomerNoteService
@@ -82,6 +83,8 @@ public interface IInvoiceService
     Task<byte[]> GeneratePdfAsync(Guid id, CancellationToken ct = default);
     Task<byte[]> GenerateXRechnungXmlAsync(Guid id, CancellationToken ct = default);
     Task SendAsync(Guid id, CancellationToken ct = default);
+    Task<InvoiceDetailDto> CreateFromTimeEntriesAsync(CreateInvoiceFromTimeEntriesRequest req, CancellationToken ct = default);
+    Task SendReminderAsync(Guid id, CancellationToken ct = default);
 }
 
 public interface IExpenseService

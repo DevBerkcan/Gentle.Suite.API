@@ -20,6 +20,7 @@ public enum TaxMode { Standard, SmallBusiness, ReverseCharge } // Kleinunternehm
 
 // === Expenses ===
 public enum ExpenseStatus { Draft, Booked, Archived }
+public enum RecurringInterval { Monthly, Quarterly, Yearly }
 
 // === Projects ===
 public enum ProjectStatus { Planning, InProgress, Review, Completed, OnHold, Cancelled }

@@ -360,4 +360,68 @@ public class InvoiceServiceImpl : IInvoiceService
             ["DueDate"] = inv.DueDate.ToString("dd.MM.yyyy")
         }, inv.CustomerId, ct: ct);
     }
+
+    public async Task<InvoiceDetailDto> CreateFromTimeEntriesAsync(CreateInvoiceFromTimeEntriesRequest req, CancellationToken ct)
+    {
+        var entries = await _db.TimeEntries.Include(t => t.Project).Where(t => req.TimeEntryIds.Contains(t.Id) && !t.IsInvoiced).ToListAsync(ct);
+        if (!entries.Any()) throw new InvalidOperationException("Keine abrechenbaren Zeiteinträge gefunden.");
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+        var year = DateTime.UtcNow.Year;
+        var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
+        var inv = new Invoice
+        {
+            InvoiceNumber = invoiceNumber,
+            CustomerId = req.CustomerId,
+            Subject = req.Subject ?? "Zeiterfassung",
+            IntroText = co?.InvoiceIntroTemplate,
+            OutroText = co?.InvoiceOutroTemplate,
+            TaxMode = TaxMode.Standard,
+            InvoiceDate = DateTimeOffset.UtcNow,
+            DueDate = DateTimeOffset.UtcNow.AddDays(req.PaymentTermDays),
+            ServiceDateFrom = entries.Min(e => e.Date),
+            ServiceDateTo = entries.Max(e => e.Date),
+            SellerTaxId = co?.TaxId,
+            SellerVatId = co?.VatId,
+            Status = InvoiceStatus.Draft,
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+        };
+        int sort = 0;
+        foreach (var e in entries.OrderBy(e => e.Date))
+        {
+            var rate = e.HourlyRate ?? 95m;
+            inv.Lines.Add(new InvoiceLine
+            {
+                Title = e.Description,
+                Description = e.Project?.Name,
+                Unit = "h",
+                Quantity = e.Hours,
+                UnitPrice = rate,
+                VatPercent = 19,
+                SortOrder = sort++
+            });
+        }
+        inv.RecalculateTotals();
+        _db.Invoices.Add(inv);
+        foreach (var e in entries) e.IsInvoiced = true;
+        await _db.SaveChangesAsync(ct);
+        await _activity.LogAsync(req.CustomerId, "Invoice", inv.Id, "CreatedFromTime", $"Rechnung {inv.InvoiceNumber} aus {entries.Count} Zeiteinträgen erstellt", ct: ct);
+        return (await GetByIdAsync(inv.Id, ct))!;
+    }
+
+    public async Task SendReminderAsync(Guid id, CancellationToken ct)
+    {
+        var inv = await _db.Invoices.Include(i => i.Customer).ThenInclude(c => c.Contacts).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
+        if (inv.ReminderStop) throw new InvalidOperationException("Mahnsperre aktiv.");
+        var contact = inv.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? inv.Customer.Contacts.FirstOrDefault() ?? throw new InvalidOperationException("Kein Kontakt gefunden.");
+        await _email.SendTemplatedEmailAsync(contact.Email, "invoice-reminder", new Dictionary<string, object>
+        {
+            ["CustomerName"] = inv.Customer.CompanyName,
+            ["ContactName"] = contact.FirstName,
+            ["InvoiceNumber"] = inv.InvoiceNumber,
+            ["Amount"] = inv.GrossTotal.ToString("N2"),
+            ["DueDate"] = inv.DueDate.ToString("dd.MM.yyyy"),
+            ["DaysOverdue"] = (int)(DateTimeOffset.UtcNow - inv.DueDate).TotalDays
+        }, inv.CustomerId, ct: ct);
+        await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "ReminderSent", $"Mahnung gesendet für {inv.InvoiceNumber}", ct: ct);
+    }
 }

@@ -14,6 +14,7 @@ public class Project : BaseEntity
     public DateTimeOffset? StartDate { get; set; }
     public DateTimeOffset? DueDate { get; set; }
     public string? ManagerId { get; set; }
+    public decimal? BudgetHours { get; set; }
     public List<ProjectTeamMember> TeamMembers { get; set; } = new();
     public List<Milestone> Milestones { get; set; } = new();
     public List<ProjectComment> Comments { get; set; } = new();
