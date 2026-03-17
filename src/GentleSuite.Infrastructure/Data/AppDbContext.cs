@@ -133,8 +133,6 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<ProductTeamMember>().HasOne(x => x.TeamMember).WithMany(x => x.ProductAssignments).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<PriceList>().HasOne(x => x.Customer).WithMany().OnDelete(DeleteBehavior.Cascade);
         mb.Entity<PriceListItem>().HasOne(x => x.PriceList).WithMany(x => x.Items).OnDelete(DeleteBehavior.Cascade);
-        mb.Entity<PriceListItem>().HasOne(x => x.Product).WithMany(x => x.PriceListItems).OnDelete(DeleteBehavior.Restrict);
-        mb.Entity<PriceListItem>().HasOne(x => x.TeamMember).WithMany().OnDelete(DeleteBehavior.ClientSetNull);
         mb.Entity<Opportunity>().HasOne(x => x.Customer).WithMany(x => x.Opportunities).HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<Opportunity>().HasOne(x => x.Contact).WithMany().HasForeignKey(x => x.ContactId).OnDelete(DeleteBehavior.ClientSetNull);
         mb.Entity<Opportunity>().HasOne(x => x.AssignedTo).WithMany().HasForeignKey(x => x.AssignedToTeamMemberId).OnDelete(DeleteBehavior.ClientSetNull);

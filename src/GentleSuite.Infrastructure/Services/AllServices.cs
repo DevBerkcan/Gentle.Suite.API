@@ -813,16 +813,26 @@ public class PriceListServiceImpl : IPriceListService
 {
     private readonly AppDbContext _db;
     public PriceListServiceImpl(AppDbContext db) { _db = db; }
-    private static PriceListItemDto ItemDto(PriceListItem i) => new(i.Id, i.ProductId, i.Product?.Name ?? "", i.Product?.Unit ?? "h", i.CustomPrice, i.TeamMemberId, i.TeamMember?.FullName, i.Note, i.SortOrder);
-    private static PriceListDto ToDto(PriceList pl) => new(pl.Id, pl.CustomerId, pl.Name, pl.Description, pl.IsActive, pl.Items?.OrderBy(i => i.SortOrder).Select(ItemDto).ToList() ?? new());
-    private async Task<PriceList> Include(Guid id, CancellationToken ct) => await _db.PriceLists.Include(pl => pl.Items).ThenInclude(i => i.Product).Include(pl => pl.Items).ThenInclude(i => i.TeamMember).FirstOrDefaultAsync(pl => pl.Id == id, ct) ?? throw new KeyNotFoundException();
-    public async Task<List<PriceListDto>> GetByCustomerAsync(Guid customerId, CancellationToken ct) => (await _db.PriceLists.Include(pl => pl.Items).ThenInclude(i => i.Product).Include(pl => pl.Items).ThenInclude(i => i.TeamMember).Where(pl => pl.CustomerId == customerId).ToListAsync(ct)).Select(ToDto).ToList();
+    private static PriceListItemDto ItemDto(PriceListItem i) => new(i.Id, i.Title, i.Description, i.Unit, i.UnitPrice, i.SortOrder);
+    private static PriceListDto ToDto(PriceList pl) => new(pl.Id, pl.CustomerId, pl.Name, pl.Description, pl.IsTemplate, pl.IsActive, pl.Items?.OrderBy(i => i.SortOrder).Select(ItemDto).ToList() ?? new());
+    private async Task<PriceList> Include(Guid id, CancellationToken ct) => await _db.PriceLists.Include(pl => pl.Items).FirstOrDefaultAsync(pl => pl.Id == id, ct) ?? throw new KeyNotFoundException();
+    public async Task<List<PriceListDto>> GetByCustomerAsync(Guid customerId, CancellationToken ct) => (await _db.PriceLists.Include(pl => pl.Items).Where(pl => pl.CustomerId == customerId && !pl.IsTemplate).OrderBy(pl => pl.Name).ToListAsync(ct)).Select(ToDto).ToList();
+    public async Task<List<PriceListDto>> GetTemplatesAsync(CancellationToken ct) => (await _db.PriceLists.Include(pl => pl.Items).Where(pl => pl.IsTemplate).OrderBy(pl => pl.Name).ToListAsync(ct)).Select(ToDto).ToList();
     public async Task<PriceListDto> GetByIdAsync(Guid id, CancellationToken ct) => ToDto(await Include(id, ct));
-    public async Task<PriceListDto> CreateAsync(CreatePriceListRequest req, CancellationToken ct) { var pl = new PriceList { CustomerId = req.CustomerId, Name = req.Name, Description = req.Description }; _db.PriceLists.Add(pl); await _db.SaveChangesAsync(ct); return new PriceListDto(pl.Id, pl.CustomerId, pl.Name, pl.Description, pl.IsActive, new()); }
+    public async Task<PriceListDto> CreateAsync(CreatePriceListRequest req, CancellationToken ct) { var pl = new PriceList { CustomerId = req.CustomerId, Name = req.Name, Description = req.Description, IsTemplate = req.IsTemplate }; _db.PriceLists.Add(pl); await _db.SaveChangesAsync(ct); return new PriceListDto(pl.Id, pl.CustomerId, pl.Name, pl.Description, pl.IsTemplate, pl.IsActive, new()); }
     public async Task<PriceListDto> UpdateAsync(Guid id, UpdatePriceListRequest req, CancellationToken ct) { var pl = await Include(id, ct); pl.Name = req.Name; pl.Description = req.Description; pl.IsActive = req.IsActive; await _db.SaveChangesAsync(ct); return ToDto(pl); }
     public async Task DeleteAsync(Guid id, CancellationToken ct) { var pl = await _db.PriceLists.Include(p => p.Items).FirstOrDefaultAsync(p => p.Id == id, ct) ?? throw new KeyNotFoundException(); _db.PriceListItems.RemoveRange(pl.Items); _db.PriceLists.Remove(pl); await _db.SaveChangesAsync(ct); }
-    public async Task<PriceListItemDto> AddItemAsync(Guid priceListId, UpsertPriceListItemRequest req, CancellationToken ct) { var item = new PriceListItem { PriceListId = priceListId, ProductId = req.ProductId, TeamMemberId = req.TeamMemberId, CustomPrice = req.CustomPrice, Note = req.Note, SortOrder = req.SortOrder }; _db.PriceListItems.Add(item); await _db.SaveChangesAsync(ct); await _db.Entry(item).Reference(i => i.Product).LoadAsync(ct); await _db.Entry(item).Reference(i => i.TeamMember).LoadAsync(ct); return ItemDto(item); }
-    public async Task<PriceListItemDto> UpdateItemAsync(Guid priceListId, Guid itemId, UpsertPriceListItemRequest req, CancellationToken ct) { var item = await _db.PriceListItems.Include(i => i.Product).Include(i => i.TeamMember).FirstOrDefaultAsync(i => i.Id == itemId && i.PriceListId == priceListId, ct) ?? throw new KeyNotFoundException(); item.ProductId = req.ProductId; item.TeamMemberId = req.TeamMemberId; item.CustomPrice = req.CustomPrice; item.Note = req.Note; item.SortOrder = req.SortOrder; await _db.SaveChangesAsync(ct); await _db.Entry(item).Reference(i => i.Product).LoadAsync(ct); await _db.Entry(item).Reference(i => i.TeamMember).LoadAsync(ct); return ItemDto(item); }
+    public async Task<PriceListDto> CloneToCustomerAsync(ClonePriceListRequest req, CancellationToken ct)
+    {
+        var tpl = await Include(req.TemplateId, ct);
+        var copy = new PriceList { CustomerId = req.CustomerId, Name = tpl.Name, Description = tpl.Description, IsTemplate = false, IsActive = true };
+        copy.Items = tpl.Items.Select(i => new PriceListItem { Title = i.Title, Description = i.Description, Unit = i.Unit, UnitPrice = i.UnitPrice, SortOrder = i.SortOrder }).ToList();
+        _db.PriceLists.Add(copy);
+        await _db.SaveChangesAsync(ct);
+        return ToDto(copy);
+    }
+    public async Task<PriceListItemDto> AddItemAsync(Guid priceListId, UpsertPriceListItemRequest req, CancellationToken ct) { var item = new PriceListItem { PriceListId = priceListId, Title = req.Title, Description = req.Description, Unit = req.Unit, UnitPrice = req.UnitPrice, SortOrder = req.SortOrder }; _db.PriceListItems.Add(item); await _db.SaveChangesAsync(ct); return ItemDto(item); }
+    public async Task<PriceListItemDto> UpdateItemAsync(Guid priceListId, Guid itemId, UpsertPriceListItemRequest req, CancellationToken ct) { var item = await _db.PriceListItems.FirstOrDefaultAsync(i => i.Id == itemId && i.PriceListId == priceListId, ct) ?? throw new KeyNotFoundException(); item.Title = req.Title; item.Description = req.Description; item.Unit = req.Unit; item.UnitPrice = req.UnitPrice; item.SortOrder = req.SortOrder; await _db.SaveChangesAsync(ct); return ItemDto(item); }
     public async Task RemoveItemAsync(Guid priceListId, Guid itemId, CancellationToken ct) { var item = await _db.PriceListItems.FirstOrDefaultAsync(i => i.Id == itemId && i.PriceListId == priceListId, ct) ?? throw new KeyNotFoundException(); _db.PriceListItems.Remove(item); await _db.SaveChangesAsync(ct); }
 }
 

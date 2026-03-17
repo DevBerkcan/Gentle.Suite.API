@@ -279,10 +279,12 @@ public interface IProductService
 public interface IPriceListService
 {
     Task<List<PriceListDto>> GetByCustomerAsync(Guid customerId, CancellationToken ct = default);
+    Task<List<PriceListDto>> GetTemplatesAsync(CancellationToken ct = default);
     Task<PriceListDto> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<PriceListDto> CreateAsync(CreatePriceListRequest req, CancellationToken ct = default);
     Task<PriceListDto> UpdateAsync(Guid id, UpdatePriceListRequest req, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
+    Task<PriceListDto> CloneToCustomerAsync(ClonePriceListRequest req, CancellationToken ct = default);
     Task<PriceListItemDto> AddItemAsync(Guid priceListId, UpsertPriceListItemRequest req, CancellationToken ct = default);
     Task<PriceListItemDto> UpdateItemAsync(Guid priceListId, Guid itemId, UpsertPriceListItemRequest req, CancellationToken ct = default);
     Task RemoveItemAsync(Guid priceListId, Guid itemId, CancellationToken ct = default);

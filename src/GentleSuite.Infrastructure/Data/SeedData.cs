@@ -24,6 +24,7 @@ public static class SeedData
         await SeedQuoteTemplates(db); await SeedExpenseCategories(db);
         await SeedAccounts(db); await SeedMissingEmailTemplates(db);
         await SeedDemoData(db);
+        await SeedPriceListTemplates(db);
     }
 
     static async Task SeedRoles(RoleManager<IdentityRole> rm)
@@ -98,9 +99,10 @@ IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'Price
 BEGIN
     CREATE TABLE ""PriceLists"" (
         ""Id"" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
-        ""CustomerId"" UNIQUEIDENTIFIER NOT NULL REFERENCES ""Customers""(""Id"") ON DELETE CASCADE,
-        ""Name"" NVARCHAR(MAX) NOT NULL DEFAULT '',
-        ""Description"" NVARCHAR(MAX),
+        ""CustomerId"" UNIQUEIDENTIFIER NULL,
+        ""Name"" NVARCHAR(256) NOT NULL DEFAULT '',
+        ""Description"" NVARCHAR(MAX) NULL,
+        ""IsTemplate"" BIT NOT NULL DEFAULT 0,
         ""IsActive"" BIT NOT NULL DEFAULT 1,
         ""CreatedAt"" DATETIMEOFFSET(7) NOT NULL DEFAULT SYSDATETIMEOFFSET(),
         ""UpdatedAt"" DATETIMEOFFSET(7),
@@ -111,15 +113,16 @@ BEGIN
         CONSTRAINT ""PK_PriceLists"" PRIMARY KEY (""Id"")
     );
 END;
+IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'PriceLists' AND COLUMN_NAME = 'IsTemplate') ALTER TABLE ""PriceLists"" ADD ""IsTemplate"" BIT NOT NULL DEFAULT 0;
 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PriceListItems')
 BEGIN
     CREATE TABLE ""PriceListItems"" (
         ""Id"" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
         ""PriceListId"" UNIQUEIDENTIFIER NOT NULL REFERENCES ""PriceLists""(""Id"") ON DELETE CASCADE,
-        ""ProductId"" UNIQUEIDENTIFIER NOT NULL REFERENCES ""Products""(""Id"") ON DELETE NO ACTION,
-        ""TeamMemberId"" UNIQUEIDENTIFIER REFERENCES ""TeamMembers""(""Id"") ON DELETE SET NULL,
-        ""CustomPrice"" DECIMAL(18,2) NOT NULL DEFAULT 0,
-        ""Note"" NVARCHAR(MAX),
+        ""Title"" NVARCHAR(512) NOT NULL DEFAULT '',
+        ""Description"" NVARCHAR(MAX) NULL,
+        ""Unit"" NVARCHAR(50) NOT NULL DEFAULT 'pauschal',
+        ""UnitPrice"" DECIMAL(18,2) NOT NULL DEFAULT 0,
         ""SortOrder"" INT NOT NULL DEFAULT 0,
         ""CreatedAt"" DATETIMEOFFSET(7) NOT NULL DEFAULT SYSDATETIMEOFFSET(),
         ""UpdatedAt"" DATETIMEOFFSET(7),
@@ -130,6 +133,9 @@ BEGIN
         CONSTRAINT ""PK_PriceListItems"" PRIMARY KEY (""Id"")
     );
 END;
+IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'PriceListItems' AND COLUMN_NAME = 'Title') ALTER TABLE ""PriceListItems"" ADD ""Title"" NVARCHAR(512) NOT NULL DEFAULT '';
+IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'PriceListItems' AND COLUMN_NAME = 'UnitPrice') ALTER TABLE ""PriceListItems"" ADD ""UnitPrice"" DECIMAL(18,2) NOT NULL DEFAULT 0;
+IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'PriceListItems' AND COLUMN_NAME = 'Unit') ALTER TABLE ""PriceListItems"" ADD ""Unit"" NVARCHAR(50) NOT NULL DEFAULT 'pauschal';
 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TeamMembers' AND COLUMN_NAME = 'DeletedAt') ALTER TABLE ""TeamMembers"" ADD ""DeletedAt"" DATETIMEOFFSET(7);
 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'Products' AND COLUMN_NAME = 'DeletedAt') ALTER TABLE ""Products"" ADD ""DeletedAt"" DATETIMEOFFSET(7);
 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'PriceLists' AND COLUMN_NAME = 'DeletedAt') ALTER TABLE ""PriceLists"" ADD ""DeletedAt"" DATETIMEOFFSET(7);
@@ -421,5 +427,34 @@ END;
             Contacts=new(){new(){FirstName="Max",LastName="Mustermann",Email="max@demo.de",Phone="+49 123 456789",Position="Geschaeftsfuehrer",IsPrimary=true}},
             Locations=new(){new(){Label="Hauptsitz",Street="Demostr. 42",City="Wuppertal",ZipCode="42103",IsPrimary=true}}};
         db.Customers.Add(cust); await db.SaveChangesAsync();
+    }
+
+    static async Task SeedPriceListTemplates(AppDbContext db)
+    {
+        if (await db.PriceLists.AnyAsync(p => p.IsTemplate)) return;
+        db.PriceLists.AddRange(
+            new PriceList { Name = "Webdesign Standard", Description = "Standardpreise für Webdesign-Projekte", IsTemplate = true, Items = new() {
+                new() { Title = "Webseite (Landingpage)", Description = "Responsive One-Pager inkl. CMS", Unit = "pauschal", UnitPrice = 1490, SortOrder = 1 },
+                new() { Title = "Webseite (5-Seiter)", Description = "Responsive, CMS, Kontaktformular", Unit = "pauschal", UnitPrice = 2490, SortOrder = 2 },
+                new() { Title = "Webseite (10-Seiter)", Description = "Responsive, CMS, SEO-Grundoptimierung", Unit = "pauschal", UnitPrice = 3990, SortOrder = 3 },
+                new() { Title = "Domain & Hosting", Description = "Inkl. SSL-Zertifikat und E-Mail", Unit = "jährlich", UnitPrice = 199, SortOrder = 4 },
+                new() { Title = "SEO-Grundoptimierung", Description = "Meta-Tags, Seitenstruktur, Sitemap", Unit = "pauschal", UnitPrice = 390, SortOrder = 5 },
+                new() { Title = "Pflegestunde", Description = "Nachträgliche Änderungen und Erweiterungen", Unit = "h", UnitPrice = 95, SortOrder = 6 }
+            }},
+            new PriceList { Name = "Softwareentwicklung", Description = "Stundensätze und Pauschalen für Software-Projekte", IsTemplate = true, Items = new() {
+                new() { Title = "Anforderungsanalyse & Konzept", Description = "Workshops, Spezifikation, User Stories", Unit = "h", UnitPrice = 95, SortOrder = 1 },
+                new() { Title = "Backend-Entwicklung", Description = "API, Datenbankentwicklung, Integrationen", Unit = "h", UnitPrice = 95, SortOrder = 2 },
+                new() { Title = "Frontend-Entwicklung", Description = "UI-Implementierung, Responsive, Animationen", Unit = "h", UnitPrice = 90, SortOrder = 3 },
+                new() { Title = "Testing & QA", Description = "Funktions-, Integrations- und Regressionstests", Unit = "h", UnitPrice = 75, SortOrder = 4 },
+                new() { Title = "Deployment & DevOps", Description = "Server-Setup, CI/CD, Monitoring", Unit = "pauschal", UnitPrice = 390, SortOrder = 5 }
+            }},
+            new PriceList { Name = "Wartungsvertrag", Description = "Monatliche Wartung und Support-Pakete", IsTemplate = true, Items = new() {
+                new() { Title = "Wartung Basis", Description = "Updates, Backup, Security-Monitoring", Unit = "Monat", UnitPrice = 49, SortOrder = 1 },
+                new() { Title = "Wartung Standard", Description = "Basis + 2h Support/Monat", Unit = "Monat", UnitPrice = 99, SortOrder = 2 },
+                new() { Title = "Wartung Premium", Description = "Standard + 5h Support + Entwicklung", Unit = "Monat", UnitPrice = 199, SortOrder = 3 },
+                new() { Title = "Zusatz-Supportstunde", Description = "Über das Paket hinaus", Unit = "h", UnitPrice = 95, SortOrder = 4 }
+            }}
+        );
+        await db.SaveChangesAsync();
     }
 }

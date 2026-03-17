@@ -23,7 +23,6 @@ public class Product : BaseEntity
     public decimal DefaultPrice { get; set; }
     public bool IsActive { get; set; } = true;
     public List<ProductTeamMember> TeamMembers { get; set; } = new();
-    public List<PriceListItem> PriceListItems { get; set; } = new();
 }
 
 public class ProductTeamMember
@@ -36,10 +35,11 @@ public class ProductTeamMember
 
 public class PriceList : BaseEntity
 {
-    public Guid CustomerId { get; set; }
-    public Customer Customer { get; set; } = null!;
+    public Guid? CustomerId { get; set; }    // null = globale Vorlage
+    public Customer? Customer { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
+    public bool IsTemplate { get; set; }
     public bool IsActive { get; set; } = true;
     public List<PriceListItem> Items { get; set; } = new();
 }
@@ -48,11 +48,9 @@ public class PriceListItem : BaseEntity
 {
     public Guid PriceListId { get; set; }
     public PriceList PriceList { get; set; } = null!;
-    public Guid ProductId { get; set; }
-    public Product Product { get; set; } = null!;
-    public Guid? TeamMemberId { get; set; }
-    public TeamMember? TeamMember { get; set; }
-    public decimal CustomPrice { get; set; }
-    public string? Note { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string Unit { get; set; } = "pauschal";
+    public decimal UnitPrice { get; set; }
     public int SortOrder { get; set; }
 }

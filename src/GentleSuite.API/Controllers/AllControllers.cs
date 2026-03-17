@@ -69,7 +69,16 @@ public class CustomersController(ICustomerService svc) : ControllerBase
     public async Task<ActionResult<CsvImportResultDto>> ImportCsv(IFormFile file, CancellationToken ct)
     {
         if (file == null || file.Length == 0) return BadRequest("Keine Datei.");
-        using var reader = new System.IO.StreamReader(file.OpenReadStream(), System.Text.Encoding.UTF8);
+        // Detect encoding: check BOM, otherwise default to Windows-1252 (Lexware/DATEV exports)
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        var ms = new System.IO.MemoryStream();
+        await file.OpenReadStream().CopyToAsync(ms);
+        ms.Position = 0;
+        var bom = new byte[3]; ms.Read(bom, 0, 3); ms.Position = 0;
+        var enc = (bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
+            ? System.Text.Encoding.UTF8
+            : System.Text.Encoding.GetEncoding("windows-1252");
+        using var reader = new System.IO.StreamReader(ms, enc);
         var lines = new List<string>();
         while (!reader.EndOfStream) { var line = await reader.ReadLineAsync(); if (line != null) lines.Add(line); }
         if (lines.Count < 2) return BadRequest("CSV leer oder nur Header.");
@@ -139,7 +148,7 @@ public class CustomersController(ICustomerService svc) : ControllerBase
                     VatId: vatId.Length > 0 ? vatId : null,
                     PrimaryContact: new CreateContactRequest(
                         FirstName: contactFn, LastName: contactLn,
-                        Email: contactEmail.Length > 0 ? contactEmail : null,
+                        Email: contactEmail.Length > 0 ? contactEmail : "",
                         Phone: contactPhone.Length > 0 ? contactPhone : null,
                         Position: null, IsPrimary: true),
                     PrimaryLocation: (street.Length > 0 || city.Length > 0 || zip.Length > 0) ? new CreateLocationRequest(
@@ -606,8 +615,10 @@ public class ProductsController(IProductService svc) : ControllerBase
 public class PriceListsController(IPriceListService svc) : ControllerBase
 {
     [HttpGet] public async Task<ActionResult<List<PriceListDto>>> List([FromQuery] Guid customerId) => Ok(await svc.GetByCustomerAsync(customerId));
+    [HttpGet("templates")] public async Task<ActionResult<List<PriceListDto>>> Templates() => Ok(await svc.GetTemplatesAsync());
     [HttpGet("{id}")] public async Task<ActionResult<PriceListDto>> Get(Guid id) => Ok(await svc.GetByIdAsync(id));
     [HttpPost] public async Task<ActionResult<PriceListDto>> Create(CreatePriceListRequest req) => Ok(await svc.CreateAsync(req));
+    [HttpPost("clone")] public async Task<ActionResult<PriceListDto>> Clone(ClonePriceListRequest req) => Ok(await svc.CloneToCustomerAsync(req));
     [HttpPut("{id}")] public async Task<ActionResult<PriceListDto>> Update(Guid id, UpdatePriceListRequest req) => Ok(await svc.UpdateAsync(id, req));
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
     [HttpPost("{id}/items")] public async Task<ActionResult<PriceListItemDto>> AddItem(Guid id, UpsertPriceListItemRequest req) => Ok(await svc.AddItemAsync(id, req));

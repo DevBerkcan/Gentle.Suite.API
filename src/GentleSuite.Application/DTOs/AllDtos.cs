@@ -329,11 +329,12 @@ public record CreateProductRequest(string Name, string? Description, string Unit
 public record UpdateProductRequest(string Name, string? Description, string Unit, decimal DefaultPrice, bool IsActive);
 
 // === Price Lists ===
-public record PriceListDto(Guid Id, Guid CustomerId, string Name, string? Description, bool IsActive, List<PriceListItemDto> Items);
-public record PriceListItemDto(Guid Id, Guid ProductId, string ProductName, string Unit, decimal CustomPrice, Guid? TeamMemberId, string? TeamMemberName, string? Note, int SortOrder);
-public record CreatePriceListRequest(Guid CustomerId, string Name, string? Description);
+public record PriceListDto(Guid Id, Guid? CustomerId, string Name, string? Description, bool IsTemplate, bool IsActive, List<PriceListItemDto> Items);
+public record PriceListItemDto(Guid Id, string Title, string? Description, string Unit, decimal UnitPrice, int SortOrder);
+public record CreatePriceListRequest(Guid? CustomerId, string Name, string? Description, bool IsTemplate = false);
 public record UpdatePriceListRequest(string Name, string? Description, bool IsActive);
-public record UpsertPriceListItemRequest(Guid ProductId, Guid? TeamMemberId, decimal CustomPrice, string? Note, int SortOrder = 0);
+public record UpsertPriceListItemRequest(string Title, string? Description, string Unit, decimal UnitPrice, int SortOrder = 0);
+public record ClonePriceListRequest(Guid TemplateId, Guid CustomerId);
 
 // === Opportunities ===
 public record OpportunityListDto(Guid Id, Guid CustomerId, string CustomerName, string Title, OpportunityStage Stage, int Probability, decimal ExpectedRevenue, DateTimeOffset? CloseDate, string? AssignedToName, DateTimeOffset CreatedAt);
