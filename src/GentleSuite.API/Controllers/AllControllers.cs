@@ -64,6 +64,97 @@ public class CustomersController(ICustomerService svc) : ControllerBase
     [HttpPost("{id}/locations")] public async Task<ActionResult<LocationDto>> AddLocation(Guid id, CreateLocationRequest req) => Ok(await svc.AddLocationAsync(id, req));
     [HttpPut("{id}/locations/{locationId}")] public async Task<ActionResult<LocationDto>> UpdateLocation(Guid id, Guid locationId, UpdateLocationRequest req) => Ok(await svc.UpdateLocationAsync(id, locationId, req));
     [HttpDelete("{id}/locations/{locationId}")] public async Task<IActionResult> DeleteLocation(Guid id, Guid locationId) { await svc.DeleteLocationAsync(id, locationId); return NoContent(); }
+
+    [HttpPost("import-csv"), Consumes("multipart/form-data")]
+    public async Task<ActionResult<CsvImportResultDto>> ImportCsv(IFormFile file, CancellationToken ct)
+    {
+        if (file == null || file.Length == 0) return BadRequest("Keine Datei.");
+        using var reader = new System.IO.StreamReader(file.OpenReadStream(), System.Text.Encoding.UTF8);
+        var lines = new List<string>();
+        while (!reader.EndOfStream) { var line = await reader.ReadLineAsync(); if (line != null) lines.Add(line); }
+        if (lines.Count < 2) return BadRequest("CSV leer oder nur Header.");
+
+        // Normalize headers to lowercase for flexible matching
+        var headers = lines[0].Split(';').Select(h => h.Trim().Trim('"').ToLowerInvariant()).ToList();
+        int ColIdx(string name) => headers.IndexOf(name.ToLowerInvariant());
+
+        int imported = 0, skipped = 0;
+        var errors = new List<string>();
+
+        // Strip leading quote+plus (e.g. '+49...) from phone numbers
+        static string CleanPhone(string p)
+        {
+            var s = p.TrimStart('\'').Trim();
+            if (s.Length == 0) return "";
+            return s.StartsWith('+') ? s : (s.Length > 0 ? "+" + s : "");
+        }
+
+        for (int i = 1; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var cols = line.Split(';').Select(c => c.Trim().Trim('"')).ToArray();
+            string Get(string name) { var idx = ColIdx(name); return idx >= 0 && idx < cols.Length ? cols[idx].Trim() : ""; }
+            string GetAny(params string[] names) { foreach (var n in names) { var v = Get(n); if (v.Length > 0) return v; } return ""; }
+
+            // Company-level fields (Lexware/DATEV export format)
+            var company  = GetAny("firmenname", "firma", "companyname", "unternehmen");
+            var topFn    = GetAny("vorname", "firstname");
+            var topLn    = GetAny("nachname", "lastname");
+            var email    = GetAny("e-mail 1", "e-mail", "email 1", "email");
+            var phone    = CleanPhone(GetAny("telefon 1", "telefon", "phone 1", "phone"));
+            var taxId    = GetAny("steuernummer");
+            var vatId    = GetAny("umsatzsteuer id", "umsatzsteuer-id", "ustid");
+            var street   = GetAny("straße 1", "strasse 1", "straße", "strasse", "street");
+            var zip      = GetAny("plz 1", "plz", "zipcode");
+            var city     = GetAny("ort 1", "ort", "city");
+            var country  = GetAny("land 1", "land", "country");
+
+            // Ansprechpartner 1 (contact person)
+            var cpFn    = GetAny("ansprechpartner 1 vorname");
+            var cpLn    = GetAny("ansprechpartner 1 nachname");
+            var cpEmail = GetAny("ansprechpartner 1 e-mail");
+            var cpPhone = CleanPhone(GetAny("ansprechpartner 1 telefon"));
+
+            if (string.IsNullOrWhiteSpace(company) && string.IsNullOrWhiteSpace(topLn))
+            { errors.Add($"Zeile {i + 1}: Firmenname oder Nachname fehlt."); skipped++; continue; }
+
+            var effectiveCompany = !string.IsNullOrWhiteSpace(company)
+                ? company
+                : $"{topFn} {topLn}".Trim();
+
+            // Prefer Ansprechpartner 1 data; fall back to top-level Vorname/Nachname
+            var contactFn    = cpFn.Length > 0 ? cpFn : topFn;
+            var contactLn    = cpLn.Length > 0 ? cpLn : topLn;
+            var contactEmail = cpEmail.Length > 0 ? cpEmail : email;
+            var contactPhone = cpPhone.Length > 0 ? cpPhone : phone;
+
+            try
+            {
+                var req = new CreateCustomerRequest(
+                    CompanyName: effectiveCompany,
+                    Industry: null,
+                    Website: GetAny("website") is { Length: > 0 } w ? w : null,
+                    TaxId: taxId.Length > 0 ? taxId : null,
+                    VatId: vatId.Length > 0 ? vatId : null,
+                    PrimaryContact: new CreateContactRequest(
+                        FirstName: contactFn, LastName: contactLn,
+                        Email: contactEmail.Length > 0 ? contactEmail : null,
+                        Phone: contactPhone.Length > 0 ? contactPhone : null,
+                        Position: null, IsPrimary: true),
+                    PrimaryLocation: (street.Length > 0 || city.Length > 0 || zip.Length > 0) ? new CreateLocationRequest(
+                        Label: "Hauptsitz",
+                        Street: street, City: city, ZipCode: zip,
+                        Country: country.Length > 0 ? country : "Deutschland") : null,
+                    DesiredServiceIds: null);
+                await svc.CreateAsync(req, ct);
+                imported++;
+            }
+            catch (Exception ex) { errors.Add($"Zeile {i + 1} ({effectiveCompany}): {ex.Message}"); skipped++; }
+        }
+
+        return Ok(new CsvImportResultDto(imported, skipped, errors));
+    }
 }
 
 [ApiController, Route("api/customers/{customerId}/notes"), Authorize]

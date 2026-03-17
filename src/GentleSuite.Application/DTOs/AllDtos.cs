@@ -371,3 +371,7 @@ public record CalendarEventDto(string Id, DateTimeOffset Date, string Title, str
 
 // === Kundendokumente ===
 public record CustomerDocumentDto(Guid Id, Guid CustomerId, string FileName, string ContentType, long FileSizeBytes, string? Notes, DateTimeOffset CreatedAt);
+
+// === CSV-Import ===
+public record CsvImportRowDto(int Row, string CompanyName, string FirstName, string LastName, string Email, string? Phone, string? Position, string? Street, string? City, string? ZipCode, string? Country, string? Industry, string? Website);
+public record CsvImportResultDto(int Imported, int Skipped, List<string> Errors);
