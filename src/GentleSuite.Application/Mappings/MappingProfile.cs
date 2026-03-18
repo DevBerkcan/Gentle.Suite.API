@@ -54,7 +54,8 @@ public class MappingProfile : Profile
                 s.GrandTotal,
                 s.Version,
                 s.CreatedAt,
-                s.ExpiresAt
+                s.ExpiresAt,
+                false
             ));
         CreateMap<Quote, QuoteDetailDto>()
             .ForMember(d => d.CustomerName, o => o.MapFrom(s => s.Customer.CompanyName))

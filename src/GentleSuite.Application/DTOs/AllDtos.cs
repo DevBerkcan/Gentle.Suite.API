@@ -180,7 +180,7 @@ public record InvoiceVatSummaryDto(int VatPercent, decimal NetAmount, decimal Va
 public record CreateInvoiceRequest(Guid CustomerId, Guid? QuoteId, string? Subject, string? IntroText, string? OutroText, string? Notes, TaxMode TaxMode = TaxMode.Standard, DateTimeOffset? ServiceDateFrom = null, DateTimeOffset? ServiceDateTo = null, int PaymentTermDays = 14, List<CreateInvoiceLineRequest>? Lines = null);
 public record CreateInvoiceLineRequest(string Title, string? Description, string? Unit, decimal Quantity, decimal UnitPrice, int VatPercent = 19, int SortOrder = 0);
 public record UpdateInvoiceLineRequest(string Title, string? Description, string? Unit, decimal Quantity, decimal UnitPrice, int VatPercent = 19, int SortOrder = 0);
-public record UpdateInvoiceRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, TaxMode TaxMode, DateTimeOffset InvoiceDate, DateTimeOffset DueDate, DateTimeOffset ServiceDateFrom, DateTimeOffset ServiceDateTo, List<UpdateInvoiceLineRequest> Lines);
+public record UpdateInvoiceRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, TaxMode TaxMode, DateTimeOffset InvoiceDate, DateTimeOffset DueDate, DateTimeOffset? ServiceDateFrom, DateTimeOffset? ServiceDateTo, List<UpdateInvoiceLineRequest> Lines);
 public record FinalizeInvoiceRequest(bool SendEmail = true);
 public record RecordPaymentRequest(decimal Amount, DateTimeOffset? PaymentDate, string? PaymentMethod, string? Reference, string? Note);
 public record CreateCancellationRequest(string? Reason);

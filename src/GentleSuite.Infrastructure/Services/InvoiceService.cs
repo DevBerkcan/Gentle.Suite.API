@@ -90,8 +90,8 @@ public class InvoiceServiceImpl : IInvoiceService
         inv.TaxMode = req.TaxMode;
         inv.InvoiceDate = req.InvoiceDate;
         inv.DueDate = req.DueDate;
-        inv.ServiceDateFrom = req.ServiceDateFrom;
-        inv.ServiceDateTo = req.ServiceDateTo;
+        inv.ServiceDateFrom = req.ServiceDateFrom ?? inv.ServiceDateFrom;
+        inv.ServiceDateTo = req.ServiceDateTo ?? inv.ServiceDateTo;
 
         var existingLines = inv.Lines.OrderBy(l => l.SortOrder).ToList();
         var targetLines = req.Lines ?? new List<UpdateInvoiceLineRequest>();
@@ -113,7 +113,10 @@ public class InvoiceServiceImpl : IInvoiceService
         if (existingLines.Count > targetLines.Count)
         {
             var toRemove = existingLines.Skip(targetLines.Count).ToList();
-            _db.InvoiceLines.RemoveRange(toRemove);
+            var toRemoveIds = toRemove.Select(l => l.Id).ToList();
+            await _db.InvoiceLines.IgnoreQueryFilters()
+                .Where(l => toRemoveIds.Contains(l.Id))
+                .ExecuteDeleteAsync(ct);
             foreach (var line in toRemove) inv.Lines.Remove(line);
         }
 
@@ -144,7 +147,8 @@ public class InvoiceServiceImpl : IInvoiceService
     {
         if (req.Lines == null || req.Lines.Count == 0) throw new ArgumentException("Mindestens eine Position ist erforderlich.");
         if (req.DueDate < req.InvoiceDate) throw new ArgumentException("Faelligkeitsdatum darf nicht vor dem Rechnungsdatum liegen.");
-        if (req.ServiceDateTo < req.ServiceDateFrom) throw new ArgumentException("Leistungsende darf nicht vor Leistungsbeginn liegen.");
+        if (req.ServiceDateFrom.HasValue && req.ServiceDateTo.HasValue && req.ServiceDateTo < req.ServiceDateFrom)
+            throw new ArgumentException("Leistungsende darf nicht vor Leistungsbeginn liegen.");
 
         for (var i = 0; i < req.Lines.Count; i++)
         {

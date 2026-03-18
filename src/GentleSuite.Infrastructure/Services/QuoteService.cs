@@ -33,7 +33,11 @@ public class QuoteServiceImpl : IQuoteService
         var total = await q.CountAsync(ct);
         var items = await q.OrderByDescending(x => x.CreatedAt).Skip((p.Page-1)*p.PageSize).Take(p.PageSize).ToListAsync(ct);
         var quoteIds = items.Select(x => x.Id).ToList();
-        var invoicedIds = await _db.Invoices.Where(i => i.QuoteId.HasValue && quoteIds.Contains(i.QuoteId!.Value)).Select(i => i.QuoteId!.Value).ToHashSetAsync(ct);
+        var invoicedIds = (await _db.Invoices
+            .Where(i => i.QuoteId.HasValue && quoteIds.Contains(i.QuoteId!.Value))
+            .Select(i => i.QuoteId!.Value)
+            .ToListAsync(ct))
+            .ToHashSet();
         var dtos = items.Select(x => new QuoteListDto(x.Id, x.QuoteNumber, x.Customer.CompanyName, x.Status, x.SignatureStatus, x.GrandTotal, x.Version, x.CreatedAt, x.ExpiresAt, invoicedIds.Contains(x.Id))).ToList();
         return new PagedResult<QuoteListDto>(dtos, total, p.Page, p.PageSize);
     }
