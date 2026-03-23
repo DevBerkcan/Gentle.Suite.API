@@ -30,6 +30,11 @@ public class EmailServiceImpl : IEmailService
     private readonly ILogger<EmailServiceImpl> _log;
     private static readonly FluidParser _parser = new();
 
+    private static readonly string[] _hardcodedCc =
+    [
+        "berkcan@gentlegroup.de"
+    ];
+
     public EmailServiceImpl(AppDbContext db, IOptions<SmtpSettings> smtp, ILogger<EmailServiceImpl> log)
     {
         _db = db;
@@ -54,6 +59,12 @@ public class EmailServiceImpl : IEmailService
         return client;
     }
 
+    private static void AddHardcodedCc(MimeMessage msg)
+    {
+        foreach (var cc in _hardcodedCc)
+            msg.Cc.Add(MailboxAddress.Parse(cc));
+    }
+
     public async Task SendEmailAsync(string to, string subject, string body, string? cc = null, List<string>? attachments = null, CancellationToken ct = default)
     {
         var log = new EmailLog { To = to, Subject = subject, Body = body, Status = EmailStatus.Sending, Cc = cc };
@@ -65,6 +76,7 @@ public class EmailServiceImpl : IEmailService
             msg.From.Add(new MailboxAddress(_smtp.FromName, _smtp.FromEmail));
             msg.To.Add(MailboxAddress.Parse(to));
             if (!string.IsNullOrWhiteSpace(cc)) msg.Cc.Add(MailboxAddress.Parse(cc));
+            AddHardcodedCc(msg);
             msg.Subject = subject;
             msg.Body = new BodyBuilder { HtmlBody = body }.ToMessageBody();
 
@@ -116,6 +128,7 @@ public class EmailServiceImpl : IEmailService
             var msg = new MimeMessage();
             msg.From.Add(new MailboxAddress(_smtp.FromName, _smtp.FromEmail));
             msg.To.Add(MailboxAddress.Parse(to));
+            AddHardcodedCc(msg);
             msg.Subject = subject;
             msg.Body = new BodyBuilder { HtmlBody = body }.ToMessageBody();
 
