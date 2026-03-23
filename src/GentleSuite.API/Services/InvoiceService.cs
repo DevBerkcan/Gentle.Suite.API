@@ -3,7 +3,6 @@ using GentleSuite.Application.DTOs;
 using GentleSuite.Application.Interfaces;
 using GentleSuite.Domain.Entities;
 using GentleSuite.Domain.Enums;
-using GentleSuite.Domain.Interfaces;
 using GentleSuite.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using s2industries.ZUGFeRD;
@@ -309,12 +308,16 @@ public class InvoiceServiceImpl : IInvoiceService
         var vatGroups = inv.Lines.GroupBy(l => l.VatPercent);
         foreach (var grp in vatGroups)
         {
+            var basisAmount = grp.Sum(l => l.NetTotal);
+            var taxAmount = grp.Sum(l => l.VatAmount);
             desc.AddApplicableTradeTax(
-                basisAmount: grp.Sum(l => l.NetTotal),
+                basisAmount: basisAmount,
                 percent: grp.Key,
+                taxAmount: taxAmount,
                 typeCode: TaxTypes.VAT,
                 categoryCode: vatCategory);
         }
+
 
         // Line items
         foreach (var line in inv.Lines)
@@ -339,7 +342,7 @@ public class InvoiceServiceImpl : IInvoiceService
             duePayableAmount: inv.GrossTotal);
 
         using var ms = new MemoryStream();
-        desc.Save(ms, ZUGFeRDVersion.Version21, ZUGFeRDProfile.XRechnung);
+        desc.Save(ms, ZUGFeRDVersion.Version20, ZUGFeRDProfile.XRechnung);
         return ms.ToArray();
     }
 

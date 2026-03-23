@@ -1,7 +1,6 @@
 using GentleSuite.Application.DTOs;
 using GentleSuite.Application.Interfaces;
 using GentleSuite.Domain.Entities;
-using GentleSuite.Domain.Interfaces;
 using GentleSuite.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 

@@ -1,5 +1,5 @@
+using GentleSuite.Application.Interfaces;
 using GentleSuite.Domain.Entities;
-using GentleSuite.Domain.Interfaces;
 using GentleSuite.Infrastructure.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;

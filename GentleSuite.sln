@@ -1,15 +1,24 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.Domain", "src\GentleSuite.Domain\GentleSuite.Domain.csproj", "{A1}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.Application", "src\GentleSuite.Application\GentleSuite.Application.csproj", "{A2}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.Infrastructure", "src\GentleSuite.Infrastructure\GentleSuite.Infrastructure.csproj", "{A3}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.API", "src\GentleSuite.API\GentleSuite.API.csproj", "{A4}"
+# Visual Studio Version 18
+VisualStudioVersion = 18.3.11520.95
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GentleSuite.API", "src\GentleSuite.API\GentleSuite.API.csproj", "{1458E1A1-397B-43C3-A0AE-B74B1E15F8CD}"
 EndProject
 Global
-  GlobalSection(SolutionConfigurationPlatforms) = preSolution
-    Debug|Any CPU = Debug|Any CPU
-    Release|Any CPU = Release|Any CPU
-  EndGlobalSection
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{1458E1A1-397B-43C3-A0AE-B74B1E15F8CD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1458E1A1-397B-43C3-A0AE-B74B1E15F8CD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1458E1A1-397B-43C3-A0AE-B74B1E15F8CD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1458E1A1-397B-43C3-A0AE-B74B1E15F8CD}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {2A8DA8EA-DA8F-40BE-8DD5-4C8697DF370F}
+	EndGlobalSection
 EndGlobal

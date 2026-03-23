@@ -37,7 +37,7 @@ public class AuthController(UserManager<AppUser> userManager, IConfiguration con
     }
 
     [HttpPost("forgot-password"), AllowAnonymous]
-    public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest req, [FromServices] GentleSuite.Domain.Interfaces.IEmailService email)
+    public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest req, [FromServices] IEmailService email)
     {
         var user = await userManager.FindByEmailAsync(req.Email);
         if (user == null) return Ok(); // no user disclosure
@@ -79,7 +79,7 @@ public class CustomersController(ICustomerService svc) : ControllerBase
     }
     [HttpPost("{id}/resend-intake")] public async Task<IActionResult> ResendIntake(Guid id) { await svc.ResendIntakeAsync(id); return NoContent(); }
     [HttpPost("{id}/send-email")]
-    public async Task<IActionResult> SendEmail(Guid id, SendCustomerEmailRequest req, [FromServices] GentleSuite.Domain.Interfaces.IEmailService email)
+    public async Task<IActionResult> SendEmail(Guid id, SendCustomerEmailRequest req, [FromServices] IEmailService email)
     {
         if (string.IsNullOrWhiteSpace(req.To) || string.IsNullOrWhiteSpace(req.Subject)) return BadRequest("Empfänger und Betreff sind erforderlich.");
         await email.SendEmailAsync(req.To, req.Subject, req.Body ?? "");
@@ -450,7 +450,7 @@ public class ServiceCatalogController(IServiceCatalogService svc) : ControllerBa
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
-public class SettingsController(ICompanySettingsService svc, GentleSuite.Domain.Interfaces.IFileStorageService fs, GentleSuite.Infrastructure.Data.AppDbContext db, GentleSuite.Domain.Interfaces.INumberSequenceService seq) : ControllerBase
+public class SettingsController(ICompanySettingsService svc, IFileStorageService fs, AppDbContext db, INumberSequenceService seq) : ControllerBase
 {
     [HttpGet] public async Task<ActionResult<CompanySettingsDto>> Get() => Ok(await svc.GetAsync());
     [HttpPut] public async Task<ActionResult<CompanySettingsDto>> Update(UpdateCompanySettingsRequest req) => Ok(await svc.UpdateAsync(req));

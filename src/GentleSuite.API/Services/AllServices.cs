@@ -3,14 +3,11 @@ using GentleSuite.Application.DTOs;
 using GentleSuite.Application.Interfaces;
 using GentleSuite.Domain.Entities;
 using GentleSuite.Domain.Enums;
-using GentleSuite.Domain.Interfaces;
 using GentleSuite.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Http;
 using System.IO.Compression;
 using System.Security.Claims;
 using System.Text;
-using System.Text.Json;
 
 namespace GentleSuite.Infrastructure.Services;
 

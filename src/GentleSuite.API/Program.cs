@@ -1,6 +1,5 @@
 using GentleSuite.Application.Interfaces;
 using GentleSuite.Application.Mappings;
-using GentleSuite.Domain.Interfaces;
 using GentleSuite.Infrastructure.Data;
 using GentleSuite.Infrastructure.Email;
 using GentleSuite.Infrastructure.Identity;
@@ -58,7 +57,7 @@ builder.Services.AddAuthorization(o =>
     o.AddPolicy("AdminOnly", p => p.RequireRole(GentleSuite.Domain.Enums.Roles.Admin));
     o.AddPolicy("AccountingOrAdmin", p => p.RequireRole(GentleSuite.Domain.Enums.Roles.Admin, GentleSuite.Domain.Enums.Roles.Accounting));
 });
-builder.Services.AddAutoMapper(typeof(MappingProfile));
+builder.Services.AddAutoMapper(cfg => cfg.AddMaps(typeof(MappingProfile).Assembly));
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<ICustomerService, CustomerServiceImpl>();

@@ -1,5 +1,5 @@
+using GentleSuite.Application.Interfaces;
 using GentleSuite.Domain.Enums;
-using GentleSuite.Domain.Interfaces;
 using GentleSuite.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;

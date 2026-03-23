@@ -1,6 +1,5 @@
 using GentleSuite.Domain.Entities;
 using GentleSuite.Domain.Enums;
-using GentleSuite.Domain.Interfaces;
 using GentleSuite.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Fluent;
@@ -8,6 +7,7 @@ using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using QRCoder;
 using System.Text.Json;
+using GentleSuite.Application.Interfaces;
 
 namespace GentleSuite.Infrastructure.Pdf;
 
