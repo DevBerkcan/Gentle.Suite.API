@@ -58,7 +58,7 @@ public class PdfService : IPdfService
                 BuildTotalsBox(col, quote.Subtotal, quote.TaxRate, quote.TaxAmount, quote.GrandTotal, quote.TaxMode);
                 if (!string.IsNullOrEmpty(quote.OutroText)) col.Item().PaddingTop(14).Text(quote.OutroText).FontSize(9);
                 if (legal?.Any() == true) foreach (var b in legal) { col.Item().PaddingTop(12).Text(b.Title).Bold().FontSize(9).FontColor("#344054"); col.Item().PaddingTop(3).Text(b.Content).FontSize(7.5f).FontColor("#667085"); }
-                BuildSignatureArea(col, co, quote.SignatureData, quote.SignedByName, quote.SignedAt);
+                BuildSignatureArea(col, co, quote.SignatureData, quote.SignedByName, quote.SignedByEmail, quote.SignedAt, quote.Customer.CompanyName);
             });
             p.Footer().Element(f => BuildDocFooter(f, co));
         })).GeneratePdf();
@@ -497,21 +497,24 @@ public class PdfService : IPdfService
         });
     }
 
-    private static void BuildSignatureArea(ColumnDescriptor col, CompanySettings co, string? sigData, string? sigName, DateTimeOffset? sigDate)
+    private static void BuildSignatureArea(ColumnDescriptor col, CompanySettings co, string? sigData, string? sigName, string? sigEmail, DateTimeOffset? sigDate, string? customerCompanyName)
     {
         col.Item().PaddingTop(30).Row(row =>
         {
+            // Left: Auftragnehmer (us) — no signature line needed
             row.RelativeItem().Column(c =>
             {
-                c.Item().LineHorizontal(0.5f).LineColor("#EAECF0");
                 c.Item().PaddingTop(4).Text("Auftragnehmer").FontSize(8).FontColor("#667085");
-                c.Item().PaddingTop(8).Text(co.CompanyName).FontSize(9).FontColor("#344054");
+                c.Item().PaddingTop(6).Text(co.CompanyName).FontSize(9).Bold().FontColor("#344054");
                 if (!string.IsNullOrEmpty(co.ManagingDirector))
                     c.Item().Text(co.ManagingDirector).FontSize(8).FontColor("#667085");
+                if (!string.IsNullOrEmpty(co.Email))
+                    c.Item().Text(co.Email).FontSize(8).FontColor("#667085");
             });
 
             row.ConstantItem(40);
 
+            // Right: Auftraggeber (customer) — signature or blank line
             row.RelativeItem().Column(c =>
             {
                 if (!string.IsNullOrEmpty(sigData))
@@ -524,19 +527,32 @@ public class PdfService : IPdfService
                     }
                     catch { }
 
-                    c.Item().PaddingTop(4).LineHorizontal(0.5f).LineColor("#EAECF0");
-                    c.Item().PaddingTop(4).Text($"✓ Signiert von: {sigName}").FontSize(8).FontColor("#027A48");
-                    c.Item().Text($"Datum: {sigDate:dd.MM.yyyy HH:mm} Uhr").FontSize(8).FontColor("#667085");
+                    c.Item().LineHorizontal(0.5f).LineColor("#EAECF0");
+                    c.Item().PaddingTop(4).Text("Auftraggeber").FontSize(8).FontColor("#667085");
+
+                    var displayName = !string.IsNullOrEmpty(customerCompanyName)
+                        ? customerCompanyName
+                        : sigName ?? "";
+
+                    c.Item().PaddingTop(2).Text($"✓ {displayName}").FontSize(9).Bold().FontColor("#027A48");
+
+                    if (!string.IsNullOrEmpty(sigName) && sigName != displayName)
+                        c.Item().Text(sigName).FontSize(8).FontColor("#344054");
+
+                    if (!string.IsNullOrEmpty(sigEmail))
+                        c.Item().Text(sigEmail).FontSize(8).FontColor("#667085");
+
+                    c.Item().Text($"Unterzeichnet am {sigDate:dd.MM.yyyy} um {sigDate:HH:mm} Uhr").FontSize(8).FontColor("#667085");
                 }
                 else
                 {
+                    c.Item().Height(60);
                     c.Item().LineHorizontal(0.5f).LineColor("#EAECF0");
                     c.Item().PaddingTop(4).Text("Auftraggeber (Unterschrift)").FontSize(8).FontColor("#667085");
                 }
             });
         });
     }
-
 
     private static void BuildDocFooter(IContainer container, CompanySettings co)
     {
