@@ -125,12 +125,15 @@ public class QuoteDetailDto
     public DateTimeOffset? SentAt { get; set; }
     public DateTimeOffset? ExpiresAt { get; set; }
     public SignatureStatus SignatureStatus { get; set; }
+    public string? SignatureData { get; set; }
     public string? SignedByName { get; set; }
+    public string? SignedByEmail { get; set; }
     public DateTimeOffset? SignedAt { get; set; }
     public string? PrimaryContactEmail { get; set; }
     public List<QuoteLineDto> Lines { get; set; } = new();
     public List<string>? LegalTextBlockKeys { get; set; }
 }
+
 public record QuoteVersionDto(Guid Id, Guid QuoteGroupId, string QuoteNumber, int Version, bool IsCurrentVersion, QuoteStatus Status, DateTimeOffset CreatedAt, DateTimeOffset? SentAt);
 public record QuoteLineDto(Guid Id, Guid? ServiceCatalogItemId, string Title, string? Description, decimal Quantity, decimal UnitPrice, decimal DiscountPercent, QuoteLineType LineType, int VatPercent, int SortOrder, decimal Total);
 public record CreateQuoteRequest(Guid CustomerId, Guid? ContactId, string? Subject, string? IntroText, string? OutroText, string? Notes, decimal TaxRate = 19m, TaxMode TaxMode = TaxMode.Standard, List<CreateQuoteLineRequest>? Lines = null, Guid? TemplateId = null, List<string>? LegalTextBlockKeys = null);

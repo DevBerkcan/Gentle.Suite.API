@@ -130,30 +130,52 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task SendAsync(Guid id, SendQuoteRequest req, CancellationToken ct)
     {
-        var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts).Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
+        var quote = await _db.Quotes
+            .Include(q => q.Customer).ThenInclude(c => c.Contacts)
+            .Include(q => q.Lines)
+            .FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
+
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Nur aktuelle Angebotsversionen koennen versendet werden.");
         if (!quote.Lines.Any()) throw new ArgumentException("Ein Angebot ohne Positionen kann nicht versendet werden.");
-        var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).Replace("+","").Replace("/","").Replace("=","");
+
+        var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .Replace("+", "").Replace("/", "").Replace("=", "");
         using var sha = SHA256.Create();
         quote.ApprovalToken = token;
         quote.ApprovalTokenHash = Convert.ToBase64String(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(token)));
         quote.ApprovalTokenExpiry = DateTimeOffset.UtcNow.AddDays(req.ExpirationDays);
         quote.ExpiresAt = quote.ApprovalTokenExpiry;
-        quote.Status = QuoteStatus.Sent; quote.SentAt = DateTimeOffset.UtcNow;
+        quote.Status = QuoteStatus.Sent;
+        quote.SentAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync(ct);
+
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
         var contact = quote.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? quote.Customer.Contacts.First();
         var recipientEmail = !string.IsNullOrWhiteSpace(req.RecipientEmail) ? req.RecipientEmail : contact.Email;
+
         var variables = new Dictionary<string, object>
         {
-            ["CustomerName"] = quote.Customer.CompanyName, ["ContactName"] = contact.FirstName,
-            ["QuoteNumber"] = quote.QuoteNumber, ["Total"] = quote.GrandTotal.ToString("N2"),
-            ["ApprovalLink"] = $"{_frontendBaseUrl}/approval/{token}", ["ExpiresAt"] = quote.ExpiresAt.Value.ToString("dd.MM.yyyy"),
-            ["RequireSignature"] = req.RequireSignature.ToString()
+            ["CustomerName"] = quote.Customer.CompanyName,
+            ["ContactName"] = contact.FirstName,
+            ["QuoteNumber"] = quote.QuoteNumber,
+            ["Total"] = quote.GrandTotal.ToString("N2"),
+            ["SubtotalOneTime"] = quote.SubtotalOneTime.ToString("N2"),
+            ["SubtotalMonthly"] = quote.SubtotalMonthly.ToString("N2"),
+            ["TaxAmount"] = quote.TaxAmount.ToString("N2"),
+            ["ApprovalLink"] = $"{_frontendBaseUrl}/approval/{token}",
+            ["ExpiresAt"] = quote.ExpiresAt.Value.ToString("dd.MM.yyyy"),
+            ["RequireSignature"] = req.RequireSignature.ToString(),
+            ["CompanyName"] = co?.CompanyName ?? "",
+            ["CompanyEmail"] = co?.Email ?? "",
         };
-        if (!string.IsNullOrWhiteSpace(req.Message)) variables["Message"] = req.Message;
+
+        if (!string.IsNullOrWhiteSpace(req.Message))
+            variables["Message"] = req.Message;
+
         await _email.SendTemplatedEmailAsync(recipientEmail, "quote-sent", variables, quote.CustomerId, ct: ct);
         await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "Sent", $"Angebot {quote.QuoteNumber} versendet", ct: ct);
     }
+
 
     public async Task<QuoteDetailDto?> GetByApprovalTokenAsync(string token, CancellationToken ct)
     {

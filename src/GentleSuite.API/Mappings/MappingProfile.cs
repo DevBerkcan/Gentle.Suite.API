@@ -60,6 +60,10 @@ public class MappingProfile : Profile
         CreateMap<Quote, QuoteDetailDto>()
             .ForMember(d => d.CustomerName, o => o.MapFrom(s => s.Customer.CompanyName))
             .ForMember(d => d.PrimaryContactEmail, o => o.MapFrom(s => s.Customer.Contacts.Where(c => c.IsPrimary).Select(c => c.Email).FirstOrDefault()))
+            .ForMember(d => d.SignatureData, o => o.MapFrom(s => s.SignatureData))
+            .ForMember(d => d.SignedByName, o => o.MapFrom(s => s.SignedByName))
+            .ForMember(d => d.SignedByEmail, o => o.MapFrom(s => s.SignedByEmail))
+            .ForMember(d => d.SignedAt, o => o.MapFrom(s => s.SignedAt))
             .ForMember(d => d.LegalTextBlockKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.LegalTextBlocks) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.LegalTextBlocks, (JsonSerializerOptions?)null)));
         CreateMap<Quote, QuoteVersionDto>()
             .ConstructUsing(s => new QuoteVersionDto(s.Id, s.QuoteGroupId, s.QuoteNumber, s.Version, s.IsCurrentVersion, s.Status, s.CreatedAt, s.SentAt));

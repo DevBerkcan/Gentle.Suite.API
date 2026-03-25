@@ -501,15 +501,42 @@ public class PdfService : IPdfService
     {
         col.Item().PaddingTop(30).Row(row =>
         {
-            row.RelativeItem().Column(c => { c.Item().LineHorizontal(0.5f).LineColor("#EAECF0"); c.Item().PaddingTop(4).Text("Auftragnehmer").FontSize(8).FontColor("#667085"); });
-            row.ConstantItem(40);
             row.RelativeItem().Column(c =>
             {
-                if (!string.IsNullOrEmpty(sigData)) { c.Item().Text($"✓ Signiert: {sigName}").FontColor("#027A48"); c.Item().Text($"{sigDate:dd.MM.yyyy HH:mm}").FontSize(8).FontColor("#667085"); }
-                else { c.Item().LineHorizontal(0.5f).LineColor("#EAECF0"); c.Item().PaddingTop(4).Text("Auftraggeber (Unterschrift)").FontSize(8).FontColor("#667085"); }
+                c.Item().LineHorizontal(0.5f).LineColor("#EAECF0");
+                c.Item().PaddingTop(4).Text("Auftragnehmer").FontSize(8).FontColor("#667085");
+                c.Item().PaddingTop(8).Text(co.CompanyName).FontSize(9).FontColor("#344054");
+                if (!string.IsNullOrEmpty(co.ManagingDirector))
+                    c.Item().Text(co.ManagingDirector).FontSize(8).FontColor("#667085");
+            });
+
+            row.ConstantItem(40);
+
+            row.RelativeItem().Column(c =>
+            {
+                if (!string.IsNullOrEmpty(sigData))
+                {
+                    try
+                    {
+                        var base64 = sigData.Contains(",") ? sigData.Split(',')[1] : sigData;
+                        var imgBytes = Convert.FromBase64String(base64);
+                        c.Item().MaxHeight(60).MaxWidth(200).Image(imgBytes, ImageScaling.FitArea);
+                    }
+                    catch { }
+
+                    c.Item().PaddingTop(4).LineHorizontal(0.5f).LineColor("#EAECF0");
+                    c.Item().PaddingTop(4).Text($"✓ Signiert von: {sigName}").FontSize(8).FontColor("#027A48");
+                    c.Item().Text($"Datum: {sigDate:dd.MM.yyyy HH:mm} Uhr").FontSize(8).FontColor("#667085");
+                }
+                else
+                {
+                    c.Item().LineHorizontal(0.5f).LineColor("#EAECF0");
+                    c.Item().PaddingTop(4).Text("Auftraggeber (Unterschrift)").FontSize(8).FontColor("#667085");
+                }
             });
         });
     }
+
 
     private static void BuildDocFooter(IContainer container, CompanySettings co)
     {
