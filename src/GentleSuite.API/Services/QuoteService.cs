@@ -435,6 +435,23 @@ public class QuoteServiceImpl : IQuoteService
         return _mapper.Map<List<QuoteVersionDto>>(versions);
     }
 
+    public async Task<byte[]> GeneratePdfByTokenAsync(string token, CancellationToken ct)
+    {
+        var quote = await _db.Quotes
+            .Include(q => q.Customer).ThenInclude(c => c.Contacts)
+            .Include(q => q.Customer).ThenInclude(c => c.Locations)
+            .Include(q => q.Lines)
+            .FirstOrDefaultAsync(q => q.ApprovalToken == token, ct)
+            ?? throw new KeyNotFoundException();
+
+        if (!quote.IsCurrentVersion || quote.ApprovalTokenExpiry < DateTimeOffset.UtcNow)
+            throw new InvalidOperationException("Link expired or invalid.");
+
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "GentleSuite" };
+        return await _pdf.GenerateQuotePdfAsync(quote, co, ct);
+    }
+
+
     private static void ValidateQuoteLines(List<CreateQuoteLineRequest> lines)
     {
         for (var i = 0; i < lines.Count; i++)

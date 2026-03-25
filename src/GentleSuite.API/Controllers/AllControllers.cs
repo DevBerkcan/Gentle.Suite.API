@@ -273,6 +273,14 @@ public class ApprovalController(IQuoteService svc) : ControllerBase
 {
     [HttpGet("{token}")] public async Task<ActionResult<QuoteDetailDto>> Get(string token) { var r = await svc.GetByApprovalTokenAsync(token); return r == null ? NotFound() : Ok(r); }
     [HttpPost("{token}")] public async Task<IActionResult> Process(string token, ApprovalRequest req) { await svc.ProcessApprovalAsync(token, req, HttpContext.Connection.RemoteIpAddress?.ToString()); return NoContent(); }
+    [HttpGet("{token}/pdf")]
+    public async Task<IActionResult> DownloadPdf(string token)
+    {
+        var quote = await svc.GetByApprovalTokenAsync(token);
+        if (quote == null) return NotFound();
+        var pdf = await svc.GeneratePdfByTokenAsync(token);
+        return File(pdf, "application/pdf", $"Angebot-{quote.QuoteNumber}.pdf");
+    }
 }
 
 [ApiController, Route("api/[controller]"), Authorize]

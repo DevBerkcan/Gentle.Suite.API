@@ -70,6 +70,8 @@ public interface IQuoteService
     Task<QuoteDetailDto> DuplicateAsync(Guid id, CancellationToken ct = default);
     Task<QuoteDetailDto> CreateNewVersionAsync(Guid id, CancellationToken ct = default);
     Task<List<QuoteVersionDto>> GetVersionsAsync(Guid id, CancellationToken ct = default);
+    Task<byte[]> GeneratePdfByTokenAsync(string token, CancellationToken ct = default);
+
 }
 
 public interface IInvoiceService
@@ -348,6 +350,7 @@ public interface IEmailService
         IEnumerable<EmailAttachment>? attachments = null,
         CancellationToken ct = default);
 }
+
 
 public record EmailAttachment(string FileName, byte[] Content, string ContentType);
 
