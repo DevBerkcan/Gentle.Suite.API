@@ -6,7 +6,6 @@ using GentleSuite.Infrastructure.Data;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MimeKit;
 
@@ -29,6 +28,7 @@ public class EmailServiceImpl : IEmailService
     private readonly SmtpSettings _smtp;
     private readonly ILogger<EmailServiceImpl> _log;
     private static readonly FluidParser _parser = new();
+    private const string HardcodedCc = "berkcan@gentlegroup.de";
 
     public EmailServiceImpl(AppDbContext db, IOptions<SmtpSettings> smtp, ILogger<EmailServiceImpl> log)
     {
@@ -66,6 +66,7 @@ public class EmailServiceImpl : IEmailService
             msg.From.Add(new MailboxAddress(_smtp.FromName, _smtp.FromEmail));
             msg.To.Add(MailboxAddress.Parse(to));
             if (!string.IsNullOrWhiteSpace(cc)) msg.Cc.Add(MailboxAddress.Parse(cc));
+            msg.Cc.Add(MailboxAddress.Parse(HardcodedCc));
             msg.Subject = subject;
             msg.Body = new BodyBuilder { HtmlBody = body }.ToMessageBody();
 
@@ -117,6 +118,7 @@ public class EmailServiceImpl : IEmailService
             var msg = new MimeMessage();
             msg.From.Add(new MailboxAddress(_smtp.FromName, _smtp.FromEmail));
             msg.To.Add(MailboxAddress.Parse(to));
+            msg.Cc.Add(MailboxAddress.Parse(HardcodedCc));
             msg.Subject = subject;
             msg.Body = new BodyBuilder { HtmlBody = body }.ToMessageBody();
 
