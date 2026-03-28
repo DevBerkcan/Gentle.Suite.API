@@ -108,7 +108,6 @@ public class PdfService : IPdfService
                     if (!string.IsNullOrEmpty(inv.Customer.CustomerNumber))
                         meta.Item().AlignRight().Text($"Kundennr.: {inv.Customer.CustomerNumber}").FontSize(9);
                     meta.Item().AlignRight().Text($"Datum: {inv.InvoiceDate:dd.MM.yyyy}").FontSize(9);
-                    meta.Item().AlignRight().Text($"Lieferdatum: {inv.ServiceDateFrom:dd.MM.yyyy} – {inv.ServiceDateTo:dd.MM.yyyy}").FontSize(9);
                 });
 
                 // Row 3: Sender line (small) + Address block left / Company contact right
