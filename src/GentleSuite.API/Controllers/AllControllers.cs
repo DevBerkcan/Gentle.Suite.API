@@ -268,7 +268,7 @@ public class QuotesController(IQuoteService svc) : ControllerBase
     [HttpGet("{id}/versions")] public async Task<ActionResult<List<QuoteVersionDto>>> Versions(Guid id) => Ok(await svc.GetVersionsAsync(id));
 }
 
-[ApiController, Route("api/approval")]
+[ApiController, Route("api/approval"), AllowAnonymous]
 public class ApprovalController(IQuoteService svc) : ControllerBase
 {
     [HttpGet("{token}")] public async Task<ActionResult<QuoteDetailDto>> Get(string token) { var r = await svc.GetByApprovalTokenAsync(token); return r == null ? NotFound() : Ok(r); }
