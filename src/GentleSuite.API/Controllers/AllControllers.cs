@@ -254,7 +254,7 @@ public class QuotesController(IQuoteService svc) : ControllerBase
     [HttpPost("from-template/{customerId}/{templateId}")] public async Task<ActionResult<QuoteDetailDto>> FromTemplate(Guid customerId, Guid templateId) => Ok(await svc.CreateFromTemplateAsync(customerId, templateId));
     [HttpPut("{id}/lines")] public async Task<ActionResult<QuoteDetailDto>> UpdateLines(Guid id, List<CreateQuoteLineRequest> lines) => Ok(await svc.UpdateLinesAsync(id, lines));
     [HttpPost("{id}/send")] public async Task<IActionResult> Send(Guid id, SendQuoteRequest req) { await svc.SendAsync(id, req); return NoContent(); }
-    [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) => File(await svc.GeneratePdfAsync(id), "application/pdf", $"Angebot.pdf");
+    [HttpGet("{id}/pdf"), AllowAnonymous] public async Task<IActionResult> Pdf(Guid id) => File(await svc.GeneratePdfAsync(id), "application/pdf", $"Angebot.pdf");
     [HttpGet("templates")] public async Task<ActionResult<List<QuoteTemplateDto>>> Templates() => Ok(await svc.GetTemplatesAsync());
     [HttpPost("templates")] public async Task<ActionResult<QuoteTemplateDto>> CreateTemplate(CreateQuoteTemplateRequest req) => Ok(await svc.CreateTemplateAsync(req));
     [HttpPut("templates/{id}")] public async Task<ActionResult<QuoteTemplateDto>> UpdateTemplate(Guid id, UpdateQuoteTemplateRequest req) => Ok(await svc.UpdateTemplateAsync(id, req));
