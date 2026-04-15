@@ -14,14 +14,15 @@ namespace GentleSuite.Infrastructure.Services;
 public class QuoteServiceImpl : IQuoteService
 {
     private readonly AppDbContext _db;
-    private readonly IMapper _mapper;
+    private readonly IMapper _mapper;   
     private readonly IEmailService _email;
     private readonly IPdfService _pdf;
     private readonly IActivityLogService _activity;
     private readonly INumberSequenceService _seq;
     private readonly string _frontendBaseUrl;
-    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq)
-    { _db = db; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; }
+    private readonly IInvoiceService _invoiceService;
+    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService)
+    { _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; }
 
     public async Task<PagedResult<QuoteListDto>> GetQuotesAsync(PaginationParams p, QuoteStatus? status, Guid? customerId, CancellationToken ct)
     {
@@ -265,17 +266,62 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task<InvoiceDetailDto> ConvertToInvoiceAsync(Guid quoteId, CancellationToken ct)
     {
-        var quote = await _db.Quotes.Include(q => q.Customer).Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == quoteId, ct) ?? throw new KeyNotFoundException();
-        if (quote.Status == QuoteStatus.Rejected || quote.Status == QuoteStatus.Expired)
-            throw new InvalidOperationException("Abgelehnte oder abgelaufene Angebote können nicht in Rechnungen umgewandelt werden.");
-        var invoice = await EnsureInvoiceFromQuoteAsync(quote, ct);
-        var fullInvoice = await _db.Invoices
-            .Include(i => i.Customer)
-            .Include(i => i.Lines)
-            .Include(i => i.Payments)
-            .FirstOrDefaultAsync(i => i.Id == invoice.Id, ct) ?? throw new KeyNotFoundException();
-        return _mapper.Map<InvoiceDetailDto>(fullInvoice);
+        var quote = await _db.Quotes
+            .Include(q => q.Customer)
+            .Include(q => q.Lines)
+            .FirstOrDefaultAsync(q => q.Id == quoteId, ct) ?? throw new KeyNotFoundException();
+
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+        var year = DateTime.UtcNow.Year;
+        var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
+
+        var hasRecurring = quote.Lines.Any(l => l.LineType == QuoteLineType.RecurringMonthly);
+        var invoiceType = hasRecurring ? InvoiceType.Recurring : InvoiceType.Standard;
+
+        var inv = new Invoice
+        {
+            InvoiceNumber = invoiceNumber,
+            CustomerId = quote.CustomerId,
+            QuoteId = quote.Id,
+            Subject = quote.Subject,
+            IntroText = quote.IntroText ?? co?.InvoiceIntroTemplate,
+            OutroText = quote.OutroText ?? co?.InvoiceOutroTemplate,
+            Notes = quote.Notes,
+            TaxMode = quote.TaxMode,
+            Type = invoiceType,
+            InvoiceDate = DateTimeOffset.UtcNow,
+            DueDate = DateTimeOffset.UtcNow.AddDays(14),
+            SellerTaxId = co?.TaxId,
+            SellerVatId = co?.VatId,
+            Status = InvoiceStatus.Draft,
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+        };
+
+        foreach (var l in quote.Lines)
+            inv.Lines.Add(new InvoiceLine
+            {
+                Title = l.Title,
+                Description = l.Description,
+                Quantity = l.Quantity,
+                UnitPrice = l.UnitPrice,
+                VatPercent = l.VatPercent,
+                SortOrder = l.SortOrder
+            });
+
+        inv.RecalculateTotals();
+        _db.Invoices.Add(inv);
+        quote.Status = QuoteStatus.Ordered;
+        await _db.SaveChangesAsync(ct);
+
+        await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "Created",
+            $"Rechnung {inv.InvoiceNumber} aus Angebot {quote.QuoteNumber} erstellt", ct: ct);
+
+        if (inv.Type == InvoiceType.Recurring)
+            await _invoiceService.HandleRecurringSetupAsync(inv.Id, ct);
+
+        return (await _invoiceService.GetByIdAsync(inv.Id, ct))!;
     }
+
 
     private async Task<Invoice> EnsureInvoiceFromQuoteAsync(Quote quote, CancellationToken ct)
     {

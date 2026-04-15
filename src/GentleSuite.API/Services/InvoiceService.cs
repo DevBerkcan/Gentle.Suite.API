@@ -4,6 +4,8 @@ using GentleSuite.Application.Interfaces;
 using GentleSuite.Domain.Entities;
 using GentleSuite.Domain.Enums;
 using GentleSuite.Infrastructure.Data;
+using GentleSuite.Infrastructure.Jobs;
+using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using s2industries.ZUGFeRD;
 using System.Security.Cryptography;
@@ -21,6 +23,7 @@ public class InvoiceServiceImpl : IInvoiceService
     private readonly IEmailService _email;
     private readonly IActivityLogService _activity;
     private readonly INumberSequenceService _seq;
+    private readonly ReminderJobs _reminders;
 
     public InvoiceServiceImpl(AppDbContext db, IMapper mapper, IPdfService pdf, IEmailService email, IActivityLogService activity, INumberSequenceService seq)
     { _db = db; _mapper = mapper; _pdf = pdf; _email = email; _activity = activity; _seq = seq; }
@@ -63,6 +66,7 @@ public class InvoiceServiceImpl : IInvoiceService
             SellerTaxId = co?.TaxId,
             SellerVatId = co?.VatId,
             Status = InvoiceStatus.Draft,
+            Type = req.Type,
             RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
         };
         if (req.Lines != null)
@@ -72,8 +76,75 @@ public class InvoiceServiceImpl : IInvoiceService
         _db.Invoices.Add(inv);
         await _db.SaveChangesAsync(ct);
         await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "Created", $"Rechnung {inv.InvoiceNumber} erstellt", ct: ct);
+
+        if (inv.Type == DomainInvoiceType.Recurring)
+            await HandleRecurringSetupAsync(inv.Id, ct);
+
         return (await GetByIdAsync(inv.Id, ct))!;
     }
+
+    public async Task HandleRecurringSetupAsync(Guid invoiceId, CancellationToken ct)
+    {
+        var inv = await _db.Invoices
+            .Include(i => i.Lines)
+            .Include(i => i.Customer)
+            .FirstOrDefaultAsync(i => i.Id == invoiceId, ct)
+            ?? throw new KeyNotFoundException();
+
+        var existingSub = await _db.CustomerSubscriptions
+            .Include(s => s.Plan)
+            .Where(s => s.CustomerId == inv.CustomerId && s.Status == SubscriptionStatus.Active)
+            .FirstOrDefaultAsync(ct);
+
+        Guid subscriptionId;
+
+        if (existingSub != null)
+        {
+            subscriptionId = existingSub.Id;
+        }
+        else
+        {
+            var planName = inv.Subject ?? $"Serienrechnung – {inv.Customer.CompanyName}";
+            var monthlyPrice = inv.Lines.Sum(l => l.NetTotal);
+
+            var plan = new SubscriptionPlan
+            {
+                Name = planName,
+                Description = $"Automatisch erstellt aus Rechnung {inv.InvoiceNumber}",
+                MonthlyPrice = monthlyPrice,
+                BillingCycle = BillingCycle.Monthly,
+                Category = SubscriptionPlanCategory.Allgemein,
+                IsActive = true
+            };
+            _db.SubscriptionPlans.Add(plan);
+            await _db.SaveChangesAsync(ct);
+
+            var now = DateTimeOffset.UtcNow;
+            var sub = new CustomerSubscription
+            {
+                CustomerId = inv.CustomerId,
+                PlanId = plan.Id,
+                Status = SubscriptionStatus.Active,
+                StartDate = now,
+                NextBillingDate = now.AddMonths(1),
+                ConfirmedAt = now
+            };
+            _db.CustomerSubscriptions.Add(sub);
+            await _db.SaveChangesAsync(ct);
+
+            subscriptionId = sub.Id;
+        }
+
+        inv.SubscriptionId = subscriptionId;
+        await _db.SaveChangesAsync(ct);
+
+        await FinalizeAsync(invoiceId, new FinalizeInvoiceRequest { SendEmail = true }, ct);
+
+        BackgroundJob.Schedule<RecurringInvoiceJob>(
+            j => j.RunAsync(subscriptionId, invoiceId, CancellationToken.None),
+            existingSub?.NextBillingDate ?? DateTimeOffset.UtcNow.AddMonths(1));
+    }
+
 
     public async Task<InvoiceDetailDto> UpdateAsync(Guid id, UpdateInvoiceRequest req, CancellationToken ct)
     {

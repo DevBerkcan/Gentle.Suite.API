@@ -88,6 +88,8 @@ public interface IInvoiceService
     Task SendAsync(Guid id, CancellationToken ct = default);
     Task<InvoiceDetailDto> CreateFromTimeEntriesAsync(CreateInvoiceFromTimeEntriesRequest req, CancellationToken ct = default);
     Task SendReminderAsync(Guid id, CancellationToken ct = default);
+    Task HandleRecurringSetupAsync(Guid invoiceId, CancellationToken ct = default);
+
 }
 
 public interface IExpenseService

@@ -178,7 +178,7 @@ public class InvoiceDetailDto
 public record InvoiceLineDto(Guid Id, string Title, string? Description, string? Unit, decimal Quantity, decimal UnitPrice, int VatPercent, int SortOrder, decimal NetTotal, decimal VatAmount, decimal GrossTotal);
 public record InvoicePaymentDto(Guid Id, decimal Amount, DateTimeOffset PaymentDate, string? PaymentMethod, string? Reference);
 public record InvoiceVatSummaryDto(int VatPercent, decimal NetAmount, decimal VatAmount, decimal GrossAmount);
-public record CreateInvoiceRequest(Guid CustomerId, Guid? QuoteId, string? Subject, string? IntroText, string? OutroText, string? Notes, TaxMode TaxMode = TaxMode.Standard, int PaymentTermDays = 14, List<CreateInvoiceLineRequest>? Lines = null);
+public record CreateInvoiceRequest(Guid CustomerId, Guid? QuoteId, string? Subject, string? IntroText, string? OutroText, string? Notes, TaxMode TaxMode = TaxMode.Standard, int PaymentTermDays = 14, List<CreateInvoiceLineRequest>? Lines = null, InvoiceType Type = InvoiceType.Standard);
 public record CreateInvoiceLineRequest(string Title, string? Description, string? Unit, decimal Quantity, decimal UnitPrice, int VatPercent = 19, int SortOrder = 0);
 public record UpdateInvoiceLineRequest(string Title, string? Description, string? Unit, decimal Quantity, decimal UnitPrice, int VatPercent = 19, int SortOrder = 0);
 public record UpdateInvoiceRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, TaxMode TaxMode, DateTimeOffset InvoiceDate, DateTimeOffset DueDate, List<UpdateInvoiceLineRequest> Lines);

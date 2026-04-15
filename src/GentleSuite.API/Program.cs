@@ -242,7 +242,13 @@ try
         VALUES ('00000000-0000-0000-0000-000000000001',7,14,21,0,0,0,0,SYSDATETIMEOFFSET(),0);
     """);
 
-    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='SubscriptionPlans' AND COLUMN_NAME='Category') ALTER TABLE "SubscriptionPlans" ADD "Category" INT NOT NULL DEFAULT 0;""");
+await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='Type')
+    ALTER TABLE "Invoices" ADD "Type" INT NOT NULL DEFAULT 0;
+""");
+
+
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='SubscriptionPlans' AND COLUMN_NAME='Category') ALTER TABLE "SubscriptionPlans" ADD "Category" INT NOT NULL DEFAULT 0;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='OnboardingToken') ALTER TABLE "Customers" ADD "OnboardingToken" UNIQUEIDENTIFIER NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='OnboardingIntakeDone') ALTER TABLE "Customers" ADD "OnboardingIntakeDone" BIT NOT NULL DEFAULT 0;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractDurationMonths') ALTER TABLE "CustomerSubscriptions" ADD "ContractDurationMonths" INT NULL;""");
