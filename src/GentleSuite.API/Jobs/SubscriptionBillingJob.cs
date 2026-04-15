@@ -13,12 +13,14 @@ public class SubscriptionBillingJob
     private readonly AppDbContext _db;
     private readonly INumberSequenceService _seq;
     private readonly IEmailService _email;
+    private readonly IPdfService _pdf;
 
-    public SubscriptionBillingJob(AppDbContext db, INumberSequenceService seq, IEmailService email)
+    public SubscriptionBillingJob(AppDbContext db, INumberSequenceService seq, IEmailService email, IPdfService pdf)
     {
         _db = db;
         _seq = seq;
         _email = email;
+        _pdf = pdf;
     }
 
     public async Task RunAsync()
@@ -29,6 +31,8 @@ public class SubscriptionBillingJob
             .Include(s => s.Plan)
             .Include(s => s.Customer)
             .ThenInclude(c => c.Contacts)
+            .Include(s => s.Customer)
+            .ThenInclude(c => c.Locations)
             .Where(s =>
                 s.Status == SubscriptionStatus.Active &&
                 s.NextBillingDate.Date == today)
@@ -76,7 +80,7 @@ public class SubscriptionBillingJob
                 DueDate = DateTimeOffset.UtcNow.AddDays(co.InvoicePaymentTermDays > 0 ? co.InvoicePaymentTermDays : 14),
                 SellerTaxId = co.TaxId,
                 SellerVatId = co.VatId,
-                Status = InvoiceStatus.Final,
+                Status = InvoiceStatus.Sent,
                 IsFinalized = true,
                 FinalizedAt = DateTimeOffset.UtcNow,
                 RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
@@ -125,14 +129,28 @@ public class SubscriptionBillingJob
             {
                 try
                 {
-                    await _email.SendTemplatedEmailAsync(contact.Email, "invoice-recurring", new Dictionary<string, object>
-                    {
-                        ["ContactName"] = contact.FirstName,
-                        ["InvoiceNumber"] = inv.InvoiceNumber,
-                        ["PlanName"] = sub.Plan.Name,
-                        ["Amount"] = inv.GrossTotal.ToString("N2"),
-                        ["DueDate"] = inv.DueDate.ToString("dd.MM.yyyy")
-                    }, sub.CustomerId, ct: CancellationToken.None);
+                    var pdfBytes = await _pdf.GenerateInvoicePdfAsync(inv, co, CancellationToken.None);
+
+                    await _email.SendTemplatedEmailAsync(
+                        contact.Email,
+                        "invoice-sent",
+                        new Dictionary<string, object>
+                        {
+                            ["CustomerName"] = sub.Customer.CompanyName,
+                            ["ContactName"] = contact.FirstName,
+                            ["InvoiceNumber"] = inv.InvoiceNumber,
+                            ["InvoiceDate"] = inv.InvoiceDate.ToString("dd.MM.yyyy"),
+                            ["NetTotal"] = inv.NetTotal.ToString("N2"),
+                            ["VatAmount"] = inv.VatAmount.ToString("N2"),
+                            ["GrossTotal"] = inv.GrossTotal.ToString("N2"),
+                            ["DueDate"] = inv.DueDate.ToString("dd.MM.yyyy"),
+                        },
+                        sub.CustomerId,
+                        attachments: new[]
+                        {
+                            new EmailAttachment($"Rechnung_{inv.InvoiceNumber}.pdf", pdfBytes, "application/pdf")
+                        },
+                        ct: CancellationToken.None);
                 }
                 catch { }
             }
