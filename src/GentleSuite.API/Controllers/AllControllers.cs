@@ -424,7 +424,7 @@ public class SubscriptionsController(ISubscriptionService svc) : ControllerBase
     [HttpGet("customer/{customerId}")] public async Task<ActionResult<List<CustomerSubscriptionDto>>> CustomerSubs(Guid customerId) => Ok(await svc.GetCustomerSubscriptionsAsync(customerId));
     [HttpPost] public async Task<ActionResult<CustomerSubscriptionDto>> Create(CreateSubscriptionRequest req) => Ok(await svc.CreateAsync(req));
     [HttpPut("{id}/status")] public async Task<IActionResult> UpdateStatus(Guid id, UpdateSubscriptionStatusRequest req) { await svc.UpdateStatusAsync(id, req); return NoContent(); }
-    [HttpPost("{id}/confirm")] public async Task<IActionResult> Confirm(Guid id) { await svc.ConfirmAsync(id); return Ok(); }
+    [HttpPost("{id}/confirm")] public async Task<IActionResult> Confirm(Guid id) { await svc.ConfirmAsync(id); return NoContent(); }
     [HttpGet("{id}/invoices")] public async Task<ActionResult<List<SubscriptionInvoiceDto>>> GetInvoices(Guid id) => Ok(await svc.GetInvoicesAsync(id));
 }
 

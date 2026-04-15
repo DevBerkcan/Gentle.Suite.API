@@ -99,7 +99,7 @@ builder.Services.AddScoped<IExportService, ExportServiceImpl>();
 builder.Services.Configure<SmtpSettings>(builder.Configuration.GetSection("Smtp"));
 builder.Services.AddScoped<IEmailService, EmailServiceImpl>();
 builder.Services.AddScoped<ReminderJobs>();
-
+builder.Services.AddScoped<SubscriptionBillingJob>();
 builder.Services.AddHangfire(c => c.UseSqlServerStorage(connStr));
 builder.Services.AddHangfireServer();
 builder.Services.AddSignalR();
@@ -364,6 +364,10 @@ RecurringJob.AddOrUpdate<ReminderJobs>("check-open-quotes", j => j.CheckOpenQuot
 RecurringJob.AddOrUpdate<ReminderJobs>("generate-subscription-invoices", j => j.GenerateSubscriptionInvoicesAsync(), Cron.Daily(6));
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
 RecurringJob.AddOrUpdate<ReminderJobs>("generate-recurring-expenses", j => j.GenerateRecurringExpensesAsync(), Cron.Daily(7));
+RecurringJob.AddOrUpdate<SubscriptionBillingJob>(
+    "generate-subscription-invoices",
+    job => job.RunAsync(),
+    Cron.Daily(7));
 
 app.Run();
 
