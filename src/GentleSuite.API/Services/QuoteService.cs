@@ -298,6 +298,7 @@ public class QuoteServiceImpl : IQuoteService
         };
 
         foreach (var l in quote.Lines)
+        {
             inv.Lines.Add(new InvoiceLine
             {
                 Title = l.Title,
@@ -305,8 +306,11 @@ public class QuoteServiceImpl : IQuoteService
                 Quantity = l.Quantity,
                 UnitPrice = l.UnitPrice,
                 VatPercent = l.VatPercent,
-                SortOrder = l.SortOrder
+                DiscountPercent = l.DiscountPercent,
+                SortOrder = l.SortOrder,
+                LineType = (int)l.LineType  
             });
+        }
 
         inv.RecalculateTotals();
         _db.Invoices.Add(inv);
@@ -322,52 +326,6 @@ public class QuoteServiceImpl : IQuoteService
         return (await _invoiceService.GetByIdAsync(inv.Id, ct))!;
     }
 
-
-    private async Task<Invoice> EnsureInvoiceFromQuoteAsync(Quote quote, CancellationToken ct)
-    {
-        var existing = await _db.Invoices.FirstOrDefaultAsync(i => i.QuoteId == quote.Id, ct);
-        if (existing != null) return existing;
-
-        var year = DateTime.UtcNow.Year;
-        var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
-
-        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
-
-        var inv = new Invoice
-        {
-            InvoiceNumber = invoiceNumber,
-            CustomerId = quote.CustomerId,
-            QuoteId = quote.Id,
-            Subject = quote.Subject,
-            IntroText = co?.InvoiceIntroTemplate,
-            OutroText = co?.InvoiceOutroTemplate,
-            TaxMode = quote.TaxMode,
-            Status = InvoiceStatus.Draft,
-            InvoiceDate = DateTimeOffset.UtcNow,
-            DueDate = DateTimeOffset.UtcNow.AddDays(14),
-            SellerTaxId = co?.TaxId,
-            SellerVatId = co?.VatId,
-            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
-        };
-
-        foreach (var ql in quote.Lines)
-        {
-            inv.Lines.Add(new InvoiceLine
-            {
-                Title = ql.Title,
-                Description = ql.Description,
-                Quantity = ql.Quantity,
-                UnitPrice = ql.Quantity > 0 ? ql.Total / ql.Quantity : ql.UnitPrice,
-                VatPercent = ql.VatPercent,
-                SortOrder = ql.SortOrder
-            });
-        }
-
-        inv.RecalculateTotals();
-        _db.Invoices.Add(inv);
-        await _db.SaveChangesAsync(ct);
-        return inv;
-    }
 
     public async Task<QuoteDetailDto> UpdateAsync(Guid id, UpdateQuoteRequest req, CancellationToken ct)
     {

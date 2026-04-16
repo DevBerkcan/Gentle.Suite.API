@@ -89,6 +89,8 @@ public class InvoiceLine : BaseEntity
     public decimal UnitPrice { get; set; }      // Netto-Einzelpreis
     public int VatPercent { get; set; } = 19;   // 19, 7, or 0
     public int SortOrder { get; set; }
+    public int LineType { get; set; }
+    public decimal DiscountPercent { get; set; } = 0;
 
     public decimal NetTotal => Quantity * UnitPrice;
     public decimal VatAmount => NetTotal * (VatPercent / 100m);
