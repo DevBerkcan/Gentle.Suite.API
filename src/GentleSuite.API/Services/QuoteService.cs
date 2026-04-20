@@ -5,7 +5,6 @@ using GentleSuite.Domain.Entities;
 using GentleSuite.Domain.Enums;
 using GentleSuite.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using System.Security.Cryptography;
 using System.Text.Json;
 
