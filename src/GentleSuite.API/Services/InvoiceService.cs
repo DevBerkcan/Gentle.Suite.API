@@ -4,8 +4,6 @@ using GentleSuite.Application.Interfaces;
 using GentleSuite.Domain.Entities;
 using GentleSuite.Domain.Enums;
 using GentleSuite.Infrastructure.Data;
-using GentleSuite.Infrastructure.Jobs;
-using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using s2industries.ZUGFeRD;
 using System.Security.Cryptography;
@@ -23,7 +21,6 @@ public class InvoiceServiceImpl : IInvoiceService
     private readonly IEmailService _email;
     private readonly IActivityLogService _activity;
     private readonly INumberSequenceService _seq;
-    private readonly ReminderJobs _reminders;
 
     public InvoiceServiceImpl(AppDbContext db, IMapper mapper, IPdfService pdf, IEmailService email, IActivityLogService activity, INumberSequenceService seq)
     { _db = db; _mapper = mapper; _pdf = pdf; _email = email; _activity = activity; _seq = seq; }
@@ -167,18 +164,6 @@ public class InvoiceServiceImpl : IInvoiceService
                 await _db.SaveChangesAsync(ct);
             }
 
-            var existingScheduledJob = await _db.Invoices
-                .Where(i => i.SubscriptionId == subscriptionId
-                         && i.IsFinalized
-                         && i.Id != inv.Id)
-                .AnyAsync(ct);
-
-            if (!existingScheduledJob)
-            {
-                BackgroundJob.Schedule<RecurringInvoiceJob>(
-                    j => j.RunAsync(subscriptionId, inv.Id, CancellationToken.None),
-                    existingSub?.NextBillingDate ?? now.AddMonths(1));
-            }
         }
 
         if (!inv.IsFinalized)
@@ -256,10 +241,6 @@ public class InvoiceServiceImpl : IInvoiceService
         await _db.SaveChangesAsync(ct);
 
         await FinalizeAsync(invoiceId, new FinalizeInvoiceRequest { SendEmail = true }, ct);
-
-        BackgroundJob.Schedule<RecurringInvoiceJob>(
-            j => j.RunAsync(subscriptionId, invoiceId, CancellationToken.None),
-            existingSub?.NextBillingDate ?? DateTimeOffset.UtcNow.AddMonths(1));
     }
 
     public async Task<InvoiceDetailDto> UpdateAsync(Guid id, UpdateInvoiceRequest req, CancellationToken ct)

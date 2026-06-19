@@ -1,10 +1,14 @@
-﻿using GentleSuite.Application.DTOs;
+using GentleSuite.Application.DTOs;
 using GentleSuite.Application.Interfaces;
 using GentleSuite.Domain.Entities;
 using GentleSuite.Domain.Enums;
 using GentleSuite.Infrastructure.Data;
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
+
+// RecurringInvoiceJob is triggered by the daily SubscriptionBillingJob cron scan,
+// not by per-subscription Hangfire scheduling. This ensures manual NextBillingDate
+// changes in the DB are always picked up.
 
 namespace GentleSuite.Infrastructure.Jobs;
 
@@ -45,59 +49,75 @@ public class RecurringInvoiceJob
         if (sourceInv == null)
             return;
 
-        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
-        var year = DateTime.UtcNow.Year;
-        var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
-
         var billingStart = sub.NextBillingDate;
         var billingEnd = billingStart.AddMonths(1);
 
-        var inv = new Invoice
+        // Idempotency: if invoice for this billing period already exists (e.g. from a retry
+        // that partially succeeded), skip creation and ensure the rest of the flow completes.
+        var inv = await _db.Invoices
+            .FirstOrDefaultAsync(i => i.SubscriptionId == subscriptionId &&
+                                       i.BillingPeriodStart == billingStart, ct);
+
+        if (inv == null)
         {
-            InvoiceNumber = invoiceNumber,
-            CustomerId = sub.CustomerId,
-            SubscriptionId = sub.Id,
-            Type = InvoiceType.Recurring,
-            Subject = sourceInv.Subject ?? sub.Plan.Name,
-            IntroText = sourceInv.IntroText ?? co?.InvoiceIntroTemplate,
-            OutroText = sourceInv.OutroText ?? co?.InvoiceOutroTemplate,
-            Notes = sourceInv.Notes,
-            TaxMode = sourceInv.TaxMode,
-            InvoiceDate = DateTimeOffset.UtcNow,
-            DueDate = DateTimeOffset.UtcNow.AddDays(14),
-            SellerTaxId = co?.TaxId,
-            SellerVatId = co?.VatId,
-            Status = InvoiceStatus.Draft,
-            BillingPeriodStart = billingStart,
-            BillingPeriodEnd = billingEnd,
-            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
-        };
+            var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+            var year = DateTime.UtcNow.Year;
+            var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
 
-        foreach (var l in sourceInv.Lines)
-            inv.Lines.Add(new InvoiceLine
+            inv = new Invoice
             {
-                Title = l.Title,
-                Description = l.Description,
-                Unit = l.Unit,
-                Quantity = l.Quantity,
-                UnitPrice = l.UnitPrice,
-                VatPercent = l.VatPercent,
-                SortOrder = l.SortOrder
-            });
+                InvoiceNumber = invoiceNumber,
+                CustomerId = sub.CustomerId,
+                SubscriptionId = sub.Id,
+                Type = InvoiceType.Recurring,
+                Subject = sourceInv.Subject ?? sub.Plan.Name,
+                IntroText = sourceInv.IntroText ?? co?.InvoiceIntroTemplate,
+                OutroText = sourceInv.OutroText ?? co?.InvoiceOutroTemplate,
+                Notes = sourceInv.Notes,
+                TaxMode = sourceInv.TaxMode,
+                InvoiceDate = DateTimeOffset.UtcNow,
+                DueDate = DateTimeOffset.UtcNow.AddDays(14),
+                SellerTaxId = co?.TaxId,
+                SellerVatId = co?.VatId,
+                Status = InvoiceStatus.Draft,
+                BillingPeriodStart = billingStart,
+                BillingPeriodEnd = billingEnd,
+                RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+            };
 
-        inv.RecalculateTotals();
-        _db.Invoices.Add(inv);
+            foreach (var l in sourceInv.Lines)
+                inv.Lines.Add(new InvoiceLine
+                {
+                    Title = l.Title,
+                    Description = l.Description,
+                    Unit = l.Unit,
+                    Quantity = l.Quantity,
+                    UnitPrice = l.UnitPrice,
+                    VatPercent = 0,
+                    SortOrder = l.SortOrder
+                });
 
-        sub.NextBillingDate = billingEnd;
-        await _db.SaveChangesAsync(ct);
+            inv.RecalculateTotals();
+            _db.Invoices.Add(inv);
 
-        await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "Created",
-            $"Serienrechnung {inv.InvoiceNumber} automatisch erstellt (Abo: {sub.Plan.Name})", ct: ct);
+            // Save invoice before advancing NextBillingDate so that a retry can find it
+            // via the idempotency check above using the original NextBillingDate.
+            await _db.SaveChangesAsync(ct);
+        }
 
-        await _invoiceService.FinalizeAsync(inv.Id, new FinalizeInvoiceRequest { SendEmail = true }, ct);
+        if (!inv.IsFinalized)
+        {
+            await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "Created",
+                $"Serienrechnung {inv.InvoiceNumber} automatisch erstellt (Abo: {sub.Plan.Name})", ct: ct);
 
-        BackgroundJob.Schedule<RecurringInvoiceJob>(
-            j => j.RunAsync(subscriptionId, inv.Id, CancellationToken.None),
-            sub.NextBillingDate);
+            await _invoiceService.FinalizeAsync(inv.Id, new FinalizeInvoiceRequest { SendEmail = true }, ct);
+        }
+
+        // Advance NextBillingDate only after the invoice is finalized.
+        if (sub.NextBillingDate == billingStart)
+        {
+            sub.NextBillingDate = billingEnd;
+            await _db.SaveChangesAsync(ct);
+        }
     }
 }

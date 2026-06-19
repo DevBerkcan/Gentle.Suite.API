@@ -84,7 +84,7 @@ public class ReminderJobs
                     IsFinalized = true,
                     FinalizedAt = DateTimeOffset.UtcNow
                 };
-                inv.Lines.Add(new InvoiceLine { Title = sub.Plan.Name, Description = $"Monatliche Abrechnung {DateTimeOffset.UtcNow:MMMM yyyy}", Quantity = 1, UnitPrice = sub.Plan.MonthlyPrice, VatPercent = 19, SortOrder = 1 });
+                inv.Lines.Add(new InvoiceLine { Title = sub.Plan.Name, Description = $"Monatliche Abrechnung {DateTimeOffset.UtcNow:MMMM yyyy}", Quantity = 1, UnitPrice = sub.Plan.MonthlyPrice, VatPercent = 0, SortOrder = 1 });
                 inv.RecalculateTotals(); _db.Invoices.Add(inv);
                 sub.NextBillingDate = sub.NextBillingDate.AddMonths(cycleMonths);
                 if (sub.ContractDurationMonths.HasValue)

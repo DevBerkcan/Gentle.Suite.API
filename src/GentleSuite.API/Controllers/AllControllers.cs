@@ -6,6 +6,7 @@ using GentleSuite.API.Hubs;
 using GentleSuite.Domain.Enums;
 using GentleSuite.Infrastructure.Data;
 using GentleSuite.Infrastructure.Identity;
+using GentleSuite.Infrastructure.Jobs;
 using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -617,12 +618,12 @@ public class UsersController(IUserService svc) : ControllerBase
 }
 
 [ApiController, Route("api/system"), Authorize(Policy = "AdminOnly")]
-public class SystemController : ControllerBase
+public class SystemController(SubscriptionBillingJob billing) : ControllerBase
 {
     [HttpPost("trigger-subscription-invoices")]
-    public IActionResult TriggerSubscriptionInvoices()
+    public async Task<IActionResult> TriggerSubscriptionInvoices()
     {
-        RecurringJob.TriggerJob("generate-subscription-invoices");
+        await billing.RunAsync();
         return NoContent();
     }
     [HttpPost("trigger-bank-sync")]

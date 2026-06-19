@@ -35,7 +35,7 @@ public class SubscriptionBillingJob
             .ThenInclude(c => c.Locations)
             .Where(s =>
                 s.Status == SubscriptionStatus.Active &&
-                s.NextBillingDate.Date == today)
+                s.NextBillingDate.Date <= today)
             .ToListAsync();
 
         var co = await _db.CompanySettings.FirstOrDefaultAsync()
@@ -43,14 +43,14 @@ public class SubscriptionBillingJob
 
         foreach (var sub in dueSubs)
         {
+            var periodStart = sub.NextBillingDate;
+
             var alreadyExists = await _db.Invoices.AnyAsync(i =>
                 i.SubscriptionId == sub.Id &&
                 i.BillingPeriodStart != null &&
-                i.BillingPeriodStart.Value.Date == today);
+                i.BillingPeriodStart.Value.Date == periodStart.Date);
 
             if (alreadyExists) continue;
-
-            var periodStart = sub.NextBillingDate;
             var periodEnd = sub.Plan.BillingCycle switch
             {
                 BillingCycle.Quarterly => periodStart.AddMonths(3),
@@ -61,7 +61,7 @@ public class SubscriptionBillingJob
             var year = DateTime.UtcNow.Year;
             var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, CancellationToken.None, includeYear: false);
 
-            var vatPercent = 19;
+            var vatPercent = 0;
             var netPrice = sub.Plan.MonthlyPrice;
             var vatAmount = Math.Round(netPrice * (vatPercent / 100m), 2);
             var grossTotal = netPrice + vatAmount;

@@ -367,13 +367,9 @@ app.MapHub<ProjectBoardHub>("/hubs/project-board");
 app.MapHangfireDashboard("/hangfire");
 RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOverdueInvoicesAsync(), Cron.Daily(8));
 RecurringJob.AddOrUpdate<ReminderJobs>("check-open-quotes", j => j.CheckOpenQuotesAsync(), Cron.Daily(9));
-RecurringJob.AddOrUpdate<ReminderJobs>("generate-subscription-invoices", j => j.GenerateSubscriptionInvoicesAsync(), Cron.Daily(6));
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
 RecurringJob.AddOrUpdate<ReminderJobs>("generate-recurring-expenses", j => j.GenerateRecurringExpensesAsync(), Cron.Daily(7));
-RecurringJob.AddOrUpdate<SubscriptionBillingJob>(
-    "generate-subscription-invoices",
-    job => job.RunAsync(),
-    Cron.Daily(7));
+RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6));
 
 app.Run();
 
