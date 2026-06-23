@@ -227,7 +227,6 @@ public class CustomerServiceImpl : ICustomerService
         if (!string.IsNullOrWhiteSpace(req.Street) && !string.IsNullOrWhiteSpace(req.City))
             cust.Locations.Add(new Location { Label = "Hauptadresse", Street = req.Street ?? "", City = req.City ?? "", ZipCode = req.ZipCode ?? "", Country = req.Country ?? "Deutschland", IsPrimary = true });
         cust.OnboardingIntakeDone = true;
-        cust.OnboardingToken = null;
         await _db.SaveChangesAsync(ct);
         await _act.LogAsync(cust.Id, "Customer", cust.Id, "IntakeCompleted", $"Kunde hat Erstinformations-Formular ausgefüllt", ct: ct);
     }

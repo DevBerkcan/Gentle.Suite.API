@@ -13,25 +13,11 @@ public class ReminderJobs
 
     public async Task CheckOverdueInvoicesAsync()
     {
-        var cfg = await _db.ReminderSettings.FirstOrDefaultAsync() ?? new ReminderSettings();
-        var overdue = await _db.Invoices.Include(i => i.Customer).ThenInclude(c => c.Contacts)
+        var overdue = await _db.Invoices
             .Where(i => (i.Status == InvoiceStatus.Sent || i.Status == InvoiceStatus.Open) && i.DueDate < DateTimeOffset.UtcNow)
             .ToListAsync();
         foreach (var inv in overdue)
-        {
-            if (inv.ReminderStop || inv.Customer.ReminderStop) continue;
             inv.Status = InvoiceStatus.Overdue;
-            var days = (DateTimeOffset.UtcNow - inv.DueDate).Days;
-            ReminderLevel level; string key;
-            if (days >= cfg.Level3Days && inv.LastReminderLevel != ReminderLevel.Level3) { level = ReminderLevel.Level3; key = "invoice-reminder-3"; }
-            else if (days >= cfg.Level2Days && (inv.LastReminderLevel == null || inv.LastReminderLevel == ReminderLevel.Level1)) { level = ReminderLevel.Level2; key = "invoice-reminder-2"; }
-            else if (days >= cfg.Level1Days && inv.LastReminderLevel == null) { level = ReminderLevel.Level1; key = "invoice-reminder-1"; }
-            else continue;
-            var contact = inv.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? inv.Customer.Contacts.FirstOrDefault();
-            if (contact == null) continue;
-            var fee = level == ReminderLevel.Level1 ? cfg.Level1Fee : level == ReminderLevel.Level2 ? cfg.Level2Fee : cfg.Level3Fee;
-            try { await _email.SendTemplatedEmailAsync(contact.Email, key, new() { ["CustomerName"] = inv.Customer.CompanyName, ["ContactName"] = contact.FirstName, ["InvoiceNumber"] = inv.InvoiceNumber, ["Amount"] = inv.GrossTotal.ToString("N2"), ["DueDate"] = inv.DueDate.ToString("dd.MM.yyyy"), ["ReminderLevel"] = ((int)level+1).ToString(), ["ReminderFee"] = fee.ToString("N2"), ["AnnualInterestPercent"] = cfg.AnnualInterestPercent.ToString("N2") }, inv.CustomerId); inv.LastReminderLevel = level; inv.LastReminderSentAt = DateTimeOffset.UtcNow; } catch (Exception ex) { _log.LogError(ex, "Reminder failed for {Nr}", inv.InvoiceNumber); }
-        }
         await _db.SaveChangesAsync();
     }
 

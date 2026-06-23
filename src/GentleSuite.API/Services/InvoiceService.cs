@@ -378,8 +378,16 @@ public class InvoiceServiceImpl : IInvoiceService
 
     public async Task<InvoiceDetailDto> CreateCancellationAsync(Guid id, CreateCancellationRequest req, CancellationToken ct)
     {
-        var orig = await _db.Invoices.Include(i => i.Customer).Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
-        if (!orig.IsFinalized) throw new InvalidOperationException("Only finalized invoices can be cancelled");
+        var orig = await _db.Invoices.Include(i => i.Customer).ThenInclude(c => c.Contacts).Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
+
+        // Draft invoices: just mark cancelled, no storno document needed
+        if (!orig.IsFinalized)
+        {
+            orig.Status = InvoiceStatus.Cancelled;
+            await _db.SaveChangesAsync(ct);
+            return (await GetByIdAsync(orig.Id, ct))!;
+        }
+
         orig.Status = InvoiceStatus.Cancelled;
         var year = DateTime.UtcNow.Year;
         var stornoNumber = await _seq.NextNumberAsync("CancellationInvoice", year, "SR", 4, ct, includeYear: false);
@@ -403,6 +411,33 @@ public class InvoiceServiceImpl : IInvoiceService
         storno.RecalculateTotals();
         _db.Invoices.Add(storno);
         await _db.SaveChangesAsync(ct);
+
+        // Send cancellation email
+        try
+        {
+            var contact = orig.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? orig.Customer.Contacts.FirstOrDefault();
+            if (contact != null)
+            {
+                var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "Gentle Group" };
+                var pdfBytes = await _pdf.GenerateInvoicePdfAsync(storno, co, ct);
+                await _email.SendTemplatedEmailAsync(
+                    contact.Email,
+                    "invoice-cancelled",
+                    new Dictionary<string, object>
+                    {
+                        ["CustomerName"] = orig.Customer.CompanyName,
+                        ["ContactName"] = contact.FirstName,
+                        ["InvoiceNumber"] = orig.InvoiceNumber,
+                        ["StornoNumber"] = storno.InvoiceNumber,
+                        ["Amount"] = orig.GrossTotal.ToString("N2"),
+                    },
+                    orig.CustomerId,
+                    attachments: new[] { new EmailAttachment($"Storno_{storno.InvoiceNumber}.pdf", pdfBytes, "application/pdf") },
+                    ct: ct);
+            }
+        }
+        catch { /* email failure must not break the storno */ }
+
         return (await GetByIdAsync(storno.Id, ct))!;
     }
 
@@ -602,20 +637,4 @@ public class InvoiceServiceImpl : IInvoiceService
         return (await GetByIdAsync(inv.Id, ct))!;
     }
 
-    public async Task SendReminderAsync(Guid id, CancellationToken ct)
-    {
-        var inv = await _db.Invoices.Include(i => i.Customer).ThenInclude(c => c.Contacts).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
-        if (inv.ReminderStop) throw new InvalidOperationException("Mahnsperre aktiv.");
-        var contact = inv.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? inv.Customer.Contacts.FirstOrDefault() ?? throw new InvalidOperationException("Kein Kontakt gefunden.");
-        await _email.SendTemplatedEmailAsync(contact.Email, "invoice-reminder", new Dictionary<string, object>
-        {
-            ["CustomerName"] = inv.Customer.CompanyName,
-            ["ContactName"] = contact.FirstName,
-            ["InvoiceNumber"] = inv.InvoiceNumber,
-            ["Amount"] = inv.GrossTotal.ToString("N2"),
-            ["DueDate"] = inv.DueDate.ToString("dd.MM.yyyy"),
-            ["DaysOverdue"] = (int)(DateTimeOffset.UtcNow - inv.DueDate).TotalDays
-        }, inv.CustomerId, ct: ct);
-        await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "ReminderSent", $"Mahnung gesendet für {inv.InvoiceNumber}", ct: ct);
-    }
 }

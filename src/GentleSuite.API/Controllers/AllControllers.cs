@@ -293,18 +293,8 @@ public class InvoicesController(IInvoiceService svc) : ControllerBase
     [HttpPut("{id}")] public async Task<ActionResult<InvoiceDetailDto>> Update(Guid id, UpdateInvoiceRequest req) => Ok(await svc.UpdateAsync(id, req));
     [HttpPost("{id}/finalize"), Authorize(Policy = "AccountingOrAdmin")] public async Task<ActionResult<InvoiceDetailDto>> Finalize(Guid id, FinalizeInvoiceRequest req) => Ok(await svc.FinalizeAsync(id, req));
     [HttpPost("{id}/payment")] public async Task<ActionResult<InvoiceDetailDto>> Payment(Guid id, RecordPaymentRequest req) => Ok(await svc.RecordPaymentAsync(id, req));
-    [HttpPost("{id}/cancel"), Authorize(Policy = "AdminOnly")] public async Task<ActionResult<InvoiceDetailDto>> Cancel(Guid id, CreateCancellationRequest req) => Ok(await svc.CreateCancellationAsync(id, req));
-    [HttpPut("{id}/reminder-stop")]
-    public async Task<IActionResult> UpdateReminderStop(Guid id, UpdateReminderStopRequest req, [FromServices] AppDbContext db)
-    {
-        var i = await db.Invoices.FirstOrDefaultAsync(x => x.Id == id);
-        if (i == null) return NotFound();
-        i.ReminderStop = req.ReminderStop;
-        await db.SaveChangesAsync();
-        return NoContent();
-    }
+    [HttpPost("{id}/cancel")] public async Task<ActionResult<InvoiceDetailDto>> Cancel(Guid id, CreateCancellationRequest req) => Ok(await svc.CreateCancellationAsync(id, req));
     [HttpPost("{id}/send")] public async Task<IActionResult> Send(Guid id) { await svc.SendAsync(id); return NoContent(); }
-    [HttpPost("{id}/send-reminder")] public async Task<IActionResult> SendReminder(Guid id) { await svc.SendReminderAsync(id); return NoContent(); }
     [HttpPost("from-time-entries")] public async Task<ActionResult<InvoiceDetailDto>> FromTimeEntries(CreateInvoiceFromTimeEntriesRequest req) => Ok(await svc.CreateFromTimeEntriesAsync(req));
     [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) => File(await svc.GeneratePdfAsync(id), "application/pdf", $"Rechnung.pdf");
     [HttpGet("export.csv")]
@@ -479,31 +469,6 @@ public class SettingsController(ICompanySettingsService svc, IFileStorageService
         return Ok(new NumberRangeDto(updated.EntityType, updated.Year, updated.Prefix, updated.NextValue, updated.Padding));
     }
 
-    [HttpGet("reminders"), Authorize(Policy = "AccountingOrAdmin")]
-    public async Task<ActionResult<ReminderSettingsDto>> GetReminderSettings()
-    {
-        var r = await db.ReminderSettings.FirstOrDefaultAsync() ?? new GentleSuite.Domain.Entities.ReminderSettings();
-        return Ok(new ReminderSettingsDto(r.Level1Days, r.Level2Days, r.Level3Days, r.Level1Fee, r.Level2Fee, r.Level3Fee, r.AnnualInterestPercent));
-    }
-
-    [HttpPut("reminders"), Authorize(Policy = "AdminOnly")]
-    public async Task<ActionResult<ReminderSettingsDto>> UpdateReminderSettings(UpdateReminderSettingsRequest req)
-    {
-        if (!(req.Level1Days > 0 && req.Level2Days > req.Level1Days && req.Level3Days > req.Level2Days))
-            return BadRequest("Reminder intervals must be ascending and > 0.");
-
-        var r = await db.ReminderSettings.FirstOrDefaultAsync();
-        if (r == null) { r = new GentleSuite.Domain.Entities.ReminderSettings(); db.ReminderSettings.Add(r); }
-        r.Level1Days = req.Level1Days;
-        r.Level2Days = req.Level2Days;
-        r.Level3Days = req.Level3Days;
-        r.Level1Fee = req.Level1Fee;
-        r.Level2Fee = req.Level2Fee;
-        r.Level3Fee = req.Level3Fee;
-        r.AnnualInterestPercent = req.AnnualInterestPercent;
-        await db.SaveChangesAsync();
-        return Ok(new ReminderSettingsDto(r.Level1Days, r.Level2Days, r.Level3Days, r.Level1Fee, r.Level2Fee, r.Level3Fee, r.AnnualInterestPercent));
-    }
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
