@@ -422,14 +422,15 @@ public class InvoiceServiceImpl : IInvoiceService
                 var pdfBytes = await _pdf.GenerateInvoicePdfAsync(storno, co, ct);
                 await _email.SendTemplatedEmailAsync(
                     contact.Email,
-                    "invoice-cancelled",
+                    "invoice-cancellation",
                     new Dictionary<string, object>
                     {
-                        ["CustomerName"] = orig.Customer.CompanyName,
                         ["ContactName"] = contact.FirstName,
-                        ["InvoiceNumber"] = orig.InvoiceNumber,
-                        ["StornoNumber"] = storno.InvoiceNumber,
-                        ["Amount"] = orig.GrossTotal.ToString("N2"),
+                        ["OriginalInvoiceNumber"] = orig.InvoiceNumber,
+                        ["OriginalInvoiceDate"] = orig.InvoiceDate.ToString("dd.MM.yyyy"),
+                        ["StornoInvoiceNumber"] = storno.InvoiceNumber,
+                        ["StornoInvoiceDate"] = storno.InvoiceDate.ToString("dd.MM.yyyy"),
+                        ["StornoAmount"] = orig.GrossTotal.ToString("N2") + " EUR",
                     },
                     orig.CustomerId,
                     attachments: new[] { new EmailAttachment($"Storno_{storno.InvoiceNumber}.pdf", pdfBytes, "application/pdf") },

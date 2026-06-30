@@ -365,10 +365,11 @@ app.MapHub<ProjectBoardHub>("/hubs/project-board");
 
 // Hangfire dashboard
 app.MapHangfireDashboard("/hangfire");
-//RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOverdueInvoicesAsync(), Cron.Daily(8));
-//RecurringJob.AddOrUpdate<ReminderJobs>("check-open-quotes", j => j.CheckOpenQuotesAsync(), Cron.Daily(9));
-//RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
-//RecurringJob.AddOrUpdate<ReminderJobs>("generate-recurring-expenses", j => j.GenerateRecurringExpensesAsync(), Cron.Daily(7));
+// Explicitly remove deactivated jobs from Hangfire DB so they don't keep firing
+RecurringJob.RemoveIfExists("check-overdue-invoices");
+RecurringJob.RemoveIfExists("check-open-quotes");
+RecurringJob.RemoveIfExists("generate-recurring-expenses");
+RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
 RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6));
 
 app.Run();
