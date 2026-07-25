@@ -59,6 +59,11 @@ public class Invoice : GobdEntity
     public string? SmallBusinessNote { get; set; }  // "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet."
     public string? ReverseChargeNote { get; set; }  // "Steuerschuldnerschaft des Leistungsempfängers."
 
+    // === External system integration (e.g. GentleBook subscription payments) ===
+    // Idempotency key for invoices created by an external payment event — prevents
+    // duplicate invoices when the calling system retries the same payment notification.
+    public string? ExternalPaymentReference { get; set; }
+
     public List<InvoiceLine> Lines { get; set; } = new();
     public List<InvoicePayment> Payments { get; set; } = new();
 

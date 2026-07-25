@@ -108,6 +108,14 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
             .HasIndex(x => new { x.SubscriptionId, x.BillingPeriodStart, x.BillingPeriodEnd })
             .IsUnique()
             .HasFilter("[SubscriptionId] IS NOT NULL");
+        mb.Entity<Invoice>()
+            .HasIndex(x => x.ExternalPaymentReference)
+            .IsUnique()
+            .HasFilter("[ExternalPaymentReference] IS NOT NULL");
+        mb.Entity<Customer>()
+            .HasIndex(x => x.ExternalRef)
+            .IsUnique()
+            .HasFilter("[ExternalRef] IS NOT NULL");
         mb.Entity<InvoiceLine>().HasOne(x => x.Invoice).WithMany(x => x.Lines).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<InvoicePayment>().HasOne(x => x.Invoice).WithMany(x => x.Payments).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<NumberSequence>().HasIndex(x => new { x.EntityType, x.Year }).IsUnique();

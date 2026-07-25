@@ -165,6 +165,12 @@ try
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='BillingPeriodEnd') ALTER TABLE "Invoices" ADD "BillingPeriodEnd" DATETIMEOFFSET(7) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ReminderStop') ALTER TABLE "Customers" ADD "ReminderStop" BIT NOT NULL DEFAULT 0;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ReminderStop') ALTER TABLE "Invoices" ADD "ReminderStop" BIT NOT NULL DEFAULT 0;""");
+
+    // GentleBook integration: external-payment idempotency + tenant-to-customer mapping
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ExternalPaymentReference') ALTER TABLE "Invoices" ADD "ExternalPaymentReference" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Invoices_ExternalPaymentReference' AND object_id=OBJECT_ID('Invoices')) CREATE UNIQUE INDEX "IX_Invoices_ExternalPaymentReference" ON "Invoices" ("ExternalPaymentReference") WHERE "ExternalPaymentReference" IS NOT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ExternalRef') ALTER TABLE "Customers" ADD "ExternalRef" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Customers_ExternalRef' AND object_id=OBJECT_ID('Customers')) CREATE UNIQUE INDEX "IX_Customers_ExternalRef" ON "Customers" ("ExternalRef") WHERE "ExternalRef" IS NOT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ProjectBoardTasks')
     BEGIN
@@ -358,6 +364,7 @@ app.UseExceptionHandler(a => a.Run(async ctx =>
 app.UseSerilogRequestLogging();
 app.UseSwagger();
 app.UseSwaggerUI();
+app.UseMiddleware<GentleSuite.API.Middleware.GentleBookApiKeyMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

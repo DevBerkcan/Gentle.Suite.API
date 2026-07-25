@@ -81,6 +81,9 @@ public class Customer : BaseEntity
     public CustomerStatus Status { get; set; } = CustomerStatus.Lead;
     public string? CustomerNumber { get; set; } // Kundennummer (Debitor)
     public bool ReminderStop { get; set; }      // Mahnstopp auf Kundenebene
+    // Stable identifier for customers created by an external system (e.g. "GB-{GentleBookTenantId}")
+    // — used for find-or-create idempotency, independent of the internal CustomerNumber sequence.
+    public string? ExternalRef { get; set; }
     public Guid? OnboardingToken { get; set; }          // Einmaliger Link-Token für Kunden-Intake-Formular
     public bool OnboardingIntakeDone { get; set; }      // true nach Formular-Ausfüllung durch Kunden
 
