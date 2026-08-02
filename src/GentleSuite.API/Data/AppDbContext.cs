@@ -109,6 +109,9 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
             .IsUnique()
             .HasFilter("[SubscriptionId] IS NOT NULL");
         mb.Entity<Invoice>()
+            .Property(x => x.ExternalPaymentReference)
+            .HasMaxLength(450);
+        mb.Entity<Invoice>()
             .HasIndex(x => x.ExternalPaymentReference)
             .IsUnique()
             .HasFilter("[ExternalPaymentReference] IS NOT NULL");

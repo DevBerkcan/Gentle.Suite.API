@@ -20,6 +20,12 @@ appsettings.*.local.json
 
 # Publish output
 **/publish/
+publish-*/
+.deploy/
+
+# Local container overrides (may contain development secrets)
+Dockerfile.dev
+docker-compose.override.yml
 
 # OS
 .DS_Store

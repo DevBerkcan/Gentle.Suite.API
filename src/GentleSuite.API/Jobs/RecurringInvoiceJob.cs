@@ -14,6 +14,10 @@ namespace GentleSuite.Infrastructure.Jobs;
 
 public class RecurringInvoiceJob
 {
+    // Kept only so persisted legacy Hangfire payloads can still be deserialized safely.
+    // All recurring billing is handled exclusively by SubscriptionBillingJob.
+    private static bool LegacyJobsEnabled => false;
+
     private readonly AppDbContext _db;
     private readonly IInvoiceService _invoiceService;
     private readonly INumberSequenceService _seq;
@@ -31,9 +35,12 @@ public class RecurringInvoiceJob
         _activity = activity;
     }
 
-    [AutomaticRetry(Attempts = 3)]
+    [AutomaticRetry(Attempts = 0)]
     public async Task RunAsync(Guid subscriptionId, Guid sourceInvoiceId, CancellationToken ct)
     {
+        if (!LegacyJobsEnabled)
+            return;
+
         var sub = await _db.CustomerSubscriptions
             .Include(s => s.Plan)
             .Include(s => s.Customer)

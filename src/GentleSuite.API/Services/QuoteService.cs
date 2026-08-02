@@ -54,6 +54,7 @@ public class QuoteServiceImpl : IQuoteService
         if (req.Lines != null && req.Lines.Count > 0) ValidateQuoteLines(req.Lines);
 
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+        var taxMode = EnforceCompanyTaxMode(co?.DefaultTaxMode ?? TaxMode.Standard, req.TaxMode);
         var year = DateTime.UtcNow.Year;
         var quoteNumber = await _seq.NextNumberAsync("Quote", year, "AN", 4, ct, includeYear: false);
         var quote = new Quote
@@ -64,12 +65,12 @@ public class QuoteServiceImpl : IQuoteService
             CustomerId = req.CustomerId, ContactId = req.ContactId,
             Subject = req.Subject, IntroText = req.IntroText ?? co?.QuoteIntroTemplate,
             OutroText = req.OutroText ?? co?.QuoteOutroTemplate, Notes = req.Notes,
-            TaxRate = req.TaxRate, TaxMode = req.TaxMode, Status = QuoteStatus.Draft,
+            TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : req.TaxRate, TaxMode = taxMode, Status = QuoteStatus.Draft,
             LegalTextBlocks = req.LegalTextBlockKeys != null ? JsonSerializer.Serialize(req.LegalTextBlockKeys) : null
         };
         quote.QuoteGroupId = quote.Id;
         if (req.Lines != null) foreach (var l in req.Lines)
-            quote.Lines.Add(new QuoteLine { ServiceCatalogItemId = l.ServiceCatalogItemId, Title = l.Title, Description = l.Description, Quantity = l.Quantity, UnitPrice = l.UnitPrice, DiscountPercent = l.DiscountPercent, LineType = l.LineType, VatPercent = l.VatPercent, SortOrder = l.SortOrder });
+            quote.Lines.Add(new QuoteLine { ServiceCatalogItemId = l.ServiceCatalogItemId, Title = l.Title, Description = l.Description, Quantity = l.Quantity, UnitPrice = l.UnitPrice, DiscountPercent = l.DiscountPercent, LineType = l.LineType, VatPercent = EffectiveVatPercent(taxMode, l.VatPercent), SortOrder = l.SortOrder });
         _db.Quotes.Add(quote);
         await _db.SaveChangesAsync(ct);
         await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "Created", $"Angebot {quote.QuoteNumber} erstellt", ct: ct);
@@ -80,11 +81,12 @@ public class QuoteServiceImpl : IQuoteService
     {
         if (!await _db.Customers.AnyAsync(c => c.Id == customerId, ct)) throw new ArgumentException("Kunde wurde nicht gefunden.");
         var tmpl = await _db.QuoteTemplates.Include(t => t.Lines.OrderBy(l => l.SortOrder)).FirstOrDefaultAsync(t => t.Id == templateId, ct) ?? throw new KeyNotFoundException("Template not found");
+        var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
         var year = DateTime.UtcNow.Year;
         var quoteNumber = await _seq.NextNumberAsync("Quote", year, "AN", 4, ct, includeYear: false);
-        var quote = new Quote { QuoteNumber = quoteNumber, QuoteGroupId = Guid.NewGuid(), IsCurrentVersion = true, CustomerId = customerId, Subject = tmpl.Name, Notes = tmpl.Description, TaxRate = 19m, Status = QuoteStatus.Draft };
+        var quote = new Quote { QuoteNumber = quoteNumber, QuoteGroupId = Guid.NewGuid(), IsCurrentVersion = true, CustomerId = customerId, Subject = tmpl.Name, Notes = tmpl.Description, TaxRate = companyTaxMode == TaxMode.SmallBusiness ? 0 : 19m, TaxMode = companyTaxMode, Status = QuoteStatus.Draft };
         quote.QuoteGroupId = quote.Id;
-        foreach (var tl in tmpl.Lines) quote.Lines.Add(new QuoteLine { ServiceCatalogItemId = tl.ServiceCatalogItemId, Title = tl.Title, Description = tl.Description, Quantity = tl.Quantity, UnitPrice = tl.UnitPrice, DiscountPercent = 0, LineType = tl.LineType, SortOrder = tl.SortOrder });
+        foreach (var tl in tmpl.Lines) quote.Lines.Add(new QuoteLine { ServiceCatalogItemId = tl.ServiceCatalogItemId, Title = tl.Title, Description = tl.Description, Quantity = tl.Quantity, UnitPrice = tl.UnitPrice, DiscountPercent = 0, LineType = tl.LineType, VatPercent = EffectiveVatPercent(companyTaxMode, 19), SortOrder = tl.SortOrder });
         var keys = new List<string>();
         if (tmpl.Lines.Any(l => l.Title.Contains("Care"))) { keys.Add("unlimited-care-fairuse"); keys.Add("sla-levels"); }
         if (keys.Any()) quote.LegalTextBlocks = JsonSerializer.Serialize(keys);
@@ -102,6 +104,7 @@ public class QuoteServiceImpl : IQuoteService
         if (quote.Status != QuoteStatus.Draft) throw new InvalidOperationException("Only draft quotes can be edited");
         if (lines == null || lines.Count == 0) throw new ArgumentException("Mindestens eine Angebotsposition ist erforderlich.");
         ValidateQuoteLines(lines);
+        var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
 
         await _db.QuoteLines
             .Where(l => l.QuoteId == id)
@@ -117,7 +120,7 @@ public class QuoteServiceImpl : IQuoteService
             UnitPrice = l.UnitPrice,
             DiscountPercent = l.DiscountPercent,
             LineType = l.LineType,
-            VatPercent = l.VatPercent,
+            VatPercent = EffectiveVatPercent(companyTaxMode, l.VatPercent),
             SortOrder = i,
         }).ToList();
 
@@ -137,6 +140,13 @@ public class QuoteServiceImpl : IQuoteService
 
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Nur aktuelle Angebotsversionen koennen versendet werden.");
         if (!quote.Lines.Any()) throw new ArgumentException("Ein Angebot ohne Positionen kann nicht versendet werden.");
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+        quote.TaxMode = EnforceCompanyTaxMode(co?.DefaultTaxMode ?? TaxMode.Standard, quote.TaxMode);
+        if (quote.TaxMode == TaxMode.SmallBusiness)
+        {
+            quote.TaxRate = 0;
+            foreach (var line in quote.Lines) line.VatPercent = 0;
+        }
 
         var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .Replace("+", "").Replace("/", "").Replace("=", "");
@@ -149,7 +159,6 @@ public class QuoteServiceImpl : IQuoteService
         quote.SentAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync(ct);
 
-        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
         var contact = quote.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? quote.Customer.Contacts.First();
         var recipientEmail = !string.IsNullOrWhiteSpace(req.RecipientEmail) ? req.RecipientEmail : contact.Email;
 
@@ -271,6 +280,7 @@ public class QuoteServiceImpl : IQuoteService
             .FirstOrDefaultAsync(q => q.Id == quoteId, ct) ?? throw new KeyNotFoundException();
 
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+        var taxMode = EnforceCompanyTaxMode(co?.DefaultTaxMode ?? TaxMode.Standard, quote.TaxMode);
         var year = DateTime.UtcNow.Year;
         var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
 
@@ -286,7 +296,7 @@ public class QuoteServiceImpl : IQuoteService
             IntroText = quote.IntroText ?? co?.InvoiceIntroTemplate,
             OutroText = quote.OutroText ?? co?.InvoiceOutroTemplate,
             Notes = quote.Notes,
-            TaxMode = quote.TaxMode,
+            TaxMode = taxMode,
             Type = invoiceType,
             InvoiceDate = DateTimeOffset.UtcNow,
             DueDate = DateTimeOffset.UtcNow.AddDays(14),
@@ -304,7 +314,7 @@ public class QuoteServiceImpl : IQuoteService
                 Description = l.Description,
                 Quantity = l.Quantity,
                 UnitPrice = l.UnitPrice,
-                VatPercent = l.VatPercent,
+                VatPercent = EffectiveVatPercent(taxMode, l.VatPercent),
                 DiscountPercent = l.DiscountPercent,
                 SortOrder = l.SortOrder,
                 LineType = (int)l.LineType  
@@ -331,12 +341,14 @@ public class QuoteServiceImpl : IQuoteService
         var quote = await _db.Quotes.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Nur aktuelle Angebotsversionen sind bearbeitbar.");
         if (quote.Status != QuoteStatus.Draft) throw new InvalidOperationException("Only draft quotes can be edited");
+        var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
         if (req.Subject != null) quote.Subject = req.Subject;
         if (req.IntroText != null) quote.IntroText = req.IntroText;
         if (req.OutroText != null) quote.OutroText = req.OutroText;
         if (req.Notes != null) quote.Notes = req.Notes;
-        if (req.TaxRate.HasValue) quote.TaxRate = req.TaxRate.Value;
-        if (req.TaxMode.HasValue) quote.TaxMode = req.TaxMode.Value;
+        if (req.TaxRate.HasValue) quote.TaxRate = companyTaxMode == TaxMode.SmallBusiness ? 0 : req.TaxRate.Value;
+        if (req.TaxMode.HasValue) quote.TaxMode = EnforceCompanyTaxMode(companyTaxMode, req.TaxMode.Value);
+        if (companyTaxMode == TaxMode.SmallBusiness) quote.TaxMode = TaxMode.SmallBusiness;
         await _db.SaveChangesAsync(ct);
         return (await GetByIdAsync(quote.Id, ct))!;
     }
@@ -354,6 +366,8 @@ public class QuoteServiceImpl : IQuoteService
     public async Task<QuoteDetailDto> DuplicateAsync(Guid id, CancellationToken ct)
     {
         var original = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
+        var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
+        var taxMode = EnforceCompanyTaxMode(companyTaxMode, original.TaxMode);
         var year = DateTime.UtcNow.Year;
         var quoteNumber = await _seq.NextNumberAsync("Quote", year, "AN", 4, ct, includeYear: false);
         var copy = new Quote
@@ -364,12 +378,12 @@ public class QuoteServiceImpl : IQuoteService
             CustomerId = original.CustomerId, ContactId = original.ContactId,
             Subject = original.Subject, IntroText = original.IntroText,
             OutroText = original.OutroText, Notes = original.Notes,
-            TaxRate = original.TaxRate, TaxMode = original.TaxMode,
+            TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : original.TaxRate, TaxMode = taxMode,
             Status = QuoteStatus.Draft, LegalTextBlocks = original.LegalTextBlocks, Version = 1
         };
         copy.QuoteGroupId = copy.Id;
         foreach (var l in original.Lines)
-            copy.Lines.Add(new QuoteLine { ServiceCatalogItemId = l.ServiceCatalogItemId, Title = l.Title, Description = l.Description, Quantity = l.Quantity, UnitPrice = l.UnitPrice, DiscountPercent = l.DiscountPercent, LineType = l.LineType, VatPercent = l.VatPercent, SortOrder = l.SortOrder });
+            copy.Lines.Add(new QuoteLine { ServiceCatalogItemId = l.ServiceCatalogItemId, Title = l.Title, Description = l.Description, Quantity = l.Quantity, UnitPrice = l.UnitPrice, DiscountPercent = l.DiscountPercent, LineType = l.LineType, VatPercent = EffectiveVatPercent(taxMode, l.VatPercent), SortOrder = l.SortOrder });
         _db.Quotes.Add(copy);
         await _db.SaveChangesAsync(ct);
         await _activity.LogAsync(copy.CustomerId, "Quote", copy.Id, "Created", $"Angebot {copy.QuoteNumber} dupliziert von {original.QuoteNumber}", ct: ct);
@@ -380,6 +394,8 @@ public class QuoteServiceImpl : IQuoteService
     {
         var current = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
         if (!current.IsCurrentVersion) throw new InvalidOperationException("Nur die aktuelle Version kann versioniert werden.");
+        var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
+        var taxMode = EnforceCompanyTaxMode(companyTaxMode, current.TaxMode);
 
         var maxVersion = await _db.Quotes.Where(q => q.QuoteGroupId == current.QuoteGroupId).MaxAsync(q => q.Version, ct);
         var year = DateTime.UtcNow.Year;
@@ -406,8 +422,8 @@ public class QuoteServiceImpl : IQuoteService
             OutroText = current.OutroText,
             Notes = current.Notes,
             InternalNotes = current.InternalNotes,
-            TaxRate = current.TaxRate,
-            TaxMode = current.TaxMode,
+            TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : current.TaxRate,
+            TaxMode = taxMode,
             LegalTextBlocks = current.LegalTextBlocks
         };
 
@@ -422,7 +438,7 @@ public class QuoteServiceImpl : IQuoteService
                     UnitPrice = l.UnitPrice,
                     DiscountPercent = l.DiscountPercent,
                     LineType = l.LineType,
-                    VatPercent = l.VatPercent,
+                    VatPercent = EffectiveVatPercent(taxMode, l.VatPercent),
                     SortOrder = l.SortOrder
             });
         }
@@ -484,4 +500,10 @@ public class QuoteServiceImpl : IQuoteService
             if (line.UnitPrice < 0) throw new ArgumentException($"Template-Position {i + 1}: Preis darf nicht negativ sein.");
         }
     }
+
+    private static TaxMode EnforceCompanyTaxMode(TaxMode companyMode, TaxMode requestedMode)
+        => companyMode == TaxMode.SmallBusiness ? TaxMode.SmallBusiness : requestedMode;
+
+    private static int EffectiveVatPercent(TaxMode taxMode, int requestedVatPercent)
+        => taxMode == TaxMode.SmallBusiness ? 0 : requestedVatPercent;
 }

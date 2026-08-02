@@ -104,7 +104,7 @@ npm run dev:down
 
 Die Stammdaten werden beim ersten Start geseedet:
 - **Firma**: Gentle Webdesign UG (haftungsbeschränkt)
-- **Adresse**: Musterstr. 1, 42103 Wuppertal
+- **Adresse**: Girardetstraße 17, 42109 Wuppertal
 - **Steuernr./USt-IdNr.**: In Settings anpassbar
 - **Bankverbindung**: In Settings anpassbar
 

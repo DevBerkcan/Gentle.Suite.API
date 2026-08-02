@@ -38,6 +38,11 @@ public class CustomerSubscription : BaseEntity
     public string? CancellationReason { get; set; }
     public int? ContractDurationMonths { get; set; }
     public DateTimeOffset? ConfirmedAt { get; set; }
+    public string? MollieCustomerId { get; set; }
+    public string? MollieMandateId { get; set; }
+    public string? MollieMandateStatus { get; set; }
+    public string? MollieFirstPaymentId { get; set; }
+    public string? MollieFirstPaymentStatus { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity

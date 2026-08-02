@@ -242,10 +242,11 @@ public record ConfirmBankRequest(string RequisitionId);
 public record SubscriptionPlanDto(Guid Id, string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category, bool IsActive, WorkScopeRuleDto? WorkScopeRule, SupportPolicyDto? SupportPolicy);
 public record WorkScopeRuleDto(string? FairUseDescription, List<string> IncludedItems, List<string> ExcludedItems, int? MaxHoursPerMonth);
 public record SupportPolicyDto(string? S0ResponseTarget, string? S1ResponseTarget, string? S2ResponseTarget, string? S3ResponseTarget);
-public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Guid CustomerId, string? CustomerName, SubscriptionStatus Status, DateTimeOffset StartDate, DateTimeOffset NextBillingDate, decimal MonthlyPrice, int? ContractDurationMonths, DateTimeOffset? ConfirmedAt);
+public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Guid CustomerId, string? CustomerName, SubscriptionStatus Status, DateTimeOffset StartDate, DateTimeOffset NextBillingDate, decimal MonthlyPrice, int? ContractDurationMonths, DateTimeOffset? ConfirmedAt, string? MollieMandateStatus);
 public record CreateSubscriptionRequest(Guid CustomerId, Guid PlanId, DateTimeOffset? StartDate, int? ContractDurationMonths = null);
-public record SubscriptionInvoiceDto(Guid Id, string InvoiceNumber, DateTimeOffset InvoiceDate, DateTimeOffset? BillingPeriodStart, DateTimeOffset? BillingPeriodEnd, decimal GrossTotal, InvoiceStatus Status);
+public record SubscriptionInvoiceDto(Guid Id, string InvoiceNumber, DateTimeOffset InvoiceDate, DateTimeOffset? BillingPeriodStart, DateTimeOffset? BillingPeriodEnd, decimal GrossTotal, InvoiceStatus Status, string? PaymentCollectionStatus, DateTimeOffset? PaymentCollectionDueDate);
 public record UpdateSubscriptionStatusRequest(SubscriptionStatus Status, string? Reason = null);
+public record MollieMandateCheckoutDto(string CheckoutUrl, string PaymentId, string Status);
 public record CreatePlanRequest(string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category);
 public record UpdatePlanRequest(string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category, bool IsActive);
 

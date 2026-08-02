@@ -63,6 +63,8 @@ public class Invoice : GobdEntity
     // Idempotency key for invoices created by an external payment event — prevents
     // duplicate invoices when the calling system retries the same payment notification.
     public string? ExternalPaymentReference { get; set; }
+    public string? PaymentCollectionStatus { get; set; }
+    public DateTimeOffset? PaymentCollectionDueDate { get; set; }
 
     public List<InvoiceLine> Lines { get; set; } = new();
     public List<InvoicePayment> Payments { get; set; } = new();

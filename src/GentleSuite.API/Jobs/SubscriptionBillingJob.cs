@@ -2,6 +2,7 @@
 using GentleSuite.Domain.Enums;
 using GentleSuite.Infrastructure.Data;
 using GentleSuite.Application.Interfaces;
+using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using System.Text;
@@ -14,18 +15,24 @@ public class SubscriptionBillingJob
     private readonly INumberSequenceService _seq;
     private readonly IEmailService _email;
     private readonly IPdfService _pdf;
+    private readonly IMolliePaymentService _mollie;
+    private readonly IConfiguration _configuration;
 
-    public SubscriptionBillingJob(AppDbContext db, INumberSequenceService seq, IEmailService email, IPdfService pdf)
+    public SubscriptionBillingJob(AppDbContext db, INumberSequenceService seq, IEmailService email, IPdfService pdf, IMolliePaymentService mollie, IConfiguration configuration)
     {
         _db = db;
         _seq = seq;
         _email = email;
         _pdf = pdf;
+        _mollie = mollie;
+        _configuration = configuration;
     }
 
+    [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task RunAsync()
     {
         var today = DateTimeOffset.UtcNow.Date;
+        var preNotificationDays = Math.Max(1, _configuration.GetValue<int?>("Mollie:PreNotificationDays") ?? 14);
 
         var dueSubs = await _db.CustomerSubscriptions
             .Include(s => s.Plan)
@@ -35,7 +42,8 @@ public class SubscriptionBillingJob
             .ThenInclude(c => c.Locations)
             .Where(s =>
                 s.Status == SubscriptionStatus.Active &&
-                s.NextBillingDate.Date <= today)
+                s.MollieMandateStatus == "valid" &&
+                s.NextBillingDate.Date <= today.AddDays(preNotificationDays))
             .ToListAsync();
 
         var co = await _db.CompanySettings.FirstOrDefaultAsync()
@@ -44,13 +52,6 @@ public class SubscriptionBillingJob
         foreach (var sub in dueSubs)
         {
             var periodStart = sub.NextBillingDate;
-
-            var alreadyExists = await _db.Invoices.AnyAsync(i =>
-                i.SubscriptionId == sub.Id &&
-                i.BillingPeriodStart != null &&
-                i.BillingPeriodStart.Value.Date == periodStart.Date);
-
-            if (alreadyExists) continue;
             var periodEnd = sub.Plan.BillingCycle switch
             {
                 BillingCycle.Quarterly => periodStart.AddMonths(3),
@@ -58,13 +59,34 @@ public class SubscriptionBillingJob
                 _ => periodStart.AddMonths(1)
             };
 
+            var alreadyExists = await _db.Invoices.AnyAsync(i =>
+                i.SubscriptionId == sub.Id &&
+                i.BillingPeriodStart != null &&
+                i.BillingPeriodStart.Value.Date == periodStart.Date);
+
+            if (alreadyExists)
+            {
+                sub.NextBillingDate = periodEnd;
+                await _db.SaveChangesAsync();
+                continue;
+            }
+
             var year = DateTime.UtcNow.Year;
             var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, CancellationToken.None, includeYear: false);
 
-            var vatPercent = 0;
-            var netPrice = sub.Plan.MonthlyPrice;
+            var billingMonths = sub.Plan.BillingCycle switch
+            {
+                BillingCycle.Quarterly => 3,
+                BillingCycle.Yearly => 12,
+                _ => 1
+            };
+            var vatPercent = co.DefaultTaxMode == TaxMode.Standard ? 19 : 0;
+            var netPrice = sub.Plan.MonthlyPrice * billingMonths;
             var vatAmount = Math.Round(netPrice * (vatPercent / 100m), 2);
             var grossTotal = netPrice + vatAmount;
+            var collectionDueDate = periodStart.Date < today.AddDays(preNotificationDays)
+                ? today.AddDays(preNotificationDays)
+                : periodStart.Date;
 
             var inv = new Invoice
             {
@@ -75,15 +97,18 @@ public class SubscriptionBillingJob
                 BillingPeriodStart = periodStart,
                 BillingPeriodEnd = periodEnd,
                 Subject = $"Serienrechnung – {sub.Plan.Name}",
-                TaxMode = TaxMode.Standard,
+                TaxMode = co.DefaultTaxMode,
                 InvoiceDate = DateTimeOffset.UtcNow,
-                DueDate = DateTimeOffset.UtcNow.AddDays(co.InvoicePaymentTermDays > 0 ? co.InvoicePaymentTermDays : 14),
+                DueDate = collectionDueDate,
                 SellerTaxId = co.TaxId,
                 SellerVatId = co.VatId,
-                Status = InvoiceStatus.Sent,
+                Status = InvoiceStatus.Final,
                 IsFinalized = true,
                 FinalizedAt = DateTimeOffset.UtcNow,
-                RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+                RetentionUntil = DateTimeOffset.UtcNow.AddYears(10),
+                PaymentCollectionStatus = "scheduled",
+                PaymentCollectionDueDate = collectionDueDate,
+                PaymentTerms = $"Der Rechnungsbetrag von {grossTotal:N2} € wird am {collectionDueDate:dd.MM.yyyy} auf Grundlage des erteilten SEPA-Lastschriftmandats automatisch über Mollie eingezogen. Mandat: {sub.MollieMandateId}."
             };
 
             inv.Lines.Add(new InvoiceLine
@@ -151,8 +176,35 @@ public class SubscriptionBillingJob
                             new EmailAttachment($"Rechnung_{inv.InvoiceNumber}.pdf", pdfBytes, "application/pdf")
                         },
                         ct: CancellationToken.None);
+
+                    inv.Status = InvoiceStatus.Sent;
+                    await _db.SaveChangesAsync();
                 }
                 catch { }
+            }
+        }
+
+        var invoicesToCollect = await _db.Invoices
+            .Where(i => i.SubscriptionId != null &&
+                        i.PaymentCollectionStatus == "scheduled" &&
+                        i.PaymentCollectionDueDate != null &&
+                        i.PaymentCollectionDueDate.Value.Date <= today &&
+                        i.Status != InvoiceStatus.Paid &&
+                        i.Status != InvoiceStatus.Cancelled)
+            .Select(i => i.Id)
+            .ToListAsync();
+
+        foreach (var invoiceId in invoicesToCollect)
+        {
+            try
+            {
+                await _mollie.CollectInvoiceAsync(invoiceId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                // Keep it scheduled. The next run first searches Mollie by invoice metadata,
+                // so a timeout can be retried without creating a second charge.
+                Console.Error.WriteLine($"Mollie collection failed for invoice {invoiceId}: {ex.Message}");
             }
         }
     }

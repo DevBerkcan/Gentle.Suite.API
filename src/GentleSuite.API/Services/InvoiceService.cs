@@ -46,6 +46,7 @@ public class InvoiceServiceImpl : IInvoiceService
     {
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct)
             ?? new CompanySettings { CompanyName = "Gentle Group" };
+        var taxMode = EnforceCompanyTaxMode(co.DefaultTaxMode, req.TaxMode);
         var year = DateTime.UtcNow.Year;
         var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
         var inv = new Invoice
@@ -57,7 +58,7 @@ public class InvoiceServiceImpl : IInvoiceService
             IntroText = req.IntroText ?? co?.InvoiceIntroTemplate,
             OutroText = req.OutroText ?? co?.InvoiceOutroTemplate,
             Notes = req.Notes,
-            TaxMode = req.TaxMode,
+            TaxMode = taxMode,
             InvoiceDate = DateTimeOffset.UtcNow,
             DueDate = DateTimeOffset.UtcNow.AddDays(req.PaymentTermDays),
             SellerTaxId = co?.TaxId,
@@ -68,7 +69,7 @@ public class InvoiceServiceImpl : IInvoiceService
         };
         if (req.Lines != null)
             foreach (var l in req.Lines)
-                inv.Lines.Add(new InvoiceLine { Title = l.Title, Description = l.Description, Unit = l.Unit, Quantity = l.Quantity, UnitPrice = l.UnitPrice, VatPercent = l.VatPercent, SortOrder = l.SortOrder });
+                inv.Lines.Add(new InvoiceLine { Title = l.Title, Description = l.Description, Unit = l.Unit, Quantity = l.Quantity, UnitPrice = l.UnitPrice, VatPercent = EffectiveVatPercent(taxMode, l.VatPercent), SortOrder = l.SortOrder });
         inv.RecalculateTotals();
         _db.Invoices.Add(inv);
         await _db.SaveChangesAsync(ct);
@@ -147,10 +148,10 @@ public class InvoiceServiceImpl : IInvoiceService
                 {
                     CustomerId = inv.CustomerId,
                     PlanId = plan.Id,
-                    Status = SubscriptionStatus.Active,
+                    Status = SubscriptionStatus.PendingConfirmation,
                     StartDate = now,
                     NextBillingDate = now.AddMonths(1),
-                    ConfirmedAt = now
+                    ConfirmedAt = null
                 };
                 _db.CustomerSubscriptions.Add(sub);
                 await _db.SaveChangesAsync(ct);
@@ -226,10 +227,10 @@ public class InvoiceServiceImpl : IInvoiceService
             {
                 CustomerId = inv.CustomerId,
                 PlanId = plan.Id,
-                Status = SubscriptionStatus.Active,
+                Status = SubscriptionStatus.PendingConfirmation,
                 StartDate = now,
                 NextBillingDate = now.AddMonths(1),
-                ConfirmedAt = now
+                ConfirmedAt = null
             };
             _db.CustomerSubscriptions.Add(sub);
             await _db.SaveChangesAsync(ct);
@@ -248,12 +249,14 @@ public class InvoiceServiceImpl : IInvoiceService
         var inv = await _db.Invoices.Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
         if (inv.IsFinalized || inv.Status != InvoiceStatus.Draft) throw new InvalidOperationException("Nur Entwurfsrechnungen koennen bearbeitet werden.");
         ValidateUpdateRequest(req);
+        var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
+        var taxMode = EnforceCompanyTaxMode(companyTaxMode, req.TaxMode);
 
         inv.Subject = req.Subject;
         inv.IntroText = req.IntroText;
         inv.OutroText = req.OutroText;
         inv.Notes = req.Notes;
-        inv.TaxMode = req.TaxMode;
+        inv.TaxMode = taxMode;
         inv.InvoiceDate = req.InvoiceDate;
         inv.DueDate = req.DueDate;
 
@@ -270,7 +273,7 @@ public class InvoiceServiceImpl : IInvoiceService
             existing.Unit = line.Unit;
             existing.Quantity = line.Quantity;
             existing.UnitPrice = line.UnitPrice;
-            existing.VatPercent = line.VatPercent;
+            existing.VatPercent = EffectiveVatPercent(taxMode, line.VatPercent);
             existing.DiscountPercent = line.DiscountPercent;
             existing.SortOrder = i;
         }
@@ -296,7 +299,7 @@ public class InvoiceServiceImpl : IInvoiceService
                     Unit = line.Unit,
                     Quantity = line.Quantity,
                     UnitPrice = line.UnitPrice,
-                    VatPercent = line.VatPercent,
+                    VatPercent = EffectiveVatPercent(taxMode, line.VatPercent),
                     SortOrder = inv.Lines.Count
                 });
             }
@@ -327,6 +330,10 @@ public class InvoiceServiceImpl : IInvoiceService
     {
         var inv = await _db.Invoices.Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
         if (inv.IsFinalized) throw new InvalidOperationException("Already finalized");
+        var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
+        inv.TaxMode = EnforceCompanyTaxMode(companyTaxMode, inv.TaxMode);
+        if (inv.TaxMode == TaxMode.SmallBusiness)
+            foreach (var line in inv.Lines) line.VatPercent = 0;
         inv.RecalculateTotals();
         inv.Status = InvoiceStatus.Final;
         inv.IsFinalized = true;
@@ -607,7 +614,7 @@ public class InvoiceServiceImpl : IInvoiceService
             Subject = req.Subject ?? "Zeiterfassung",
             IntroText = co?.InvoiceIntroTemplate,
             OutroText = co?.InvoiceOutroTemplate,
-            TaxMode = TaxMode.Standard,
+            TaxMode = co?.DefaultTaxMode ?? TaxMode.Standard,
             InvoiceDate = DateTimeOffset.UtcNow,
             DueDate = DateTimeOffset.UtcNow.AddDays(req.PaymentTermDays),
             SellerTaxId = co?.TaxId,
@@ -626,7 +633,7 @@ public class InvoiceServiceImpl : IInvoiceService
                 Unit = "h",
                 Quantity = e.Hours,
                 UnitPrice = rate,
-                VatPercent = 19,
+                VatPercent = EffectiveVatPercent(co?.DefaultTaxMode ?? TaxMode.Standard, 19),
                 SortOrder = sort++
             });
         }
@@ -637,5 +644,11 @@ public class InvoiceServiceImpl : IInvoiceService
         await _activity.LogAsync(req.CustomerId, "Invoice", inv.Id, "CreatedFromTime", $"Rechnung {inv.InvoiceNumber} aus {entries.Count} Zeiteinträgen erstellt", ct: ct);
         return (await GetByIdAsync(inv.Id, ct))!;
     }
+
+    private static TaxMode EnforceCompanyTaxMode(TaxMode companyMode, TaxMode requestedMode)
+        => companyMode == TaxMode.SmallBusiness ? TaxMode.SmallBusiness : requestedMode;
+
+    private static int EffectiveVatPercent(TaxMode taxMode, int requestedVatPercent)
+        => taxMode == TaxMode.SmallBusiness ? 0 : requestedVatPercent;
 
 }

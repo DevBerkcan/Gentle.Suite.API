@@ -164,6 +164,13 @@ public interface ISubscriptionService
     Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid subscriptionId, CancellationToken ct = default);
 }
 
+public interface IMolliePaymentService
+{
+    Task<MollieMandateCheckoutDto> StartMandateCheckoutAsync(Guid subscriptionId, CancellationToken ct = default);
+    Task HandlePaymentWebhookAsync(string paymentId, CancellationToken ct = default);
+    Task CollectInvoiceAsync(Guid invoiceId, CancellationToken ct = default);
+}
+
 public interface ITimeTrackingService
 {
     Task<List<TimeEntryDto>> GetEntriesAsync(DateTimeOffset? from, DateTimeOffset? to, Guid? projectId, Guid? customerId, CancellationToken ct = default);

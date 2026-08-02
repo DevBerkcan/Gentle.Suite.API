@@ -68,6 +68,7 @@ builder.Services.AddScoped<IInvoiceService, InvoiceServiceImpl>();
 builder.Services.AddScoped<IExpenseService, ExpenseServiceImpl>();
 builder.Services.AddScoped<IProjectService, ProjectServiceImpl>();
 builder.Services.AddScoped<ISubscriptionService, SubscriptionServiceImpl>();
+builder.Services.AddScoped<IMolliePaymentService, MolliePaymentService>();
 builder.Services.AddScoped<IServiceCatalogService, ServiceCatalogServiceImpl>();
 builder.Services.AddScoped<IDashboardService, DashboardServiceImpl>();
 builder.Services.AddScoped<IActivityLogService, ActivityLogServiceImpl>();
@@ -167,7 +168,15 @@ try
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ReminderStop') ALTER TABLE "Invoices" ADD "ReminderStop" BIT NOT NULL DEFAULT 0;""");
 
     // GentleBook integration: external-payment idempotency + tenant-to-customer mapping
-    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ExternalPaymentReference') ALTER TABLE "Invoices" ADD "ExternalPaymentReference" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ExternalPaymentReference') ALTER TABLE "Invoices" ADD "ExternalPaymentReference" NVARCHAR(450) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ExternalPaymentReference' AND CHARACTER_MAXIMUM_LENGTH=-1) ALTER TABLE "Invoices" ALTER COLUMN "ExternalPaymentReference" NVARCHAR(450) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='PaymentCollectionStatus') ALTER TABLE "Invoices" ADD "PaymentCollectionStatus" NVARCHAR(32) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='PaymentCollectionDueDate') ALTER TABLE "Invoices" ADD "PaymentCollectionDueDate" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieCustomerId') ALTER TABLE "CustomerSubscriptions" ADD "MollieCustomerId" NVARCHAR(64) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieMandateId') ALTER TABLE "CustomerSubscriptions" ADD "MollieMandateId" NVARCHAR(64) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieMandateStatus') ALTER TABLE "CustomerSubscriptions" ADD "MollieMandateStatus" NVARCHAR(32) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieFirstPaymentId') ALTER TABLE "CustomerSubscriptions" ADD "MollieFirstPaymentId" NVARCHAR(64) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieFirstPaymentStatus') ALTER TABLE "CustomerSubscriptions" ADD "MollieFirstPaymentStatus" NVARCHAR(32) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Invoices_ExternalPaymentReference' AND object_id=OBJECT_ID('Invoices')) CREATE UNIQUE INDEX "IX_Invoices_ExternalPaymentReference" ON "Invoices" ("ExternalPaymentReference") WHERE "ExternalPaymentReference" IS NOT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ExternalRef') ALTER TABLE "Customers" ADD "ExternalRef" NVARCHAR(MAX) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Customers_ExternalRef' AND object_id=OBJECT_ID('Customers')) CREATE UNIQUE INDEX "IX_Customers_ExternalRef" ON "Customers" ("ExternalRef") WHERE "ExternalRef" IS NOT NULL;""");
@@ -316,9 +325,9 @@ await db.Database.ExecuteSqlRawAsync("""
         UPDATE "CompanySettings" SET
             "CompanyName"       = 'Gentle Group',
             "LegalName"         = 'Berk-Can Atesoglu',
-            "Street"            = 'Oberbilker Allee 319',
-            "ZipCode"           = '40227',
-            "City"              = 'Düsseldorf',
+            "Street"            = 'Girardetstraße 17',
+            "ZipCode"           = '42109',
+            "City"              = 'Wuppertal',
             "Country"           = 'Deutschland',
             "Phone"             = '01754701892',
             "Email"             = 'office@gentlegroup.de',
@@ -376,6 +385,7 @@ app.MapHangfireDashboard("/hangfire");
 RecurringJob.RemoveIfExists("check-overdue-invoices");
 RecurringJob.RemoveIfExists("check-open-quotes");
 RecurringJob.RemoveIfExists("generate-recurring-expenses");
+RecurringJob.RemoveIfExists("generate-subscription-invoices");
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
 RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6));
 

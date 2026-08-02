@@ -405,7 +405,7 @@ public class ProjectsController(IProjectService svc, IHubContext<ProjectBoardHub
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
-public class SubscriptionsController(ISubscriptionService svc) : ControllerBase
+public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentService mollie) : ControllerBase
 {
     [HttpGet] public async Task<ActionResult<List<CustomerSubscriptionDto>>> All() => Ok(await svc.GetAllAsync());
     [HttpGet("plans")] public async Task<ActionResult<List<SubscriptionPlanDto>>> Plans() => Ok(await svc.GetPlansAsync());
@@ -416,7 +416,19 @@ public class SubscriptionsController(ISubscriptionService svc) : ControllerBase
     [HttpPost] public async Task<ActionResult<CustomerSubscriptionDto>> Create(CreateSubscriptionRequest req) => Ok(await svc.CreateAsync(req));
     [HttpPut("{id}/status")] public async Task<IActionResult> UpdateStatus(Guid id, UpdateSubscriptionStatusRequest req) { await svc.UpdateStatusAsync(id, req); return NoContent(); }
     [HttpPost("{id}/confirm")] public async Task<IActionResult> Confirm(Guid id) { await svc.ConfirmAsync(id); return NoContent(); }
+    [HttpPost("{id}/mollie/mandate")] public async Task<ActionResult<MollieMandateCheckoutDto>> StartMollieMandate(Guid id) => Ok(await mollie.StartMandateCheckoutAsync(id));
     [HttpGet("{id}/invoices")] public async Task<ActionResult<List<SubscriptionInvoiceDto>>> GetInvoices(Guid id) => Ok(await svc.GetInvoicesAsync(id));
+}
+
+[ApiController, Route("api/mollie"), AllowAnonymous]
+public class MollieWebhookController(IMolliePaymentService mollie) : ControllerBase
+{
+    [HttpPost("webhook")]
+    public async Task<IActionResult> PaymentWebhook([FromForm] string id)
+    {
+        await mollie.HandlePaymentWebhookAsync(id);
+        return Ok();
+    }
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
@@ -583,13 +595,13 @@ public class UsersController(IUserService svc) : ControllerBase
 }
 
 [ApiController, Route("api/system"), Authorize(Policy = "AdminOnly")]
-public class SystemController(SubscriptionBillingJob billing) : ControllerBase
+public class SystemController : ControllerBase
 {
     [HttpPost("trigger-subscription-invoices")]
-    public async Task<IActionResult> TriggerSubscriptionInvoices()
+    public IActionResult TriggerSubscriptionInvoices()
     {
-        await billing.RunAsync();
-        return NoContent();
+        RecurringJob.TriggerJob("subscription-billing");
+        return Accepted();
     }
     [HttpPost("trigger-bank-sync")]
     public IActionResult TriggerBankSync()

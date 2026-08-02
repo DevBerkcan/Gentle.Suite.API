@@ -563,9 +563,9 @@ public class SubscriptionServiceImpl : ISubscriptionService
     public async Task<List<CustomerSubscriptionDto>> GetAllAsync(CancellationToken ct) => _m.Map<List<CustomerSubscriptionDto>>(await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).OrderByDescending(s => s.CreatedAt).ToListAsync(ct));
     public async Task<List<CustomerSubscriptionDto>> GetCustomerSubscriptionsAsync(Guid cid, CancellationToken ct) => _m.Map<List<CustomerSubscriptionDto>>(await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).Where(s => s.CustomerId == cid).OrderByDescending(s => s.CreatedAt).ToListAsync(ct));
     public async Task<CustomerSubscriptionDto> CreateAsync(CreateSubscriptionRequest req, CancellationToken ct) { var start = req.StartDate ?? DateTimeOffset.UtcNow; var s = new CustomerSubscription { CustomerId = req.CustomerId, PlanId = req.PlanId, Status = SubscriptionStatus.PendingConfirmation, StartDate = start, NextBillingDate = start.AddMonths(1), ContractDurationMonths = req.ContractDurationMonths }; _db.CustomerSubscriptions.Add(s); await _db.SaveChangesAsync(ct); return _m.Map<CustomerSubscriptionDto>(await _db.CustomerSubscriptions.Include(x => x.Plan).Include(x => x.Customer).FirstAsync(x => x.Id == s.Id, ct)); }
-    public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
-    public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
-    public async Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid sid, CancellationToken ct) => await _db.Invoices.Where(i => i.SubscriptionId == sid).OrderByDescending(i => i.InvoiceDate).Select(i => new SubscriptionInvoiceDto(i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status)).ToListAsync(ct);
+    public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && !string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Das Abonnement kann erst mit einem gültigen Mollie-Mandat aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
+    public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Das Abonnement kann erst mit einem gültigen Mollie-Mandat aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
+    public async Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid sid, CancellationToken ct) => await _db.Invoices.Where(i => i.SubscriptionId == sid).OrderByDescending(i => i.InvoiceDate).Select(i => new SubscriptionInvoiceDto(i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate)).ToListAsync(ct);
 }
 
 // === Expense ===
@@ -697,6 +697,26 @@ public class CompanySettingsServiceImpl : ICompanySettingsService
         s.InvoiceIntroTemplate = req.InvoiceIntroTemplate; s.InvoiceOutroTemplate = req.InvoiceOutroTemplate;
         s.QuoteIntroTemplate = req.QuoteIntroTemplate; s.QuoteOutroTemplate = req.QuoteOutroTemplate;
         s.InvoicePaymentTermDays = req.InvoicePaymentTermDays; s.QuoteValidityDays = req.QuoteValidityDays;
+        if (req.DefaultTaxMode == TaxMode.SmallBusiness)
+        {
+            var draftInvoices = await _db.Invoices.Include(i => i.Lines)
+                .Where(i => !i.IsFinalized && i.Status == InvoiceStatus.Draft).ToListAsync(ct);
+            foreach (var invoice in draftInvoices)
+            {
+                invoice.TaxMode = TaxMode.SmallBusiness;
+                foreach (var line in invoice.Lines) line.VatPercent = 0;
+                invoice.RecalculateTotals();
+            }
+
+            var draftQuotes = await _db.Quotes.Include(q => q.Lines)
+                .Where(q => q.IsCurrentVersion && q.Status == QuoteStatus.Draft).ToListAsync(ct);
+            foreach (var quote in draftQuotes)
+            {
+                quote.TaxMode = TaxMode.SmallBusiness;
+                quote.TaxRate = 0;
+                foreach (var line in quote.Lines) line.VatPercent = 0;
+            }
+        }
         await _db.SaveChangesAsync(ct); return _m.Map<CompanySettingsDto>(s);
     }
 }
@@ -1024,13 +1044,17 @@ public class ExportServiceImpl(AppDbContext db, IPdfService pdf, IFileStorageSer
             // DATEV Jahres-CSV
             var datevBytes = BuildDatevYearlyCsv(year, from, to, co, includeInvoices, includeExpenses);
             var datevEntry = zip.CreateEntry($"DATEV_{year}.csv", CompressionLevel.Fastest);
-            using var datevEs = datevEntry.Open();
-            await datevEs.WriteAsync(datevBytes, ct);
+            await using (var datevEs = datevEntry.Open())
+            {
+                await datevEs.WriteAsync(datevBytes, ct);
+            }
 
             // Zusammenfassung CSV
             var sumEntry = zip.CreateEntry($"Zusammenfassung_{year}.csv", CompressionLevel.Fastest);
-            using var sumEs = sumEntry.Open();
-            await sumEs.WriteAsync(Encoding.UTF8.GetBytes(summary.ToString()), ct);
+            await using (var sumEs = sumEntry.Open())
+            {
+                await sumEs.WriteAsync(Encoding.UTF8.GetBytes(summary.ToString()), ct);
+            }
         }
 
         ms.Position = 0;
@@ -1066,7 +1090,7 @@ public class ExportServiceImpl(AppDbContext db, IPdfService pdf, IFileStorageSer
                 sb.AppendLine($"{amount};S;EUR;;;;\"{account}\";\"1600\";;{exp.ExpenseDate:ddMM};\"{exp.ExpenseNumber ?? ""}\";;;\"{exp.Supplier ?? exp.Description ?? ""}\"");
             }
         }
-        return Encoding.GetEncoding("iso-8859-1").GetBytes(sb.ToString());
+        return Encoding.Latin1.GetBytes(sb.ToString());
     }
 
     private static string SanitizeFileName(string s) =>
