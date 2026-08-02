@@ -43,6 +43,12 @@ public class CustomerSubscription : BaseEntity
     public string? MollieMandateStatus { get; set; }
     public string? MollieFirstPaymentId { get; set; }
     public string? MollieFirstPaymentStatus { get; set; }
+    public int MollieMandateAttempt { get; set; }
+    public DateTimeOffset? MandateEmailSentAt { get; set; }
+    public string? MandateEmailRecipient { get; set; }
+    public string? MandateEmailStatus { get; set; }
+    public string? MandateEmailLastError { get; set; }
+    public int MandateEmailAttemptCount { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity

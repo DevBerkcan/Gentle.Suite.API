@@ -133,7 +133,12 @@ public class MappingProfile : Profile
                 s.Plan.MonthlyPrice,
                 s.ContractDurationMonths,
                 s.ConfirmedAt,
-                s.MollieMandateStatus
+                s.MollieMandateStatus,
+                s.MandateEmailSentAt,
+                s.MandateEmailRecipient,
+                s.MandateEmailStatus,
+                s.MandateEmailLastError,
+                s.MandateEmailAttemptCount
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()

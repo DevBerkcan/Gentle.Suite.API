@@ -157,6 +157,7 @@ public interface ISubscriptionService
     Task<SubscriptionPlanDto> UpdatePlanAsync(Guid id, UpdatePlanRequest req, CancellationToken ct = default);
     Task DeletePlanAsync(Guid id, CancellationToken ct = default);
     Task<List<CustomerSubscriptionDto>> GetAllAsync(CancellationToken ct = default);
+    Task<CustomerSubscriptionDto> GetByIdAsync(Guid subscriptionId, CancellationToken ct = default);
     Task<List<CustomerSubscriptionDto>> GetCustomerSubscriptionsAsync(Guid customerId, CancellationToken ct = default);
     Task<CustomerSubscriptionDto> CreateAsync(CreateSubscriptionRequest req, CancellationToken ct = default);
     Task UpdateStatusAsync(Guid subscriptionId, UpdateSubscriptionStatusRequest req, CancellationToken ct = default);
@@ -167,6 +168,7 @@ public interface ISubscriptionService
 public interface IMolliePaymentService
 {
     Task<MollieMandateCheckoutDto> StartMandateCheckoutAsync(Guid subscriptionId, CancellationToken ct = default);
+    Task<MandateEmailResultDto> SendMandateEmailAsync(Guid subscriptionId, CancellationToken ct = default);
     Task HandlePaymentWebhookAsync(string paymentId, CancellationToken ct = default);
     Task CollectInvoiceAsync(Guid invoiceId, CancellationToken ct = default);
 }

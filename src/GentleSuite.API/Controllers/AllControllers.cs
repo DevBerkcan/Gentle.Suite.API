@@ -413,10 +413,22 @@ public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentSer
     [HttpPut("plans/{id}")] public async Task<ActionResult<SubscriptionPlanDto>> UpdatePlan(Guid id, UpdatePlanRequest req) => Ok(await svc.UpdatePlanAsync(id, req));
     [HttpDelete("plans/{id}")] public async Task<IActionResult> DeletePlan(Guid id) { await svc.DeletePlanAsync(id); return NoContent(); }
     [HttpGet("customer/{customerId}")] public async Task<ActionResult<List<CustomerSubscriptionDto>>> CustomerSubs(Guid customerId) => Ok(await svc.GetCustomerSubscriptionsAsync(customerId));
-    [HttpPost] public async Task<ActionResult<CustomerSubscriptionDto>> Create(CreateSubscriptionRequest req) => Ok(await svc.CreateAsync(req));
+    [HttpPost]
+    public async Task<ActionResult<CustomerSubscriptionDto>> Create(CreateSubscriptionRequest req)
+    {
+        var created = await svc.CreateAsync(req);
+        await mollie.SendMandateEmailAsync(created.Id);
+        return Ok(await svc.GetByIdAsync(created.Id));
+    }
     [HttpPut("{id}/status")] public async Task<IActionResult> UpdateStatus(Guid id, UpdateSubscriptionStatusRequest req) { await svc.UpdateStatusAsync(id, req); return NoContent(); }
     [HttpPost("{id}/confirm")] public async Task<IActionResult> Confirm(Guid id) { await svc.ConfirmAsync(id); return NoContent(); }
     [HttpPost("{id}/mollie/mandate")] public async Task<ActionResult<MollieMandateCheckoutDto>> StartMollieMandate(Guid id) => Ok(await mollie.StartMandateCheckoutAsync(id));
+    [HttpPost("{id}/mollie/mandate/email")]
+    public async Task<ActionResult<MandateEmailResultDto>> SendMollieMandateEmail(Guid id)
+    {
+        var result = await mollie.SendMandateEmailAsync(id);
+        return result.Sent ? Ok(result) : BadRequest(result);
+    }
     [HttpGet("{id}/invoices")] public async Task<ActionResult<List<SubscriptionInvoiceDto>>> GetInvoices(Guid id) => Ok(await svc.GetInvoicesAsync(id));
 }
 
