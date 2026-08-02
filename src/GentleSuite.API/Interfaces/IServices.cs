@@ -159,6 +159,7 @@ public interface ISubscriptionService
     Task<List<CustomerSubscriptionDto>> GetAllAsync(CancellationToken ct = default);
     Task<CustomerSubscriptionDto> GetByIdAsync(Guid subscriptionId, CancellationToken ct = default);
     Task<List<CustomerSubscriptionDto>> GetCustomerSubscriptionsAsync(Guid customerId, CancellationToken ct = default);
+    Task<List<EligibleSubscriptionQuoteDto>> GetEligibleQuotesAsync(Guid customerId, CancellationToken ct = default);
     Task<CustomerSubscriptionDto> CreateAsync(CreateSubscriptionRequest req, CancellationToken ct = default);
     Task UpdateStatusAsync(Guid subscriptionId, UpdateSubscriptionStatusRequest req, CancellationToken ct = default);
     Task ConfirmAsync(Guid subscriptionId, CancellationToken ct = default);

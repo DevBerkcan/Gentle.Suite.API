@@ -129,6 +129,7 @@ public class QuoteDetailDto
     public string? SignedByName { get; set; }
     public string? SignedByEmail { get; set; }
     public DateTimeOffset? SignedAt { get; set; }
+    public bool B2bAuthorityConfirmed { get; set; }
     public string? PrimaryContactEmail { get; set; }
     public List<QuoteLineDto> Lines { get; set; } = new();
     public List<string>? LegalTextBlockKeys { get; set; }
@@ -139,7 +140,7 @@ public record QuoteLineDto(Guid Id, Guid? ServiceCatalogItemId, string Title, st
 public record CreateQuoteRequest(Guid CustomerId, Guid? ContactId, string? Subject, string? IntroText, string? OutroText, string? Notes, decimal TaxRate = 19m, TaxMode TaxMode = TaxMode.Standard, List<CreateQuoteLineRequest>? Lines = null, Guid? TemplateId = null, List<string>? LegalTextBlockKeys = null);
 public record CreateQuoteLineRequest(Guid? ServiceCatalogItemId, string Title, string? Description, decimal Quantity, decimal UnitPrice, decimal DiscountPercent = 0, QuoteLineType LineType = QuoteLineType.OneTime, int VatPercent = 19, int SortOrder = 0);
 public record SendQuoteRequest(string? RecipientEmail = null, string? Message = null, int ExpirationDays = 30, bool RequireSignature = true);
-public record ApprovalRequest(bool Accepted, string? Comment, string? SignatureData, string? SignedByName, string? SignedByEmail);
+public record ApprovalRequest(bool Accepted, string? Comment, string? SignatureData, string? SignedByName, string? SignedByEmail, bool B2bAuthorityConfirmed = false);
 public record UpdateQuoteRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, decimal? TaxRate, TaxMode? TaxMode);
 public record QuoteTemplateDto(Guid Id, string Name, string? Description, List<QuoteTemplateLineDto> Lines);
 public record QuoteTemplateLineDto(Guid Id, string Title, string? Description, decimal Quantity, decimal UnitPrice, QuoteLineType LineType, int SortOrder);
@@ -242,8 +243,9 @@ public record ConfirmBankRequest(string RequisitionId);
 public record SubscriptionPlanDto(Guid Id, string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category, bool IsActive, WorkScopeRuleDto? WorkScopeRule, SupportPolicyDto? SupportPolicy);
 public record WorkScopeRuleDto(string? FairUseDescription, List<string> IncludedItems, List<string> ExcludedItems, int? MaxHoursPerMonth);
 public record SupportPolicyDto(string? S0ResponseTarget, string? S1ResponseTarget, string? S2ResponseTarget, string? S3ResponseTarget);
-public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Guid CustomerId, string? CustomerName, SubscriptionStatus Status, DateTimeOffset StartDate, DateTimeOffset NextBillingDate, decimal MonthlyPrice, int? ContractDurationMonths, DateTimeOffset? ConfirmedAt, string? MollieMandateStatus, DateTimeOffset? MandateEmailSentAt, string? MandateEmailRecipient, string? MandateEmailStatus, string? MandateEmailLastError, int MandateEmailAttemptCount);
-public record CreateSubscriptionRequest(Guid CustomerId, Guid PlanId, DateTimeOffset? StartDate, int? ContractDurationMonths = null);
+public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Guid CustomerId, string? CustomerName, SubscriptionStatus Status, DateTimeOffset StartDate, DateTimeOffset NextBillingDate, decimal MonthlyPrice, BillingCycle ContractBillingCycle, int? ContractDurationMonths, Guid? ContractQuoteId, string? ContractReference, int? ContractVersion, DateTimeOffset? ContractAcceptedAt, string? ContractAcceptedByName, string? ContractAcceptedByEmail, bool BusinessCustomerConfirmed, DateTimeOffset? BusinessCustomerConfirmedAt, DateTimeOffset? ConfirmedAt, string? MollieMandateStatus, DateTimeOffset? MandateEmailSentAt, string? MandateEmailRecipient, string? MandateEmailStatus, string? MandateEmailLastError, int MandateEmailAttemptCount);
+public record CreateSubscriptionRequest(Guid CustomerId, Guid PlanId, Guid ContractQuoteId, bool BusinessCustomerConfirmed, DateTimeOffset? StartDate, int? ContractDurationMonths = null);
+public record EligibleSubscriptionQuoteDto(Guid Id, string QuoteNumber, int Version, string? Subject, decimal MonthlyPrice, DateTimeOffset AcceptedAt, string? SignedByName, string? SignedByEmail);
 public record SubscriptionInvoiceDto(Guid Id, string InvoiceNumber, DateTimeOffset InvoiceDate, DateTimeOffset? BillingPeriodStart, DateTimeOffset? BillingPeriodEnd, decimal GrossTotal, InvoiceStatus Status, string? PaymentCollectionStatus, DateTimeOffset? PaymentCollectionDueDate);
 public record UpdateSubscriptionStatusRequest(SubscriptionStatus Status, string? Reason = null);
 public record MollieMandateCheckoutDto(string CheckoutUrl, string PaymentId, string Status);

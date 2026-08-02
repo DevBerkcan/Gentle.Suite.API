@@ -354,12 +354,8 @@ END;
             db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-reminder", Subject = "Zahlungserinnerung – Rechnung {{ InvoiceNumber }}", Body = "<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px 24px'><div style='background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e7eb'><h2 style='color:#1a1a1a;margin-top:0'>Zahlungserinnerung</h2><p style='color:#374151'>Hallo {{ ContactName }},</p><p style='color:#374151'>wir möchten Sie freundlich daran erinnern, dass folgende Rechnung noch offen ist:</p><table style='width:100%;border-collapse:collapse;margin:16px 0'><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Rechnungsnummer</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ InvoiceNumber }}</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Betrag</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ Amount }} EUR</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Fälligkeitsdatum</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ DueDate }}</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Überfällig seit</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ DaysOverdue }} Tagen</td></tr></table><p style='color:#374151'>Bitte überweisen Sie den ausstehenden Betrag schnellstmöglich auf unser Konto.</p><p style='color:#374151'>Falls Sie die Zahlung bereits veranlasst haben, bitten wir Sie, diese E-Mail zu ignorieren.</p><hr style='border:none;border-top:1px solid #e5e7eb;margin:24px 0'/><p style='color:#374151;font-size:14px;margin:0'>Mit freundlichen Grüßen<br/><b>Berkcan Ünal</b><br/>Gentlegroup – Digital Agency<br/><a href='mailto:office@gentlegroup.de' style='color:#0f172a'>office@gentlegroup.de</a></p></div></div>" });
         if (!existing.Contains("password-reset"))
             db.EmailTemplates.Add(new EmailTemplate { Key = "password-reset", Subject = "Passwort zurücksetzen – GentleSuite", Body = "<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px 24px'><div style='background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e7eb'><h2 style='color:#1a1a1a;margin-top:0'>Passwort zurücksetzen</h2><p style='color:#374151'>Hallo {{ FullName }},</p><p style='color:#374151'>Sie haben eine Anfrage zum Zurücksetzen Ihres Passworts gestellt. Klicken Sie auf den folgenden Button, um ein neues Passwort festzulegen:</p><div style='text-align:center;margin:32px 0'><a href='{{ ResetUrl }}' style='background:#0f172a;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;display:inline-block'>Passwort zurücksetzen</a></div><p style='color:#6b7280;font-size:13px'>Dieser Link ist 24 Stunden gültig. Falls Sie keine Anfrage gestellt haben, können Sie diese E-Mail ignorieren.</p><hr style='border:none;border-top:1px solid #e5e7eb;margin:24px 0'/><p style='color:#374151;font-size:14px;margin:0'>Mit freundlichen Grüßen<br/><b>Berkcan Ünal</b><br/>Gentlegroup – Digital Agency<br/><a href='mailto:office@gentlegroup.de' style='color:#0f172a'>office@gentlegroup.de</a></p></div></div>" });
-        if (!existing.Contains("subscription-mandate"))
-            db.EmailTemplates.Add(new EmailTemplate
-            {
-                Key = "subscription-mandate",
-                Subject = "Zahlungsart für {{ PlanName }} sicher einrichten",
-                Body = """
+        const string mandateSubject = "Zahlungsart für {{ PlanName }} sicher einrichten – {{ ContractReference }}";
+        const string mandateBody = """
                 <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
                   <div style='max-width:620px;margin:0 auto'>
                     <div style='padding:0 8px 20px;font-size:22px;font-weight:700;color:#344054'>GentleSuite</div>
@@ -369,6 +365,8 @@ END;
                       <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Monatliche Zahlung sicher einrichten</h1>
                       <p style='line-height:1.65;color:#475467'>für den vereinbarten Tarif <strong>{{ PlanName }}</strong> über <strong>{{ MonthlyPrice }} EUR monatlich</strong> benötigen wir einmalig Ihre Zustimmung zur automatischen Zahlungsabwicklung über Mollie.</p>
                       <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                        <div style='margin-bottom:8px'><strong>Vertragsgrundlage:</strong> Angebot {{ ContractReference }}</div>
+                        <div style='margin-bottom:8px'><strong>Angenommen am:</strong> {{ ContractAcceptedAt }}</div>
                         <div style='margin-bottom:8px'><strong>Tarif:</strong> {{ PlanName }}</div>
                         <div style='margin-bottom:8px'><strong>Monatlicher Betrag:</strong> {{ MonthlyPrice }} EUR</div>
                         <div><strong>Vertragsbeginn:</strong> {{ StartDate }}</div>
@@ -376,15 +374,24 @@ END;
                       <div style='text-align:center;margin:30px 0'>
                         <a href='{{ CheckoutUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Zahlungsart sicher einrichten</a>
                       </div>
-                      <p style='font-size:13px;line-height:1.6;color:#667085'>Die Einrichtung ist nur einmal erforderlich. Mollie kann dafür eine Autorisierungszahlung über 0,01 EUR durchführen. Danach werden die vereinbarten Monatsbeträge automatisch eingezogen. Die jeweilige Rechnung mit Betrag und Einzugsdatum erhalten Sie vor dem Einzug.</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Der Vertrag wurde bereits mit dem oben genannten Angebot geschlossen. Dieser Link dient ausschließlich der einmaligen Einrichtung der automatischen Zahlungsabwicklung und begründet keinen neuen Vertrag.</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Mollie kann dafür eine Autorisierungszahlung über 0,01 EUR durchführen. Danach werden die vertraglich vereinbarten Monatsbeträge automatisch eingezogen. Die jeweilige Rechnung mit dem exakten Betrag und Einzugsdatum erhalten Sie vor dem Einzug.</p>
                       <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie diese Vereinbarung nicht kennen, verwenden Sie den Link bitte nicht und antworten Sie auf diese E-Mail.</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Informationen zur Verarbeitung Ihrer Daten durch Gentle Group und den Zahlungsdienstleister Mollie finden Sie in unserer <a href='https://www.gentlegroup.de/datenschutzerklaerung' style='color:#344054'>Datenschutzerklärung</a>.</p>
                       <hr style='border:0;border-top:1px solid #eaecf0;margin:28px 0'/>
                       <p style='font-size:13px;line-height:1.6;color:#475467;margin:0'>Mit freundlichen Grüßen<br/><strong>Gentle Group</strong><br/>Girardetstraße 17 · 42109 Wuppertal<br/><a href='mailto:office@gentlegroup.de' style='color:#344054'>office@gentlegroup.de</a></p>
                     </div>
                   </div>
                 </div>
-                """
-            });
+                """;
+        if (!existing.Contains("subscription-mandate"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "subscription-mandate", Subject = mandateSubject, Body = mandateBody });
+        else
+        {
+            var mandateTemplate = await db.EmailTemplates.FirstAsync(x => x.Key == "subscription-mandate");
+            mandateTemplate.Subject = mandateSubject;
+            mandateTemplate.Body = mandateBody;
+        }
         await db.SaveChangesAsync();
     }
 

@@ -563,9 +563,83 @@ public class SubscriptionServiceImpl : ISubscriptionService
     public async Task<List<CustomerSubscriptionDto>> GetAllAsync(CancellationToken ct) => _m.Map<List<CustomerSubscriptionDto>>(await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).OrderByDescending(s => s.CreatedAt).ToListAsync(ct));
     public async Task<CustomerSubscriptionDto> GetByIdAsync(Guid sid, CancellationToken ct) => _m.Map<CustomerSubscriptionDto>(await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).FirstOrDefaultAsync(s => s.Id == sid, ct) ?? throw new KeyNotFoundException());
     public async Task<List<CustomerSubscriptionDto>> GetCustomerSubscriptionsAsync(Guid cid, CancellationToken ct) => _m.Map<List<CustomerSubscriptionDto>>(await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).Where(s => s.CustomerId == cid).OrderByDescending(s => s.CreatedAt).ToListAsync(ct));
-    public async Task<CustomerSubscriptionDto> CreateAsync(CreateSubscriptionRequest req, CancellationToken ct) { var customerExists = await _db.Customers.AnyAsync(c => c.Id == req.CustomerId, ct); if (!customerExists) throw new ArgumentException("Der Kunde wurde nicht gefunden."); var plan = await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Id == req.PlanId, ct) ?? throw new ArgumentException("Der Tarif wurde nicht gefunden."); if (!plan.IsActive) throw new InvalidOperationException("Der gewählte Tarif ist nicht aktiv."); var duplicate = await _db.CustomerSubscriptions.AnyAsync(s => s.CustomerId == req.CustomerId && s.PlanId == req.PlanId && (s.Status == SubscriptionStatus.PendingConfirmation || s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.Paused), ct); if (duplicate) throw new InvalidOperationException("Für diesen Kunden und Tarif besteht bereits eine laufende oder ausstehende Serienrechnung."); var start = req.StartDate ?? DateTimeOffset.UtcNow; var s = new CustomerSubscription { CustomerId = req.CustomerId, PlanId = req.PlanId, Status = SubscriptionStatus.PendingConfirmation, StartDate = start, NextBillingDate = start.AddMonths(1), ContractDurationMonths = req.ContractDurationMonths }; _db.CustomerSubscriptions.Add(s); await _db.SaveChangesAsync(ct); return await GetByIdAsync(s.Id, ct); }
-    public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && !string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Das Abonnement kann erst mit einem gültigen Mollie-Mandat aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
-    public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Das Abonnement kann erst mit einem gültigen Mollie-Mandat aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
+    public async Task<List<EligibleSubscriptionQuoteDto>> GetEligibleQuotesAsync(Guid customerId, CancellationToken ct) => await _db.Quotes
+        .AsNoTracking()
+        .Include(q => q.Lines)
+        .Where(q => q.CustomerId == customerId && q.IsCurrentVersion &&
+            (q.Status == QuoteStatus.Accepted || q.Status == QuoteStatus.Ordered) &&
+            q.SignatureStatus == SignatureStatus.Signed && q.SignedAt != null && q.B2bAuthorityConfirmed &&
+            q.Lines.Any(l => l.LineType == QuoteLineType.RecurringMonthly) &&
+            !_db.CustomerSubscriptions.Any(s => s.ContractQuoteId == q.Id))
+        .OrderByDescending(q => q.SignedAt)
+        .Select(q => new EligibleSubscriptionQuoteDto(
+            q.Id, q.QuoteNumber, q.Version, q.Subject,
+            q.Lines.Where(l => l.LineType == QuoteLineType.RecurringMonthly)
+                .Sum(l => l.Quantity * l.UnitPrice * (1 - l.DiscountPercent / 100m)),
+            q.SignedAt!.Value, q.SignedByName, q.SignedByEmail))
+        .ToListAsync(ct);
+
+    public async Task<CustomerSubscriptionDto> CreateAsync(CreateSubscriptionRequest req, CancellationToken ct)
+    {
+        if (!req.BusinessCustomerConfirmed)
+            throw new InvalidOperationException("Bitte bestätigen Sie, dass der Vertrag ausschließlich mit einem Unternehmer (B2B) geschlossen wurde.");
+
+        var customerExists = await _db.Customers.AnyAsync(c => c.Id == req.CustomerId, ct);
+        if (!customerExists) throw new ArgumentException("Der Kunde wurde nicht gefunden.");
+        var plan = await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Id == req.PlanId, ct)
+            ?? throw new ArgumentException("Der Tarif wurde nicht gefunden.");
+        if (!plan.IsActive) throw new InvalidOperationException("Der gewählte Tarif ist nicht aktiv.");
+        if (plan.BillingCycle != BillingCycle.Monthly)
+            throw new InvalidOperationException("Dieser rechtssichere Ablauf ist derzeit ausschließlich für monatliche B2B-Serienrechnungen freigegeben.");
+
+        var quote = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == req.ContractQuoteId, ct)
+            ?? throw new ArgumentException("Das ausgewählte Vertragsangebot wurde nicht gefunden.");
+        if (quote.CustomerId != req.CustomerId)
+            throw new InvalidOperationException("Das Vertragsangebot gehört nicht zum ausgewählten Kunden.");
+        if (!quote.IsCurrentVersion || quote.Status is not (QuoteStatus.Accepted or QuoteStatus.Ordered) ||
+            quote.SignatureStatus != SignatureStatus.Signed || quote.SignedAt == null || !quote.B2bAuthorityConfirmed)
+            throw new InvalidOperationException("Für die Serienrechnung ist ein aktuell angenommenes B2B-Angebot mit Unterschrift und Vertretungsbestätigung erforderlich.");
+
+        var agreedMonthlyPrice = quote.Lines
+            .Where(l => l.LineType == QuoteLineType.RecurringMonthly)
+            .Sum(l => l.Total);
+        if (agreedMonthlyPrice <= 0)
+            throw new InvalidOperationException("Das Vertragsangebot enthält keinen monatlichen Leistungsbetrag.");
+        if (await _db.CustomerSubscriptions.AnyAsync(s => s.ContractQuoteId == quote.Id, ct))
+            throw new InvalidOperationException("Für dieses Vertragsangebot wurde bereits eine Serienrechnung angelegt.");
+
+        var duplicate = await _db.CustomerSubscriptions.AnyAsync(s => s.CustomerId == req.CustomerId && s.PlanId == req.PlanId &&
+            (s.Status == SubscriptionStatus.PendingConfirmation || s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.Paused), ct);
+        if (duplicate)
+            throw new InvalidOperationException("Für diesen Kunden und Tarif besteht bereits eine laufende oder ausstehende Serienrechnung.");
+
+        var start = req.StartDate ?? DateTimeOffset.UtcNow;
+        var subscription = new CustomerSubscription
+        {
+            CustomerId = req.CustomerId,
+            PlanId = req.PlanId,
+            Status = SubscriptionStatus.PendingConfirmation,
+            StartDate = start,
+            NextBillingDate = start.AddMonths(1),
+            ContractDurationMonths = req.ContractDurationMonths,
+            ContractQuoteId = quote.Id,
+            ContractReference = quote.QuoteNumber,
+            ContractVersion = quote.Version,
+            ContractAcceptedAt = quote.SignedAt,
+            ContractAcceptedByName = quote.SignedByName,
+            ContractAcceptedByEmail = quote.SignedByEmail,
+            ContractAcceptedIpAddress = quote.SignedIpAddress,
+            AgreedMonthlyPrice = agreedMonthlyPrice,
+            ContractBillingCycle = BillingCycle.Monthly,
+            BusinessCustomerConfirmed = true,
+            BusinessCustomerConfirmedAt = DateTimeOffset.UtcNow
+        };
+        _db.CustomerSubscriptions.Add(subscription);
+        await _db.SaveChangesAsync(ct);
+        return await GetByIdAsync(subscription.Id, ct);
+    }
+    public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || s.ContractQuoteId == null || !s.BusinessCustomerConfirmed)) throw new InvalidOperationException("Das Abonnement kann erst mit B2B-Vertragsnachweis und gültigem Mollie-Mandat aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
+    public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || s.ContractQuoteId == null || !s.BusinessCustomerConfirmed) throw new InvalidOperationException("Das Abonnement kann erst mit B2B-Vertragsnachweis und gültigem Mollie-Mandat aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
     public async Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid sid, CancellationToken ct) => await _db.Invoices.Where(i => i.SubscriptionId == sid).OrderByDescending(i => i.InvoiceDate).Select(i => new SubscriptionInvoiceDto(i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate)).ToListAsync(ct);
 }
 
@@ -642,7 +716,7 @@ public class DashboardServiceImpl : IDashboardService
         await _db.Invoices.CountAsync(i => (i.Status == InvoiceStatus.Open || i.Status == InvoiceStatus.Sent) && i.DueDate < DateTimeOffset.UtcNow, ct),
         await _db.Customers.CountAsync(c => c.Status == CustomerStatus.Active, ct),
         await _db.CustomerSubscriptions.CountAsync(s => s.Status == SubscriptionStatus.Active, ct),
-        await _db.CustomerSubscriptions.Where(s => s.Status == SubscriptionStatus.Active).Include(s => s.Plan).SumAsync(s => s.Plan.MonthlyPrice, ct));
+        await _db.CustomerSubscriptions.Where(s => s.Status == SubscriptionStatus.Active).Include(s => s.Plan).SumAsync(s => s.AgreedMonthlyPrice ?? s.Plan.MonthlyPrice, ct));
 
     public async Task<FinanceDashboardDto> GetFinanceDashboardAsync(CancellationToken ct)
     {

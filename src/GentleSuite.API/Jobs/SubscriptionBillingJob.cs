@@ -43,6 +43,9 @@ public class SubscriptionBillingJob
             .Where(s =>
                 s.Status == SubscriptionStatus.Active &&
                 s.MollieMandateStatus == "valid" &&
+                s.ContractQuoteId != null &&
+                s.BusinessCustomerConfirmed &&
+                s.AgreedMonthlyPrice > 0 &&
                 s.NextBillingDate.Date <= today.AddDays(preNotificationDays))
             .ToListAsync();
 
@@ -52,7 +55,7 @@ public class SubscriptionBillingJob
         foreach (var sub in dueSubs)
         {
             var periodStart = sub.NextBillingDate;
-            var periodEnd = sub.Plan.BillingCycle switch
+            var periodEnd = sub.ContractBillingCycle switch
             {
                 BillingCycle.Quarterly => periodStart.AddMonths(3),
                 BillingCycle.Yearly => periodStart.AddYears(1),
@@ -74,14 +77,14 @@ public class SubscriptionBillingJob
             var year = DateTime.UtcNow.Year;
             var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, CancellationToken.None, includeYear: false);
 
-            var billingMonths = sub.Plan.BillingCycle switch
+            var billingMonths = sub.ContractBillingCycle switch
             {
                 BillingCycle.Quarterly => 3,
                 BillingCycle.Yearly => 12,
                 _ => 1
             };
             var vatPercent = co.DefaultTaxMode == TaxMode.Standard ? 19 : 0;
-            var netPrice = sub.Plan.MonthlyPrice * billingMonths;
+            var netPrice = (sub.AgreedMonthlyPrice ?? sub.Plan.MonthlyPrice) * billingMonths;
             var vatAmount = Math.Round(netPrice * (vatPercent / 100m), 2);
             var grossTotal = netPrice + vatAmount;
             var collectionDueDate = periodStart.Date < today.AddDays(preNotificationDays)
@@ -108,7 +111,7 @@ public class SubscriptionBillingJob
                 RetentionUntil = DateTimeOffset.UtcNow.AddYears(10),
                 PaymentCollectionStatus = "scheduled",
                 PaymentCollectionDueDate = collectionDueDate,
-                PaymentTerms = $"Der Rechnungsbetrag von {grossTotal:N2} € wird am {collectionDueDate:dd.MM.yyyy} auf Grundlage des erteilten SEPA-Lastschriftmandats automatisch über Mollie eingezogen. Mandat: {sub.MollieMandateId}."
+                PaymentTerms = $"Der Rechnungsbetrag von {grossTotal:N2} € wird am {collectionDueDate:dd.MM.yyyy} auf Grundlage des erteilten SEPA-Lastschriftmandats automatisch über Mollie eingezogen. Vertragsgrundlage: {sub.ContractReference}, Version {sub.ContractVersion}. Mollie-Mandat: {sub.MollieMandateId}."
             };
 
             inv.Lines.Add(new InvoiceLine

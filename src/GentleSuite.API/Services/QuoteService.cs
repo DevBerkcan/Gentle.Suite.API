@@ -202,7 +202,10 @@ public class QuoteServiceImpl : IQuoteService
         quote.CustomerComment = req.Comment; quote.RespondedAt = DateTimeOffset.UtcNow;
         if (req.Accepted)
         {
+            if (!req.B2bAuthorityConfirmed)
+                throw new InvalidOperationException("Bitte bestätigen Sie, dass Sie als Unternehmer handeln und zur Annahme für das Unternehmen berechtigt sind.");
             quote.Status = QuoteStatus.Accepted;
+            quote.B2bAuthorityConfirmed = true;
             if (!string.IsNullOrEmpty(req.SignatureData))
             {
                 quote.SignatureStatus = SignatureStatus.Signed; quote.SignatureData = req.SignatureData;

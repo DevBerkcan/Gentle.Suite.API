@@ -127,6 +127,8 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<WorkScopeRule>().HasOne(x => x.Plan).WithOne(x => x.WorkScopeRule).HasForeignKey<WorkScopeRule>(x => x.PlanId);
         mb.Entity<SupportPolicy>().HasOne(x => x.Plan).WithOne(x => x.SupportPolicy).HasForeignKey<SupportPolicy>(x => x.PlanId);
         mb.Entity<CustomerSubscription>().HasOne(x => x.Customer).WithMany(x => x.Subscriptions).OnDelete(DeleteBehavior.Cascade);
+        mb.Entity<CustomerSubscription>().HasOne(x => x.ContractQuote).WithMany().HasForeignKey(x => x.ContractQuoteId).OnDelete(DeleteBehavior.Restrict);
+        mb.Entity<CustomerSubscription>().HasIndex(x => x.ContractQuoteId).IsUnique().HasFilter("[ContractQuoteId] IS NOT NULL");
         mb.Entity<JournalEntryLine>().HasOne(x => x.JournalEntry).WithMany(x => x.Lines).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<Milestone>().HasOne(x => x.Project).WithMany(x => x.Milestones).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<ProjectComment>().HasOne(x => x.Project).WithMany(x => x.Comments).OnDelete(DeleteBehavior.Cascade);

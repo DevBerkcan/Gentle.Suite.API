@@ -413,6 +413,7 @@ public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentSer
     [HttpPut("plans/{id}")] public async Task<ActionResult<SubscriptionPlanDto>> UpdatePlan(Guid id, UpdatePlanRequest req) => Ok(await svc.UpdatePlanAsync(id, req));
     [HttpDelete("plans/{id}")] public async Task<IActionResult> DeletePlan(Guid id) { await svc.DeletePlanAsync(id); return NoContent(); }
     [HttpGet("customer/{customerId}")] public async Task<ActionResult<List<CustomerSubscriptionDto>>> CustomerSubs(Guid customerId) => Ok(await svc.GetCustomerSubscriptionsAsync(customerId));
+    [HttpGet("eligible-quotes/{customerId}")] public async Task<ActionResult<List<EligibleSubscriptionQuoteDto>>> EligibleQuotes(Guid customerId) => Ok(await svc.GetEligibleQuotesAsync(customerId));
     [HttpPost]
     public async Task<ActionResult<CustomerSubscriptionDto>> Create(CreateSubscriptionRequest req)
     {

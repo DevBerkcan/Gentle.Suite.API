@@ -39,6 +39,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         if (subscription.Status is SubscriptionStatus.Cancelled or SubscriptionStatus.Expired)
             throw new InvalidOperationException("Für ein beendetes Abonnement kann kein Mandat angefordert werden.");
+        EnsureB2bContractEvidence(subscription);
 
         var contact = subscription.Customer.Contacts.FirstOrDefault(c => c.IsPrimary)
             ?? subscription.Customer.Contacts.FirstOrDefault();
@@ -83,7 +84,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
             amount = new { currency = "EUR", value = "0.01" },
             customerId = subscription.MollieCustomerId,
             sequenceType = "first",
-            description = $"SEPA-Mandat {subscription.Plan.Name}",
+            description = $"Zahlungseinrichtung {subscription.ContractReference} - {subscription.Plan.Name}",
             redirectUrl = $"{frontendBaseUrl}/payment/mandate-result",
             webhookUrl = $"{publicBaseUrl}/api/mollie/webhook",
             metadata = new { kind = "mandate", subscriptionId = subscription.Id }
@@ -122,6 +123,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         try
         {
+            EnsureB2bContractEvidence(subscription);
             var checkout = await StartMandateCheckoutAsync(subscriptionId, ct);
             var startedAt = DateTimeOffset.UtcNow;
             var contactName = string.Join(" ", new[] { contact!.FirstName, contact.LastName }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
@@ -135,8 +137,10 @@ public sealed class MolliePaymentService : IMolliePaymentService
                     ["ContactName"] = contactName,
                     ["CustomerName"] = subscription.Customer.CompanyName,
                     ["PlanName"] = subscription.Plan.Name,
-                    ["MonthlyPrice"] = subscription.Plan.MonthlyPrice.ToString("0.00", CultureInfo.GetCultureInfo("de-DE")),
+                    ["MonthlyPrice"] = (subscription.AgreedMonthlyPrice ?? subscription.Plan.MonthlyPrice).ToString("0.00", CultureInfo.GetCultureInfo("de-DE")),
                     ["StartDate"] = subscription.StartDate.ToString("dd.MM.yyyy", CultureInfo.GetCultureInfo("de-DE")),
+                    ["ContractReference"] = subscription.ContractReference ?? "-",
+                    ["ContractAcceptedAt"] = subscription.ContractAcceptedAt?.ToString("dd.MM.yyyy", CultureInfo.GetCultureInfo("de-DE")) ?? "-",
                     ["CheckoutUrl"] = checkout.CheckoutUrl
                 },
                 subscription.CustomerId,
@@ -258,7 +262,8 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 {
                     subscription.MollieMandateId = RequiredString(mandate, "id");
                     subscription.MollieMandateStatus = RequiredString(mandate, "status");
-                    if (subscription.Status == SubscriptionStatus.PendingConfirmation)
+                    if (subscription.Status == SubscriptionStatus.PendingConfirmation &&
+                        subscription.ContractQuoteId != null && subscription.BusinessCustomerConfirmed)
                     {
                         subscription.Status = SubscriptionStatus.Active;
                         subscription.ConfirmedAt = DateTimeOffset.UtcNow;
@@ -316,6 +321,14 @@ public sealed class MolliePaymentService : IMolliePaymentService
         var list = await GetAsync($"customers/{customerId}/payments?limit=250", ct);
         return list["_embedded"]?["payments"]?.AsArray()
             .FirstOrDefault(p => string.Equals(MetadataString(p?["metadata"], "invoiceId"), invoiceId.ToString(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void EnsureB2bContractEvidence(CustomerSubscription subscription)
+    {
+        if (subscription.ContractQuoteId == null || string.IsNullOrWhiteSpace(subscription.ContractReference) ||
+            subscription.ContractAcceptedAt == null || !subscription.BusinessCustomerConfirmed ||
+            subscription.AgreedMonthlyPrice is null or <= 0)
+            throw new InvalidOperationException("Die Mollie-Zahlungseinrichtung ist ohne vollständigen B2B-Vertragsnachweis gesperrt.");
     }
 
     private HttpClient CreateClient()

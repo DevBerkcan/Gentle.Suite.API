@@ -37,6 +37,18 @@ public class CustomerSubscription : BaseEntity
     public DateTimeOffset NextBillingDate { get; set; }
     public string? CancellationReason { get; set; }
     public int? ContractDurationMonths { get; set; }
+    public Guid? ContractQuoteId { get; set; }
+    public Quote? ContractQuote { get; set; }
+    public string? ContractReference { get; set; }
+    public int? ContractVersion { get; set; }
+    public DateTimeOffset? ContractAcceptedAt { get; set; }
+    public string? ContractAcceptedByName { get; set; }
+    public string? ContractAcceptedByEmail { get; set; }
+    public string? ContractAcceptedIpAddress { get; set; }
+    public decimal? AgreedMonthlyPrice { get; set; }
+    public BillingCycle ContractBillingCycle { get; set; } = BillingCycle.Monthly;
+    public bool BusinessCustomerConfirmed { get; set; }
+    public DateTimeOffset? BusinessCustomerConfirmedAt { get; set; }
     public DateTimeOffset? ConfirmedAt { get; set; }
     public string? MollieCustomerId { get; set; }
     public string? MollieMandateId { get; set; }

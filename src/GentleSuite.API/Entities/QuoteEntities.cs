@@ -60,6 +60,7 @@ public class Quote : GobdEntity
     public string? SignedByEmail { get; set; }
     public DateTimeOffset? SignedAt { get; set; }
     public string? SignedIpAddress { get; set; }
+    public bool B2bAuthorityConfirmed { get; set; }
 
     // Legal text blocks (JSON array of keys)
     public string? LegalTextBlocks { get; set; }
