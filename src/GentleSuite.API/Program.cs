@@ -198,7 +198,10 @@ try
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_CustomerSubscriptions_Quotes_ContractQuoteId') ALTER TABLE "CustomerSubscriptions" ADD CONSTRAINT "FK_CustomerSubscriptions_Quotes_ContractQuoteId" FOREIGN KEY ("ContractQuoteId") REFERENCES "Quotes" ("Id");""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_ContractQuoteId' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_ContractQuoteId" ON "CustomerSubscriptions" ("ContractQuoteId") WHERE "ContractQuoteId" IS NOT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Invoices_ExternalPaymentReference' AND object_id=OBJECT_ID('Invoices')) CREATE UNIQUE INDEX "IX_Invoices_ExternalPaymentReference" ON "Invoices" ("ExternalPaymentReference") WHERE "ExternalPaymentReference" IS NOT NULL;""");
-    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ExternalRef') ALTER TABLE "Customers" ADD "ExternalRef" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ExternalRef') ALTER TABLE "Customers" ADD "ExternalRef" NVARCHAR(450) NULL;""");
+    // NVARCHAR(MAX) cannot be used as a unique-index key column in SQL Server — this narrows
+    // any column created by an older deploy before the index below is (re-)created.
+    await db.Database.ExecuteSqlRawAsync("""IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ExternalRef' AND CHARACTER_MAXIMUM_LENGTH=-1) ALTER TABLE "Customers" ALTER COLUMN "ExternalRef" NVARCHAR(450) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Customers_ExternalRef' AND object_id=OBJECT_ID('Customers')) CREATE UNIQUE INDEX "IX_Customers_ExternalRef" ON "Customers" ("ExternalRef") WHERE "ExternalRef" IS NOT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ProjectBoardTasks')
@@ -359,6 +362,9 @@ await db.Database.ExecuteSqlRawAsync("""
         WHERE 1=1
     """);
 
+    // Feature: robuste Mollie-Einzugswiederholung + Eskalation bei endgültigem Fehlschlag
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='CollectionAttemptCount') ALTER TABLE "Invoices" ADD "CollectionAttemptCount" INT NOT NULL DEFAULT 0;""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)
@@ -402,12 +408,13 @@ app.MapHub<ProjectBoardHub>("/hubs/project-board");
 // Hangfire dashboard
 app.MapHangfireDashboard("/hangfire");
 // Explicitly remove deactivated jobs from Hangfire DB so they don't keep firing
-RecurringJob.RemoveIfExists("check-overdue-invoices");
 RecurringJob.RemoveIfExists("check-open-quotes");
 RecurringJob.RemoveIfExists("generate-recurring-expenses");
 RecurringJob.RemoveIfExists("generate-subscription-invoices");
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
 RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6));
+RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOverdueInvoicesAsync(), Cron.Daily(7));
+RecurringJob.AddOrUpdate<ReminderJobs>("send-overdue-reminders", j => j.SendOverdueRemindersAsync(), Cron.Daily(8));
 
 app.Run();
 

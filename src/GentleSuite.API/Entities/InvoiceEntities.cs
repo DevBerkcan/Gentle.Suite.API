@@ -65,6 +65,10 @@ public class Invoice : GobdEntity
     public string? ExternalPaymentReference { get; set; }
     public string? PaymentCollectionStatus { get; set; }
     public DateTimeOffset? PaymentCollectionDueDate { get; set; }
+    // Counts terminal Mollie failures (failed/expired/canceled) for this invoice's recurring
+    // collection. Once MaxCollectionAttempts is reached, the invoice stops being retried
+    // automatically and is escalated to InvoiceStatus.Overdue for manual follow-up.
+    public int CollectionAttemptCount { get; set; }
 
     public List<InvoiceLine> Lines { get; set; } = new();
     public List<InvoicePayment> Payments { get; set; } = new();

@@ -14,11 +14,62 @@ public class ReminderJobs
     public async Task CheckOverdueInvoicesAsync()
     {
         var overdue = await _db.Invoices
-            .Where(i => (i.Status == InvoiceStatus.Sent || i.Status == InvoiceStatus.Open) && i.DueDate < DateTimeOffset.UtcNow)
+            .Where(i => (i.Status == InvoiceStatus.Sent || i.Status == InvoiceStatus.Open)
+                        && i.DueDate < DateTimeOffset.UtcNow
+                        // Recurring invoices still being auto-collected via Mollie are owned by
+                        // SubscriptionBillingJob's own retry/escalation logic (see
+                        // MolliePaymentService.ApplyPaymentStatusAsync) until it gives up and
+                        // sets Status=Overdue itself — don't race it here.
+                        && (i.SubscriptionId == null || i.PaymentCollectionStatus != "scheduled"))
             .ToListAsync();
         foreach (var inv in overdue)
             inv.Status = InvoiceStatus.Overdue;
         await _db.SaveChangesAsync();
+    }
+
+    public async Task SendOverdueRemindersAsync()
+    {
+        var settings = await _db.ReminderSettings.FirstOrDefaultAsync() ?? new ReminderSettings();
+        var overdue = await _db.Invoices
+            .Include(i => i.Customer).ThenInclude(c => c.Contacts)
+            .Where(i => i.Status == InvoiceStatus.Overdue && !i.ReminderStop && !i.Customer.ReminderStop)
+            .ToListAsync();
+
+        foreach (var inv in overdue)
+        {
+            var daysOverdue = (int)(DateTimeOffset.UtcNow.Date - inv.DueDate.Date).TotalDays;
+            ReminderLevel? targetLevel = daysOverdue >= settings.Level3Days ? ReminderLevel.Level3
+                : daysOverdue >= settings.Level2Days ? ReminderLevel.Level2
+                : daysOverdue >= settings.Level1Days ? ReminderLevel.Level1
+                : null;
+            if (targetLevel == null || (inv.LastReminderLevel.HasValue && inv.LastReminderLevel.Value >= targetLevel.Value))
+                continue;
+
+            var contact = inv.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? inv.Customer.Contacts.FirstOrDefault();
+            if (contact == null) continue;
+
+            var templateKey = targetLevel switch
+            {
+                ReminderLevel.Level1 => "invoice-reminder-1",
+                ReminderLevel.Level2 => "invoice-reminder-2",
+                _ => "invoice-reminder-3"
+            };
+            try
+            {
+                await _email.SendTemplatedEmailAsync(contact.Email, templateKey, new()
+                {
+                    ["ContactName"] = contact.FirstName,
+                    ["InvoiceNumber"] = inv.InvoiceNumber,
+                    ["GrossTotal"] = inv.GrossTotal.ToString("N2"),
+                    ["DueDate"] = inv.DueDate.ToString("dd.MM.yyyy"),
+                }, inv.CustomerId);
+                inv.LastReminderLevel = targetLevel;
+                inv.LastReminderSentAt = DateTimeOffset.UtcNow;
+                await _db.SaveChangesAsync();
+                _log.LogInformation("Sent {Level} reminder for invoice {Nr}", targetLevel, inv.InvoiceNumber);
+            }
+            catch (Exception ex) { _log.LogError(ex, "Reminder email failed for invoice {Nr}", inv.InvoiceNumber); }
+        }
     }
 
     public async Task CheckOpenQuotesAsync()

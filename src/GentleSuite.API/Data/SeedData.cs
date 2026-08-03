@@ -328,10 +328,11 @@ END;
         db.EmailTemplates.AddRange(
             new EmailTemplate{Key="welcome",Subject="Willkommen bei {{ CompanyName }} – Ihre naechsten Schritte",Body="<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto'><h2 style='color:#1a1a1a'>Herzlich willkommen, {{ ContactName }}!</h2><p>Vielen Dank, dass sich <b>{{ CustomerName }}</b> fuer eine Zusammenarbeit mit <b>{{ CompanyName }}</b> entschieden hat. Wir freuen uns sehr darauf, gemeinsam Ihr Projekt umzusetzen.</p><h3 style='color:#333;margin-top:24px'>So geht es weiter:</h3><ol style='line-height:1.8'><li><b>Onboarding:</b> Ihr persoenlicher Projektablauf wurde bereits angelegt. Wir werden Sie Schritt fuer Schritt durch den Prozess fuehren.</li><li><b>Kick-off:</b> In Kuerze erhalten Sie eine Einladung zu unserem gemeinsamen Kick-off-Gespraech.</li><li><b>Zugaenge:</b> Bitte halten Sie relevante Zugangsdaten (Domain, Hosting, Analytics etc.) bereit.</li></ol><p style='margin-top:24px'>Bei Fragen stehen wir Ihnen jederzeit gerne zur Verfuegung:</p><table style='margin:12px 0;font-size:14px'><tr><td style='padding:4px 12px 4px 0;color:#666'>E-Mail:</td><td>{{ CompanyEmail }}</td></tr><tr><td style='padding:4px 12px 4px 0;color:#666'>Telefon:</td><td>{{ CompanyPhone }}</td></tr></table><p style='margin-top:24px'>Wir freuen uns auf eine erfolgreiche Zusammenarbeit!</p><p>Mit freundlichen Gruessen<br/><b>{{ CompanyName }}</b></p></div>"},
             new EmailTemplate{Key="quote-sent",Subject="Angebot {{ QuoteNumber }}",Body="<h1>Ihr Angebot</h1><p>Hallo {{ ContactName }},</p><p>Ihr Angebot <b>{{ QuoteNumber }}</b> ueber <b>{{ Total }} EUR</b> ist bereit.</p><p><a href='{{ ApprovalLink }}'>Angebot ansehen & bestaetigen</a></p><p>Gueltig bis: {{ ExpiresAt }}</p>"},
-            new EmailTemplate{Key="invoice-sent",Subject="Rechnung {{ InvoiceNumber }}",Body="<h1>Ihre Rechnung</h1><p>Hallo {{ ContactName }},</p><p>anbei Ihre Rechnung <b>{{ InvoiceNumber }}</b> ueber <b>{{ Amount }} EUR</b>.</p><p>Faellig bis: {{ DueDate }}</p>"},
-            new EmailTemplate{Key="invoice-reminder-1",Subject="Zahlungserinnerung: {{ InvoiceNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>die Rechnung {{ InvoiceNumber }} ueber {{ Amount }} EUR ist seit dem {{ DueDate }} faellig. Bitte ueberweisen Sie den Betrag.</p>"},
-            new EmailTemplate{Key="invoice-reminder-2",Subject="2. Mahnung: {{ InvoiceNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>trotz unserer Erinnerung ist die Rechnung {{ InvoiceNumber }} noch offen. Bitte begleichen Sie {{ Amount }} EUR umgehend.</p>"},
+            new EmailTemplate{Key="invoice-sent",Subject="Rechnung {{ InvoiceNumber }}",Body="<h1>Ihre Rechnung</h1><p>Hallo {{ ContactName }},</p><p>anbei Ihre Rechnung <b>{{ InvoiceNumber }}</b> ueber <b>{{ GrossTotal }} EUR</b>.</p><p>Faellig bis: {{ DueDate }}</p>"},
+            new EmailTemplate{Key="invoice-reminder-1",Subject="Zahlungserinnerung: {{ InvoiceNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>die Rechnung {{ InvoiceNumber }} ueber {{ GrossTotal }} EUR ist seit dem {{ DueDate }} faellig. Bitte ueberweisen Sie den Betrag.</p>"},
+            new EmailTemplate{Key="invoice-reminder-2",Subject="2. Mahnung: {{ InvoiceNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>trotz unserer Erinnerung ist die Rechnung {{ InvoiceNumber }} noch offen. Bitte begleichen Sie {{ GrossTotal }} EUR umgehend.</p>"},
             new EmailTemplate{Key="invoice-reminder-3",Subject="Letzte Mahnung: {{ InvoiceNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>dies ist unsere letzte Mahnung fuer Rechnung {{ InvoiceNumber }}. Bei Nichtzahlung behalten wir uns weitere Schritte vor.</p>"},
+            new EmailTemplate{Key="payment-received",Subject="Zahlungseingang bestaetigt – Rechnung {{ InvoiceNumber }}",Body="<h1>Zahlung erhalten</h1><p>Hallo {{ ContactName }},</p><p>wir bestaetigen den Eingang Ihrer Zahlung ueber <b>{{ GrossTotal }} EUR</b> fuer Rechnung <b>{{ InvoiceNumber }}</b> am {{ PaidAt }}.</p><p>Vielen Dank!</p>"},
             new EmailTemplate{Key="quote-reminder",Subject="Erinnerung: Angebot {{ QuoteNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>Ihr Angebot {{ QuoteNumber }} wartet auf Ihre Rueckmeldung.</p><p><a href='{{ ApprovalLink }}'>Jetzt ansehen</a></p>"}
         );
         await db.SaveChangesAsync();
@@ -352,6 +353,40 @@ END;
         }
         if (!existing.Contains("invoice-reminder"))
             db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-reminder", Subject = "Zahlungserinnerung – Rechnung {{ InvoiceNumber }}", Body = "<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px 24px'><div style='background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e7eb'><h2 style='color:#1a1a1a;margin-top:0'>Zahlungserinnerung</h2><p style='color:#374151'>Hallo {{ ContactName }},</p><p style='color:#374151'>wir möchten Sie freundlich daran erinnern, dass folgende Rechnung noch offen ist:</p><table style='width:100%;border-collapse:collapse;margin:16px 0'><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Rechnungsnummer</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ InvoiceNumber }}</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Betrag</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ Amount }} EUR</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Fälligkeitsdatum</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ DueDate }}</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Überfällig seit</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ DaysOverdue }} Tagen</td></tr></table><p style='color:#374151'>Bitte überweisen Sie den ausstehenden Betrag schnellstmöglich auf unser Konto.</p><p style='color:#374151'>Falls Sie die Zahlung bereits veranlasst haben, bitten wir Sie, diese E-Mail zu ignorieren.</p><hr style='border:none;border-top:1px solid #e5e7eb;margin:24px 0'/><p style='color:#374151;font-size:14px;margin:0'>Mit freundlichen Grüßen<br/><b>Berkcan Ünal</b><br/>Gentlegroup – Digital Agency<br/><a href='mailto:office@gentlegroup.de' style='color:#0f172a'>office@gentlegroup.de</a></p></div></div>" });
+        const string invoiceSentSubject = "Rechnung {{ InvoiceNumber }}";
+        const string invoiceSentBody = "<h1>Ihre Rechnung</h1><p>Hallo {{ ContactName }},</p><p>anbei Ihre Rechnung <b>{{ InvoiceNumber }}</b> ueber <b>{{ GrossTotal }} EUR</b>.</p><p>Faellig bis: {{ DueDate }}</p>";
+        if (!existing.Contains("invoice-sent"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-sent", Subject = invoiceSentSubject, Body = invoiceSentBody });
+        else
+        {
+            var t = await db.EmailTemplates.FirstAsync(x => x.Key == "invoice-sent");
+            t.Subject = invoiceSentSubject;
+            t.Body = invoiceSentBody;
+        }
+        const string reminder1Subject = "Zahlungserinnerung: {{ InvoiceNumber }}";
+        const string reminder1Body = "<p>Hallo {{ ContactName }},</p><p>die Rechnung {{ InvoiceNumber }} ueber {{ GrossTotal }} EUR ist seit dem {{ DueDate }} faellig. Bitte ueberweisen Sie den Betrag.</p>";
+        if (!existing.Contains("invoice-reminder-1"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-reminder-1", Subject = reminder1Subject, Body = reminder1Body });
+        else
+        {
+            var t = await db.EmailTemplates.FirstAsync(x => x.Key == "invoice-reminder-1");
+            t.Subject = reminder1Subject;
+            t.Body = reminder1Body;
+        }
+        const string reminder2Subject = "2. Mahnung: {{ InvoiceNumber }}";
+        const string reminder2Body = "<p>Hallo {{ ContactName }},</p><p>trotz unserer Erinnerung ist die Rechnung {{ InvoiceNumber }} noch offen. Bitte begleichen Sie {{ GrossTotal }} EUR umgehend.</p>";
+        if (!existing.Contains("invoice-reminder-2"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-reminder-2", Subject = reminder2Subject, Body = reminder2Body });
+        else
+        {
+            var t = await db.EmailTemplates.FirstAsync(x => x.Key == "invoice-reminder-2");
+            t.Subject = reminder2Subject;
+            t.Body = reminder2Body;
+        }
+        const string paymentReceivedSubject = "Zahlungseingang bestaetigt – Rechnung {{ InvoiceNumber }}";
+        const string paymentReceivedBody = "<h1>Zahlung erhalten</h1><p>Hallo {{ ContactName }},</p><p>wir bestaetigen den Eingang Ihrer Zahlung ueber <b>{{ GrossTotal }} EUR</b> fuer Rechnung <b>{{ InvoiceNumber }}</b> am {{ PaidAt }}.</p><p>Vielen Dank!</p>";
+        if (!existing.Contains("payment-received"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "payment-received", Subject = paymentReceivedSubject, Body = paymentReceivedBody });
         if (!existing.Contains("password-reset"))
             db.EmailTemplates.Add(new EmailTemplate { Key = "password-reset", Subject = "Passwort zurücksetzen – GentleSuite", Body = "<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px 24px'><div style='background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e7eb'><h2 style='color:#1a1a1a;margin-top:0'>Passwort zurücksetzen</h2><p style='color:#374151'>Hallo {{ FullName }},</p><p style='color:#374151'>Sie haben eine Anfrage zum Zurücksetzen Ihres Passworts gestellt. Klicken Sie auf den folgenden Button, um ein neues Passwort festzulegen:</p><div style='text-align:center;margin:32px 0'><a href='{{ ResetUrl }}' style='background:#0f172a;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;display:inline-block'>Passwort zurücksetzen</a></div><p style='color:#6b7280;font-size:13px'>Dieser Link ist 24 Stunden gültig. Falls Sie keine Anfrage gestellt haben, können Sie diese E-Mail ignorieren.</p><hr style='border:none;border-top:1px solid #e5e7eb;margin:24px 0'/><p style='color:#374151;font-size:14px;margin:0'>Mit freundlichen Grüßen<br/><b>Berkcan Ünal</b><br/>Gentlegroup – Digital Agency<br/><a href='mailto:office@gentlegroup.de' style='color:#0f172a'>office@gentlegroup.de</a></p></div></div>" });
         const string mandateSubject = "Zahlungsart für {{ PlanName }} sicher einrichten – {{ ContractReference }}";

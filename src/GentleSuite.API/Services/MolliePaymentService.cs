@@ -210,9 +210,16 @@ public sealed class MolliePaymentService : IMolliePaymentService
         var priorPayment = await FindPaymentForInvoiceAsync(subscription.MollieCustomerId, invoice.Id, ct);
         if (priorPayment != null)
         {
-            invoice.ExternalPaymentReference = RequiredString(priorPayment, "id");
-            await ApplyPaymentStatusAsync(priorPayment, ct);
-            return;
+            // Only reuse a prior payment if it's still in flight (or already settled) — a
+            // terminal failure/expiry/cancellation must not be reused, otherwise the invoice
+            // would be stuck re-polling a dead payment forever instead of retrying the charge.
+            var priorStatus = RequiredString(priorPayment, "status");
+            if (priorStatus is "open" or "pending" or "paid")
+            {
+                invoice.ExternalPaymentReference = RequiredString(priorPayment, "id");
+                await ApplyPaymentStatusAsync(priorPayment, ct);
+                return;
+            }
         }
 
         var publicBaseUrl = (_configuration["PublicBaseUrl"] ?? "https://gentlesuite.runasp.net").TrimEnd('/');
@@ -276,16 +283,21 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         if (kind == "invoice" && Guid.TryParse(MetadataString(metadata, "invoiceId"), out var invoiceId))
         {
-            var invoice = await _db.Invoices.Include(i => i.Payments).FirstOrDefaultAsync(i => i.Id == invoiceId, ct);
+            var invoice = await _db.Invoices
+                .Include(i => i.Payments)
+                .Include(i => i.Customer).ThenInclude(c => c.Contacts)
+                .FirstOrDefaultAsync(i => i.Id == invoiceId, ct);
             if (invoice == null) return;
             if (!string.IsNullOrWhiteSpace(invoice.ExternalPaymentReference) && invoice.ExternalPaymentReference != paymentId)
                 throw new InvalidOperationException("Mollie-Zahlung stimmt nicht mit der Rechnung überein.");
             invoice.ExternalPaymentReference = paymentId;
             invoice.PaymentCollectionStatus = status;
 
+            var isNewlyPaid = false;
             if (status == "paid")
             {
-                if (!invoice.Payments.Any(p => p.Reference == paymentId))
+                isNewlyPaid = !invoice.Payments.Any(p => p.Reference == paymentId);
+                if (isNewlyPaid)
                     invoice.Payments.Add(new InvoicePayment
                     {
                         Amount = invoice.GrossTotal,
@@ -312,7 +324,83 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 invoice.Status = InvoiceStatus.Overdue;
                 invoice.PaidAt = null;
             }
+
+            var exhaustedRetries = false;
+            if (status is "failed" or "expired" or "canceled")
+            {
+                invoice.CollectionAttemptCount++;
+                if (invoice.CollectionAttemptCount < MaxCollectionAttempts)
+                {
+                    // Retry: clear the dead payment reference and put the invoice back into
+                    // SubscriptionBillingJob's daily collection queue with a short delay so a
+                    // fresh Mollie payment gets created next run instead of re-polling a payment
+                    // that will never change status.
+                    invoice.ExternalPaymentReference = null;
+                    invoice.PaymentCollectionStatus = "scheduled";
+                    invoice.PaymentCollectionDueDate = DateTimeOffset.UtcNow.Date.AddDays(CollectionRetryDelayDays);
+                }
+                else
+                {
+                    invoice.Status = InvoiceStatus.Overdue;
+                    invoice.PaidAt = null;
+                    exhaustedRetries = true;
+                }
+            }
+
             await _db.SaveChangesAsync(ct);
+
+            if (isNewlyPaid)
+                await SendPaymentReceivedEmailAsync(invoice, ct);
+            if (exhaustedRetries)
+                await NotifyStaffAsync(
+                    "Mollie-Einzug endgültig fehlgeschlagen",
+                    $"Der automatische Einzug für Rechnung {invoice.InvoiceNumber} (Kunde: {invoice.Customer.CompanyName}) ist nach {invoice.CollectionAttemptCount} Versuchen fehlgeschlagen (letzter Status: {status}). Die Rechnung wurde auf 'Überfällig' gesetzt und muss manuell nachverfolgt werden.",
+                    ct);
+        }
+    }
+
+    private const int MaxCollectionAttempts = 3;
+    private const int CollectionRetryDelayDays = 3;
+
+    private async Task NotifyStaffAsync(string subject, string message, CancellationToken ct)
+    {
+        try
+        {
+            var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+            if (co == null || string.IsNullOrWhiteSpace(co.Email)) return;
+            await _email.SendEmailAsync(co.Email, subject, $"<p>{message}</p>", ct: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Staff alert email failed: {Subject}", subject);
+        }
+    }
+
+    private async Task SendPaymentReceivedEmailAsync(Invoice invoice, CancellationToken ct)
+    {
+        var contact = invoice.Customer.Contacts.FirstOrDefault(c => c.IsPrimary)
+            ?? invoice.Customer.Contacts.FirstOrDefault();
+        if (contact == null || string.IsNullOrWhiteSpace(contact.Email)) return;
+
+        try
+        {
+            await _email.SendTemplatedEmailAsync(
+                contact.Email,
+                "payment-received",
+                new Dictionary<string, object>
+                {
+                    ["ContactName"] = contact.FirstName,
+                    ["CustomerName"] = invoice.Customer.CompanyName,
+                    ["InvoiceNumber"] = invoice.InvoiceNumber,
+                    ["GrossTotal"] = invoice.GrossTotal.ToString("N2"),
+                    ["PaidAt"] = (invoice.PaidAt ?? DateTimeOffset.UtcNow).ToString("dd.MM.yyyy"),
+                },
+                invoice.CustomerId,
+                ct: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Payment-received email failed for invoice {InvoiceId}", invoice.Id);
         }
     }
 

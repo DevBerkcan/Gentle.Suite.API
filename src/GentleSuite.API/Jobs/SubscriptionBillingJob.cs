@@ -17,8 +17,9 @@ public class SubscriptionBillingJob
     private readonly IPdfService _pdf;
     private readonly IMolliePaymentService _mollie;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<SubscriptionBillingJob> _logger;
 
-    public SubscriptionBillingJob(AppDbContext db, INumberSequenceService seq, IEmailService email, IPdfService pdf, IMolliePaymentService mollie, IConfiguration configuration)
+    public SubscriptionBillingJob(AppDbContext db, INumberSequenceService seq, IEmailService email, IPdfService pdf, IMolliePaymentService mollie, IConfiguration configuration, ILogger<SubscriptionBillingJob> logger)
     {
         _db = db;
         _seq = seq;
@@ -26,6 +27,20 @@ public class SubscriptionBillingJob
         _pdf = pdf;
         _mollie = mollie;
         _configuration = configuration;
+        _logger = logger;
+    }
+
+    private async Task NotifyStaffAsync(string subject, string message, CompanySettings co, CancellationToken ct)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(co.Email)) return;
+            await _email.SendEmailAsync(co.Email, subject, $"<p>{message}</p>", ct: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Staff alert email failed: {Subject}", subject);
+        }
     }
 
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
@@ -183,7 +198,15 @@ public class SubscriptionBillingJob
                     inv.Status = InvoiceStatus.Sent;
                     await _db.SaveChangesAsync();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to generate/send pre-notification invoice {Nr} for subscription {SubId}", inv.InvoiceNumber, sub.Id);
+                    await NotifyStaffAsync(
+                        "Serienrechnung konnte nicht versendet werden",
+                        $"Rechnung {inv.InvoiceNumber} für {sub.Customer.CompanyName} (Abo {sub.Id}) konnte nicht per E-Mail zugestellt werden: {ex.Message}. Die Rechnung wurde als '{inv.Status}' gespeichert und muss manuell geprüft/erneut versendet werden.",
+                        co,
+                        CancellationToken.None);
+                }
             }
         }
 
@@ -207,7 +230,12 @@ public class SubscriptionBillingJob
             {
                 // Keep it scheduled. The next run first searches Mollie by invoice metadata,
                 // so a timeout can be retried without creating a second charge.
-                Console.Error.WriteLine($"Mollie collection failed for invoice {invoiceId}: {ex.Message}");
+                _logger.LogError(ex, "Mollie collection failed for invoice {InvoiceId}", invoiceId);
+                await NotifyStaffAsync(
+                    "Mollie-Einzug fehlgeschlagen",
+                    $"Der Einzugsversuch für Rechnung-ID {invoiceId} ist mit einem Fehler abgebrochen: {ex.Message}. Das System versucht es beim nächsten Lauf erneut.",
+                    co,
+                    CancellationToken.None);
             }
         }
     }
