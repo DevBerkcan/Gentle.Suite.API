@@ -38,11 +38,17 @@ public class ReminderJobs
         foreach (var inv in overdue)
         {
             var daysOverdue = (int)(DateTimeOffset.UtcNow.Date - inv.DueDate.Date).TotalDays;
-            ReminderLevel? targetLevel = daysOverdue >= settings.Level3Days ? ReminderLevel.Level3
-                : daysOverdue >= settings.Level2Days ? ReminderLevel.Level2
-                : daysOverdue >= settings.Level1Days ? ReminderLevel.Level1
-                : null;
-            if (targetLevel == null || (inv.LastReminderLevel.HasValue && inv.LastReminderLevel.Value >= targetLevel.Value))
+            // Escalate at most one level per run, regardless of how long an invoice has already
+            // been overdue -- an invoice that only just got its dunning re-enabled after months
+            // must not jump straight to the harshest "letzte Mahnung" on day one.
+            ReminderLevel? targetLevel = inv.LastReminderLevel switch
+            {
+                null => daysOverdue >= settings.Level1Days ? ReminderLevel.Level1 : null,
+                ReminderLevel.Level1 => daysOverdue >= settings.Level2Days ? ReminderLevel.Level2 : null,
+                ReminderLevel.Level2 => daysOverdue >= settings.Level3Days ? ReminderLevel.Level3 : null,
+                _ => null
+            };
+            if (targetLevel == null)
                 continue;
 
             var contact = inv.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? inv.Customer.Contacts.FirstOrDefault();
