@@ -425,10 +425,7 @@ RecurringJob.RemoveIfExists("generate-subscription-invoices");
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
 RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6));
 RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOverdueInvoicesAsync(), Cron.Daily(7));
-// send-overdue-reminders is paused on user request after a rollout bug sent "letzte Mahnung"
-// (level 3) immediately to invoices overdue for months instead of escalating gradually.
-// Re-enable once confirmed: RecurringJob.AddOrUpdate<ReminderJobs>("send-overdue-reminders", j => j.SendOverdueRemindersAsync(), Cron.Daily(8));
-RecurringJob.RemoveIfExists("send-overdue-reminders");
+RecurringJob.AddOrUpdate<ReminderJobs>("send-overdue-reminders", j => j.SendOverdueRemindersAsync(), Cron.Daily(8));
 
 app.Run();
 
