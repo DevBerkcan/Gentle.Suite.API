@@ -20,8 +20,11 @@ public class QuoteServiceImpl : IQuoteService
     private readonly INumberSequenceService _seq;
     private readonly string _frontendBaseUrl;
     private readonly IInvoiceService _invoiceService;
-    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService)
-    { _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; }
+    private readonly ISubscriptionService _subscriptionSvc;
+    private readonly IMolliePaymentService _mollie;
+    private readonly ILogger<QuoteServiceImpl> _logger;
+    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService, ISubscriptionService subscriptionSvc, IMolliePaymentService mollie, ILogger<QuoteServiceImpl> logger)
+    { _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _subscriptionSvc = subscriptionSvc; _mollie = mollie; _logger = logger; }
 
     public async Task<PagedResult<QuoteListDto>> GetQuotesAsync(PaginationParams p, QuoteStatus? status, Guid? customerId, CancellationToken ct)
     {
@@ -70,7 +73,7 @@ public class QuoteServiceImpl : IQuoteService
         };
         quote.QuoteGroupId = quote.Id;
         if (req.Lines != null) foreach (var l in req.Lines)
-            quote.Lines.Add(new QuoteLine { ServiceCatalogItemId = l.ServiceCatalogItemId, Title = l.Title, Description = l.Description, Quantity = l.Quantity, UnitPrice = l.UnitPrice, DiscountPercent = l.DiscountPercent, LineType = l.LineType, VatPercent = EffectiveVatPercent(taxMode, l.VatPercent), SortOrder = l.SortOrder });
+            quote.Lines.Add(new QuoteLine { ServiceCatalogItemId = l.ServiceCatalogItemId, SubscriptionPlanId = l.SubscriptionPlanId, Title = l.Title, Description = l.Description, Quantity = l.Quantity, UnitPrice = l.UnitPrice, DiscountPercent = l.DiscountPercent, LineType = l.LineType, VatPercent = EffectiveVatPercent(taxMode, l.VatPercent), SortOrder = l.SortOrder });
         _db.Quotes.Add(quote);
         await _db.SaveChangesAsync(ct);
         await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "Created", $"Angebot {quote.QuoteNumber} erstellt", ct: ct);
@@ -114,6 +117,7 @@ public class QuoteServiceImpl : IQuoteService
         {
             QuoteId = id,
             ServiceCatalogItemId = l.ServiceCatalogItemId,
+            SubscriptionPlanId = l.SubscriptionPlanId,
             Title = l.Title,
             Description = l.Description,
             Quantity = l.Quantity,
@@ -219,6 +223,25 @@ public class QuoteServiceImpl : IQuoteService
         }
         else { quote.Status = QuoteStatus.Rejected; quote.SignatureStatus = SignatureStatus.Declined; await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "Rejected", $"Abgelehnt: {req.Comment}", ct: ct); }
         await _db.SaveChangesAsync(ct);
+
+        if (quote.SignatureStatus == SignatureStatus.Signed)
+        {
+            var planLines = quote.Lines.Where(l => l.LineType == QuoteLineType.RecurringMonthly && l.SubscriptionPlanId != null).ToList();
+            foreach (var line in planLines)
+            {
+                try
+                {
+                    var created = await _subscriptionSvc.CreateFromSignedQuoteLineAsync(quote.CustomerId, quote.Id, line.Id, ct);
+                    try { await _mollie.SendMandateEmailAsync(created.Id, ct); }
+                    catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for subscription {SubscriptionId} (quote line {LineId})", created.Id, line.Id); }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Auto subscription creation failed for quote {QuoteId} line {LineId}", quote.Id, line.Id);
+                    await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "SubscriptionCreationFailed", $"Serienrechnung für Position \"{line.Title}\" konnte nicht automatisch angelegt werden: {ex.Message}", ct: ct);
+                }
+            }
+        }
     }
 
     public async Task<byte[]> GeneratePdfAsync(Guid id, CancellationToken ct)
@@ -386,7 +409,7 @@ public class QuoteServiceImpl : IQuoteService
         };
         copy.QuoteGroupId = copy.Id;
         foreach (var l in original.Lines)
-            copy.Lines.Add(new QuoteLine { ServiceCatalogItemId = l.ServiceCatalogItemId, Title = l.Title, Description = l.Description, Quantity = l.Quantity, UnitPrice = l.UnitPrice, DiscountPercent = l.DiscountPercent, LineType = l.LineType, VatPercent = EffectiveVatPercent(taxMode, l.VatPercent), SortOrder = l.SortOrder });
+            copy.Lines.Add(new QuoteLine { ServiceCatalogItemId = l.ServiceCatalogItemId, SubscriptionPlanId = l.SubscriptionPlanId, Title = l.Title, Description = l.Description, Quantity = l.Quantity, UnitPrice = l.UnitPrice, DiscountPercent = l.DiscountPercent, LineType = l.LineType, VatPercent = EffectiveVatPercent(taxMode, l.VatPercent), SortOrder = l.SortOrder });
         _db.Quotes.Add(copy);
         await _db.SaveChangesAsync(ct);
         await _activity.LogAsync(copy.CustomerId, "Quote", copy.Id, "Created", $"Angebot {copy.QuoteNumber} dupliziert von {original.QuoteNumber}", ct: ct);
@@ -435,6 +458,7 @@ public class QuoteServiceImpl : IQuoteService
             next.Lines.Add(new QuoteLine
             {
                 ServiceCatalogItemId = l.ServiceCatalogItemId,
+                SubscriptionPlanId = l.SubscriptionPlanId,
                 Title = l.Title,
                 Description = l.Description,
                     Quantity = l.Quantity,

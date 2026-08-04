@@ -365,6 +365,17 @@ await db.Database.ExecuteSqlRawAsync("""
     // Feature: robuste Mollie-Einzugswiederholung + Eskalation bei endgültigem Fehlschlag
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='CollectionAttemptCount') ALTER TABLE "Invoices" ADD "CollectionAttemptCount" INT NOT NULL DEFAULT 0;""");
 
+    // Feature: Serienrechnung direkt aus Angebotsposition (Plan-Link auf QuoteLine, mehrere Abos je Angebot)
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='QuoteLines' AND COLUMN_NAME='SubscriptionPlanId') ALTER TABLE "QuoteLines" ADD "SubscriptionPlanId" UNIQUEIDENTIFIER NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_QuoteLines_SubscriptionPlans_SubscriptionPlanId') ALTER TABLE "QuoteLines" ADD CONSTRAINT "FK_QuoteLines_SubscriptionPlans_SubscriptionPlanId" FOREIGN KEY ("SubscriptionPlanId") REFERENCES "SubscriptionPlans" ("Id");""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='QuoteLineId') ALTER TABLE "CustomerSubscriptions" ADD "QuoteLineId" UNIQUEIDENTIFIER NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_CustomerSubscriptions_QuoteLines_QuoteLineId') ALTER TABLE "CustomerSubscriptions" ADD CONSTRAINT "FK_CustomerSubscriptions_QuoteLines_QuoteLineId" FOREIGN KEY ("QuoteLineId") REFERENCES "QuoteLines" ("Id");""");
+    // Alter ContractQuoteId-Unique-Index erlaubte nur 1 Abo pro Angebot -- durch nicht-eindeutigen Index ersetzen,
+    // damit mehrere Plan-Positionen im selben Angebot je eine eigene Serienrechnung bekommen koennen.
+    await db.Database.ExecuteSqlRawAsync("""IF EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_ContractQuoteId' AND object_id=OBJECT_ID('CustomerSubscriptions') AND is_unique = 1) DROP INDEX "IX_CustomerSubscriptions_ContractQuoteId" ON "CustomerSubscriptions";""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_ContractQuoteId' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE INDEX "IX_CustomerSubscriptions_ContractQuoteId" ON "CustomerSubscriptions" ("ContractQuoteId");""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_QuoteLineId' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_QuoteLineId" ON "CustomerSubscriptions" ("QuoteLineId") WHERE "QuoteLineId" IS NOT NULL;""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)

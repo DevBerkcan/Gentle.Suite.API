@@ -134,6 +134,7 @@ public class MappingProfile : Profile
                 s.ContractBillingCycle,
                 s.ContractDurationMonths,
                 s.ContractQuoteId,
+                s.QuoteLineId,
                 s.ContractReference,
                 s.ContractVersion,
                 s.ContractAcceptedAt,

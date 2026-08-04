@@ -39,6 +39,8 @@ public class CustomerSubscription : BaseEntity
     public int? ContractDurationMonths { get; set; }
     public Guid? ContractQuoteId { get; set; }
     public Quote? ContractQuote { get; set; }
+    public Guid? QuoteLineId { get; set; }
+    public QuoteLine? QuoteLine { get; set; }
     public string? ContractReference { get; set; }
     public int? ContractVersion { get; set; }
     public DateTimeOffset? ContractAcceptedAt { get; set; }

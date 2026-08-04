@@ -101,6 +101,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<Quote>().HasIndex(x => new { x.QuoteGroupId, x.Version }).IsUnique();
         mb.Entity<Quote>().HasIndex(x => new { x.QuoteGroupId, x.IsCurrentVersion }).HasFilter("[IsCurrentVersion] = 1");
         mb.Entity<QuoteLine>().HasOne(x => x.Quote).WithMany(x => x.Lines).OnDelete(DeleteBehavior.Cascade);
+        mb.Entity<QuoteLine>().HasOne(x => x.SubscriptionPlan).WithMany().HasForeignKey(x => x.SubscriptionPlanId).OnDelete(DeleteBehavior.Restrict);
         mb.Entity<QuoteTemplateLine>().HasOne(x => x.QuoteTemplate).WithMany(x => x.Lines).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<Invoice>().HasOne(x => x.Customer).WithMany(x => x.Invoices).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<Invoice>().HasIndex(x => x.InvoiceNumber).IsUnique();
@@ -128,7 +129,9 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<SupportPolicy>().HasOne(x => x.Plan).WithOne(x => x.SupportPolicy).HasForeignKey<SupportPolicy>(x => x.PlanId);
         mb.Entity<CustomerSubscription>().HasOne(x => x.Customer).WithMany(x => x.Subscriptions).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<CustomerSubscription>().HasOne(x => x.ContractQuote).WithMany().HasForeignKey(x => x.ContractQuoteId).OnDelete(DeleteBehavior.Restrict);
-        mb.Entity<CustomerSubscription>().HasIndex(x => x.ContractQuoteId).IsUnique().HasFilter("[ContractQuoteId] IS NOT NULL");
+        mb.Entity<CustomerSubscription>().HasIndex(x => x.ContractQuoteId);
+        mb.Entity<CustomerSubscription>().HasOne(x => x.QuoteLine).WithMany().HasForeignKey(x => x.QuoteLineId).OnDelete(DeleteBehavior.Restrict);
+        mb.Entity<CustomerSubscription>().HasIndex(x => x.QuoteLineId).IsUnique().HasFilter("[QuoteLineId] IS NOT NULL");
         mb.Entity<JournalEntryLine>().HasOne(x => x.JournalEntry).WithMany(x => x.Lines).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<Milestone>().HasOne(x => x.Project).WithMany(x => x.Milestones).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<ProjectComment>().HasOne(x => x.Project).WithMany(x => x.Comments).OnDelete(DeleteBehavior.Cascade);

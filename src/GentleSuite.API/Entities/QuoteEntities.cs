@@ -80,6 +80,8 @@ public class QuoteLine : BaseEntity
     public Quote Quote { get; set; } = null!;
     public Guid? ServiceCatalogItemId { get; set; }
     public ServiceCatalogItem? ServiceCatalogItem { get; set; }
+    public Guid? SubscriptionPlanId { get; set; }
+    public SubscriptionPlan? SubscriptionPlan { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public decimal Quantity { get; set; } = 1;
