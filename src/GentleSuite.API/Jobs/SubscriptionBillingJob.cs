@@ -90,7 +90,7 @@ public class SubscriptionBillingJob
             }
 
             var year = DateTime.UtcNow.Year;
-            var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, CancellationToken.None, includeYear: false);
+            var invoiceNumber = await _seq.NextNumberAsync("SubscriptionInvoice", year, "AB", 4, CancellationToken.None, includeYear: false);
 
             var billingMonths = sub.ContractBillingCycle switch
             {
