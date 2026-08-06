@@ -387,6 +387,9 @@ public class InvoiceServiceImpl : IInvoiceService
     {
         var orig = await _db.Invoices.Include(i => i.Customer).ThenInclude(c => c.Contacts).Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
 
+        if (orig.Type == DomainInvoiceType.Cancellation)
+            throw new InvalidOperationException("Eine Stornorechnung kann nicht selbst storniert werden.");
+
         // Draft invoices: just mark cancelled, no storno document needed
         if (!orig.IsFinalized)
         {
