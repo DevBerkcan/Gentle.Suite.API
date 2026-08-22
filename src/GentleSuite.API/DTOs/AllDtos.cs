@@ -169,6 +169,7 @@ public class InvoiceDetailDto
     public string? Notes { get; set; }
     public string? PaymentTerms { get; set; }
     public bool IsFinalized { get; set; }
+    public DateTimeOffset? FinalizedAt { get; set; }
     public bool ReminderStop { get; set; }
     public List<InvoiceLineDto> Lines { get; set; } = new();
     public List<InvoiceVatSummaryDto> VatSummary { get; set; } = new();
