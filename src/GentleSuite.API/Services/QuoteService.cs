@@ -47,7 +47,19 @@ public class QuoteServiceImpl : IQuoteService
     public async Task<QuoteDetailDto?> GetByIdAsync(Guid id, CancellationToken ct)
     {
         var q = await _db.Quotes.Include(x => x.Customer).ThenInclude(c => c.Contacts).Include(x => x.Lines.OrderBy(l => l.SortOrder)).FirstOrDefaultAsync(x => x.Id == id, ct);
-        return q == null ? null : _mapper.Map<QuoteDetailDto>(q);
+        if (q == null) return null;
+        var dto = _mapper.Map<QuoteDetailDto>(q);
+        await ResolvePaymentTermOptionsAsync(dto, q.PaymentTermKeys, ct);
+        return dto;
+    }
+
+    private async Task ResolvePaymentTermOptionsAsync(QuoteDetailDto dto, string? paymentTermKeysJson, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(paymentTermKeysJson)) return;
+        var keys = JsonSerializer.Deserialize<List<string>>(paymentTermKeysJson);
+        if (keys == null || keys.Count == 0) return;
+        var options = await _db.PaymentTermOptions.Where(o => keys.Contains(o.Key) && o.IsActive).OrderBy(o => o.SortOrder).ToListAsync(ct);
+        dto.PaymentTermOptions = _mapper.Map<List<PaymentTermOptionDto>>(options);
     }
 
     public async Task<QuoteDetailDto> CreateAsync(CreateQuoteRequest req, CancellationToken ct)
@@ -69,7 +81,8 @@ public class QuoteServiceImpl : IQuoteService
             Subject = req.Subject, IntroText = req.IntroText ?? co?.QuoteIntroTemplate,
             OutroText = req.OutroText ?? co?.QuoteOutroTemplate, Notes = req.Notes,
             TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : req.TaxRate, TaxMode = taxMode, Status = QuoteStatus.Draft,
-            LegalTextBlocks = req.LegalTextBlockKeys != null ? JsonSerializer.Serialize(req.LegalTextBlockKeys) : null
+            LegalTextBlocks = req.LegalTextBlockKeys != null ? JsonSerializer.Serialize(req.LegalTextBlockKeys) : null,
+            PaymentTermKeys = req.PaymentTermKeys != null ? JsonSerializer.Serialize(req.PaymentTermKeys) : null
         };
         quote.QuoteGroupId = quote.Id;
         if (req.Lines != null) foreach (var l in req.Lines)
@@ -195,7 +208,9 @@ public class QuoteServiceImpl : IQuoteService
         var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts).Include(q => q.Lines.OrderBy(l => l.SortOrder)).FirstOrDefaultAsync(q => q.ApprovalToken == token, ct);
         if (quote == null || !quote.IsCurrentVersion || quote.ApprovalTokenExpiry < DateTimeOffset.UtcNow) return null;
         if (quote.Status == QuoteStatus.Sent) { quote.Status = QuoteStatus.Viewed; quote.ViewedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
-        return _mapper.Map<QuoteDetailDto>(quote);
+        var dto = _mapper.Map<QuoteDetailDto>(quote);
+        await ResolvePaymentTermOptionsAsync(dto, quote.PaymentTermKeys, ct);
+        return dto;
     }
 
     public async Task ProcessApprovalAsync(string token, ApprovalRequest req, string? ipAddress, CancellationToken ct)
@@ -208,6 +223,16 @@ public class QuoteServiceImpl : IQuoteService
         {
             if (!req.B2bAuthorityConfirmed)
                 throw new InvalidOperationException("Bitte bestätigen Sie, dass Sie als Unternehmer handeln und zur Annahme für das Unternehmen berechtigt sind.");
+            if (!string.IsNullOrEmpty(quote.PaymentTermKeys))
+            {
+                var availableKeys = JsonSerializer.Deserialize<List<string>>(quote.PaymentTermKeys) ?? new List<string>();
+                if (availableKeys.Count > 0)
+                {
+                    if (string.IsNullOrWhiteSpace(req.ChosenPaymentTermKey) || !availableKeys.Contains(req.ChosenPaymentTermKey))
+                        throw new InvalidOperationException("Bitte wählen Sie eine Zahlungsbedingung aus.");
+                    quote.ChosenPaymentTermKey = req.ChosenPaymentTermKey;
+                }
+            }
             quote.Status = QuoteStatus.Accepted;
             quote.B2bAuthorityConfirmed = true;
             if (!string.IsNullOrEmpty(req.SignatureData))
@@ -372,6 +397,7 @@ public class QuoteServiceImpl : IQuoteService
         if (req.IntroText != null) quote.IntroText = req.IntroText;
         if (req.OutroText != null) quote.OutroText = req.OutroText;
         if (req.Notes != null) quote.Notes = req.Notes;
+        if (req.PaymentTermKeys != null) quote.PaymentTermKeys = JsonSerializer.Serialize(req.PaymentTermKeys);
         if (req.TaxRate.HasValue) quote.TaxRate = companyTaxMode == TaxMode.SmallBusiness ? 0 : req.TaxRate.Value;
         if (req.TaxMode.HasValue) quote.TaxMode = EnforceCompanyTaxMode(companyTaxMode, req.TaxMode.Value);
         if (companyTaxMode == TaxMode.SmallBusiness) quote.TaxMode = TaxMode.SmallBusiness;
@@ -405,7 +431,7 @@ public class QuoteServiceImpl : IQuoteService
             Subject = original.Subject, IntroText = original.IntroText,
             OutroText = original.OutroText, Notes = original.Notes,
             TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : original.TaxRate, TaxMode = taxMode,
-            Status = QuoteStatus.Draft, LegalTextBlocks = original.LegalTextBlocks, Version = 1
+            Status = QuoteStatus.Draft, LegalTextBlocks = original.LegalTextBlocks, PaymentTermKeys = original.PaymentTermKeys, Version = 1
         };
         copy.QuoteGroupId = copy.Id;
         foreach (var l in original.Lines)
@@ -450,7 +476,8 @@ public class QuoteServiceImpl : IQuoteService
             InternalNotes = current.InternalNotes,
             TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : current.TaxRate,
             TaxMode = taxMode,
-            LegalTextBlocks = current.LegalTextBlocks
+            LegalTextBlocks = current.LegalTextBlocks,
+            PaymentTermKeys = current.PaymentTermKeys
         };
 
         foreach (var l in current.Lines.OrderBy(l => l.SortOrder))

@@ -220,6 +220,14 @@ public interface ILegalTextService
     Task<LegalTextBlockDto> UpdateAsync(Guid id, CreateLegalTextRequest req, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
+
+public interface IPaymentTermService
+{
+    Task<List<PaymentTermOptionDto>> GetAllAsync(CancellationToken ct = default);
+    Task<PaymentTermOptionDto> CreateAsync(CreatePaymentTermOptionRequest req, CancellationToken ct = default);
+    Task<PaymentTermOptionDto> UpdateAsync(Guid id, CreatePaymentTermOptionRequest req, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
+}
 public interface IEmailLogService { Task<PagedResult<EmailLogDto>> GetLogsAsync(PaginationParams p, Guid? customerId = null, CancellationToken ct = default); }
 
 public interface IBankTransactionService

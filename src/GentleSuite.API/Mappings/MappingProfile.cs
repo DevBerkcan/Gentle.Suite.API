@@ -64,7 +64,9 @@ public class MappingProfile : Profile
             .ForMember(d => d.SignedByName, o => o.MapFrom(s => s.SignedByName))
             .ForMember(d => d.SignedByEmail, o => o.MapFrom(s => s.SignedByEmail))
             .ForMember(d => d.SignedAt, o => o.MapFrom(s => s.SignedAt))
-            .ForMember(d => d.LegalTextBlockKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.LegalTextBlocks) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.LegalTextBlocks, (JsonSerializerOptions?)null)));
+            .ForMember(d => d.LegalTextBlockKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.LegalTextBlocks) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.LegalTextBlocks, (JsonSerializerOptions?)null)))
+            .ForMember(d => d.PaymentTermKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.PaymentTermKeys) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.PaymentTermKeys, (JsonSerializerOptions?)null)))
+            .ForMember(d => d.PaymentTermOptions, o => o.Ignore());
         CreateMap<Quote, QuoteVersionDto>()
             .ConstructUsing(s => new QuoteVersionDto(s.Id, s.QuoteGroupId, s.QuoteNumber, s.Version, s.IsCurrentVersion, s.Status, s.CreatedAt, s.SentAt));
         CreateMap<QuoteLine, QuoteLineDto>();
@@ -159,6 +161,7 @@ public class MappingProfile : Profile
         CreateMap<ServiceCatalogItem, ServiceCatalogItemDto>();
         CreateMap<EmailLog, EmailLogDto>();
         CreateMap<LegalTextBlock, LegalTextBlockDto>();
+        CreateMap<PaymentTermOption, PaymentTermOptionDto>();
         CreateMap<ActivityLog, ActivityLogDto>();
         CreateMap<FileUpload, FileUploadDto>();
     }

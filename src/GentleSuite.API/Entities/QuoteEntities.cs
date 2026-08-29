@@ -65,6 +65,10 @@ public class Quote : GobdEntity
     // Legal text blocks (JSON array of keys)
     public string? LegalTextBlocks { get; set; }
 
+    // Payment terms offered to the customer (JSON array of keys) + the one the customer picked
+    public string? PaymentTermKeys { get; set; }
+    public string? ChosenPaymentTermKey { get; set; }
+
     public List<QuoteLine> Lines { get; set; } = new();
 
     public decimal SubtotalOneTime => Lines.Where(l => l.LineType == QuoteLineType.OneTime).Sum(l => l.Total);
@@ -94,6 +98,15 @@ public class QuoteLine : BaseEntity
 }
 
 public class LegalTextBlock : BaseEntity
+{
+    public string Key { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+}
+
+public class PaymentTermOption : BaseEntity
 {
     public string Key { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;

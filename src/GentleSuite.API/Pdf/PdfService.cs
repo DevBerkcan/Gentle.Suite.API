@@ -43,6 +43,12 @@ public class PdfService : IPdfService
             var keys = JsonSerializer.Deserialize<List<string>>(quote.LegalTextBlocks);
             if (keys?.Any() == true) legal = await _db.LegalTextBlocks.Where(b => keys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
         }
+        List<PaymentTermOption>? paymentTerms = null;
+        if (!string.IsNullOrEmpty(quote.PaymentTermKeys))
+        {
+            var keys = JsonSerializer.Deserialize<List<string>>(quote.PaymentTermKeys);
+            if (keys?.Any() == true) paymentTerms = await _db.PaymentTermOptions.Where(o => keys.Contains(o.Key) && o.IsActive).OrderBy(o => o.SortOrder).ToListAsync(ct);
+        }
 
         return Document.Create(c => c.Page(p =>
         {
@@ -57,6 +63,20 @@ public class PdfService : IPdfService
                 if (recurring.Any()) { col.Item().PaddingTop(14).Text("Monatliche Leistungen").Bold().FontSize(10).FontColor("#344054"); col.Item().PaddingTop(6).Element(e => BuildQuoteTable(e, recurring, true)); col.Item().AlignRight().PaddingTop(4).Text($"Monatlich: {quote.SubtotalMonthly:N2} €/Mon.").Bold(); }
                 BuildTotalsBox(col, quote.Subtotal, quote.TaxRate, quote.TaxAmount, quote.GrandTotal, quote.TaxMode);
                 if (!string.IsNullOrEmpty(quote.OutroText)) col.Item().PaddingTop(14).Text(quote.OutroText).FontSize(9);
+                if (paymentTerms?.Any() == true)
+                {
+                    col.Item().PaddingTop(14).Text("Zahlungsbedingungen").Bold().FontSize(10).FontColor("#344054");
+                    foreach (var pt in paymentTerms)
+                    {
+                        var chosen = pt.Key == quote.ChosenPaymentTermKey;
+                        col.Item().PaddingTop(6).Text(t =>
+                        {
+                            t.Span(chosen ? "☑ " : "☐ ").FontSize(9);
+                            t.Span(pt.Title).Bold().FontSize(9).FontColor(chosen ? "#101828" : "#344054");
+                        });
+                        col.Item().PaddingTop(2).PaddingLeft(14).Text(pt.Content).FontSize(8).FontColor("#667085");
+                    }
+                }
                 if (legal?.Any() == true) foreach (var b in legal) { col.Item().PaddingTop(12).Text(b.Title).Bold().FontSize(9).FontColor("#344054"); col.Item().PaddingTop(3).Text(b.Content).FontSize(7.5f).FontColor("#667085"); }
                 BuildSignatureArea(col, co, quote.SignatureData, quote.SignedByName, quote.SignedByEmail, quote.SignedAt, quote.Customer.CompanyName);
             });

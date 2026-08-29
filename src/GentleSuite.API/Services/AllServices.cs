@@ -831,6 +831,15 @@ public class LegalTextServiceImpl : ILegalTextService
     public async Task<LegalTextBlockDto> UpdateAsync(Guid id, CreateLegalTextRequest req, CancellationToken ct) { var l = await _db.LegalTextBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); l.Key = req.Key; l.Title = req.Title; l.Content = req.Content; l.SortOrder = req.SortOrder; await _db.SaveChangesAsync(ct); return _m.Map<LegalTextBlockDto>(l); }
     public async Task DeleteAsync(Guid id, CancellationToken ct) { var l = await _db.LegalTextBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); _db.LegalTextBlocks.Remove(l); await _db.SaveChangesAsync(ct); }
 }
+public class PaymentTermServiceImpl : IPaymentTermService
+{
+    private readonly AppDbContext _db; private readonly IMapper _m;
+    public PaymentTermServiceImpl(AppDbContext db, IMapper m) { _db = db; _m = m; }
+    public async Task<List<PaymentTermOptionDto>> GetAllAsync(CancellationToken ct) => _m.Map<List<PaymentTermOptionDto>>(await _db.PaymentTermOptions.Where(l => l.IsActive).OrderBy(l => l.SortOrder).ToListAsync(ct));
+    public async Task<PaymentTermOptionDto> CreateAsync(CreatePaymentTermOptionRequest req, CancellationToken ct) { var l = new PaymentTermOption { Key = req.Key, Title = req.Title, Content = req.Content, SortOrder = req.SortOrder, IsActive = true }; _db.PaymentTermOptions.Add(l); await _db.SaveChangesAsync(ct); return _m.Map<PaymentTermOptionDto>(l); }
+    public async Task<PaymentTermOptionDto> UpdateAsync(Guid id, CreatePaymentTermOptionRequest req, CancellationToken ct) { var l = await _db.PaymentTermOptions.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); l.Key = req.Key; l.Title = req.Title; l.Content = req.Content; l.SortOrder = req.SortOrder; await _db.SaveChangesAsync(ct); return _m.Map<PaymentTermOptionDto>(l); }
+    public async Task DeleteAsync(Guid id, CancellationToken ct) { var l = await _db.PaymentTermOptions.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); _db.PaymentTermOptions.Remove(l); await _db.SaveChangesAsync(ct); }
+}
 public class EmailLogServiceImpl : IEmailLogService { private readonly AppDbContext _db; private readonly IMapper _m; public EmailLogServiceImpl(AppDbContext db, IMapper m) { _db = db; _m = m; } public async Task<PagedResult<EmailLogDto>> GetLogsAsync(PaginationParams p, Guid? cid, CancellationToken ct) { var q = _db.EmailLogs.AsQueryable(); if (cid.HasValue) q = q.Where(e => e.CustomerId == cid.Value); var total = await q.CountAsync(ct); var items = await q.OrderByDescending(e => e.CreatedAt).Skip((p.Page-1)*p.PageSize).Take(p.PageSize).ToListAsync(ct); return new PagedResult<EmailLogDto>(_m.Map<List<EmailLogDto>>(items), total, p.Page, p.PageSize); } }
 
 // === Journal ===

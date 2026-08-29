@@ -133,15 +133,18 @@ public class QuoteDetailDto
     public string? PrimaryContactEmail { get; set; }
     public List<QuoteLineDto> Lines { get; set; } = new();
     public List<string>? LegalTextBlockKeys { get; set; }
+    public List<string>? PaymentTermKeys { get; set; }
+    public List<PaymentTermOptionDto>? PaymentTermOptions { get; set; }
+    public string? ChosenPaymentTermKey { get; set; }
 }
 
 public record QuoteVersionDto(Guid Id, Guid QuoteGroupId, string QuoteNumber, int Version, bool IsCurrentVersion, QuoteStatus Status, DateTimeOffset CreatedAt, DateTimeOffset? SentAt);
 public record QuoteLineDto(Guid Id, Guid? ServiceCatalogItemId, Guid? SubscriptionPlanId, string Title, string? Description, decimal Quantity, decimal UnitPrice, decimal DiscountPercent, QuoteLineType LineType, int VatPercent, int SortOrder, decimal Total);
-public record CreateQuoteRequest(Guid CustomerId, Guid? ContactId, string? Subject, string? IntroText, string? OutroText, string? Notes, decimal TaxRate = 19m, TaxMode TaxMode = TaxMode.Standard, List<CreateQuoteLineRequest>? Lines = null, Guid? TemplateId = null, List<string>? LegalTextBlockKeys = null);
+public record CreateQuoteRequest(Guid CustomerId, Guid? ContactId, string? Subject, string? IntroText, string? OutroText, string? Notes, decimal TaxRate = 19m, TaxMode TaxMode = TaxMode.Standard, List<CreateQuoteLineRequest>? Lines = null, Guid? TemplateId = null, List<string>? LegalTextBlockKeys = null, List<string>? PaymentTermKeys = null);
 public record CreateQuoteLineRequest(Guid? ServiceCatalogItemId, string Title, string? Description, decimal Quantity, decimal UnitPrice, decimal DiscountPercent = 0, QuoteLineType LineType = QuoteLineType.OneTime, int VatPercent = 19, int SortOrder = 0, Guid? SubscriptionPlanId = null);
 public record SendQuoteRequest(string? RecipientEmail = null, string? Message = null, int ExpirationDays = 30, bool RequireSignature = true);
-public record ApprovalRequest(bool Accepted, string? Comment, string? SignatureData, string? SignedByName, string? SignedByEmail, bool B2bAuthorityConfirmed = false);
-public record UpdateQuoteRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, decimal? TaxRate, TaxMode? TaxMode);
+public record ApprovalRequest(bool Accepted, string? Comment, string? SignatureData, string? SignedByName, string? SignedByEmail, bool B2bAuthorityConfirmed = false, string? ChosenPaymentTermKey = null);
+public record UpdateQuoteRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, decimal? TaxRate, TaxMode? TaxMode, List<string>? PaymentTermKeys = null);
 public record QuoteTemplateDto(Guid Id, string Name, string? Description, List<QuoteTemplateLineDto> Lines);
 public record QuoteTemplateLineDto(Guid Id, string Title, string? Description, decimal Quantity, decimal UnitPrice, QuoteLineType LineType, int SortOrder);
 
@@ -269,6 +272,10 @@ public record EmailLogDto(Guid Id, string To, string Subject, EmailStatus Status
 // === Legal Text ===
 public record LegalTextBlockDto(Guid Id, string Key, string Title, string Content, int SortOrder);
 public record CreateLegalTextRequest(string Key, string Title, string Content, int SortOrder = 0);
+
+// === Payment Terms ===
+public record PaymentTermOptionDto(Guid Id, string Key, string Title, string Content, int SortOrder);
+public record CreatePaymentTermOptionRequest(string Key, string Title, string Content, int SortOrder = 0);
 
 // === Activity ===
 public record ActivityLogDto(Guid Id, string EntityType, Guid EntityId, string Action, string? Description, string? UserName, DateTimeOffset CreatedAt);

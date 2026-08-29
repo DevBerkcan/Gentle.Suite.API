@@ -74,6 +74,7 @@ builder.Services.AddScoped<IDashboardService, DashboardServiceImpl>();
 builder.Services.AddScoped<IActivityLogService, ActivityLogServiceImpl>();
 builder.Services.AddScoped<ICompanySettingsService, CompanySettingsServiceImpl>();
 builder.Services.AddScoped<ILegalTextService, LegalTextServiceImpl>();
+builder.Services.AddScoped<IPaymentTermService, PaymentTermServiceImpl>();
 builder.Services.AddScoped<ITimeTrackingService, TimeTrackingServiceImpl>();
 builder.Services.AddScoped<IVatService, VatServiceImpl>();
 builder.Services.AddScoped<IEmailLogService, EmailLogServiceImpl>();
@@ -375,6 +376,30 @@ await db.Database.ExecuteSqlRawAsync("""
     await db.Database.ExecuteSqlRawAsync("""IF EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_ContractQuoteId' AND object_id=OBJECT_ID('CustomerSubscriptions') AND is_unique = 1) DROP INDEX "IX_CustomerSubscriptions_ContractQuoteId" ON "CustomerSubscriptions";""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_ContractQuoteId' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE INDEX "IX_CustomerSubscriptions_ContractQuoteId" ON "CustomerSubscriptions" ("ContractQuoteId");""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_QuoteLineId' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_QuoteLineId" ON "CustomerSubscriptions" ("QuoteLineId") WHERE "QuoteLineId" IS NOT NULL;""");
+
+    // Payment terms catalog + selection on quotes
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='PaymentTermOptions')
+    BEGIN
+        CREATE TABLE "PaymentTermOptions" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "Key" NVARCHAR(MAX) NOT NULL,
+            "Title" NVARCHAR(MAX) NOT NULL,
+            "Content" NVARCHAR(MAX) NOT NULL,
+            "IsActive" BIT NOT NULL DEFAULT 1,
+            "SortOrder" INT NOT NULL DEFAULT 0,
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_PaymentTermOptions" PRIMARY KEY ("Id")
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='PaymentTermKeys') ALTER TABLE "Quotes" ADD "PaymentTermKeys" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='ChosenPaymentTermKey') ALTER TABLE "Quotes" ADD "ChosenPaymentTermKey" NVARCHAR(450) NULL;""");
 
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }

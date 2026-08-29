@@ -522,6 +522,15 @@ public class LegalTextsController(ILegalTextService svc) : ControllerBase
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
 }
 
+[ApiController, Route("api/paymentterms"), Authorize]
+public class PaymentTermsController(IPaymentTermService svc) : ControllerBase
+{
+    [HttpGet] public async Task<ActionResult<List<PaymentTermOptionDto>>> Get() => Ok(await svc.GetAllAsync());
+    [HttpPost] public async Task<ActionResult<PaymentTermOptionDto>> Create(CreatePaymentTermOptionRequest req) => Ok(await svc.CreateAsync(req));
+    [HttpPut("{id}")] public async Task<ActionResult<PaymentTermOptionDto>> Update(Guid id, CreatePaymentTermOptionRequest req) => Ok(await svc.UpdateAsync(id, req));
+    [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
+}
+
 [ApiController, Route("api/[controller]"), Authorize]
 public class JournalController(IJournalService svc) : ControllerBase
 {
