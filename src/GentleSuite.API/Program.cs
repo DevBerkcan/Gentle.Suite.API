@@ -401,6 +401,17 @@ await db.Database.ExecuteSqlRawAsync("""
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='PaymentTermKeys') ALTER TABLE "Quotes" ADD "PaymentTermKeys" NVARCHAR(MAX) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='ChosenPaymentTermKey') ALTER TABLE "Quotes" ADD "ChosenPaymentTermKey" NVARCHAR(450) NULL;""");
 
+    // Subscriptions may only be billed once the user has actually issued the invoice for them,
+    // not right when the customer signs the quote. Backfill: subscriptions that already have at
+    // least one invoice were clearly already running under the old flow and must keep billing.
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='BillingAuthorizedAt') ALTER TABLE "CustomerSubscriptions" ADD "BillingAuthorizedAt" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""
+    UPDATE cs SET cs."BillingAuthorizedAt" = cs."ConfirmedAt"
+    FROM "CustomerSubscriptions" cs
+    WHERE cs."BillingAuthorizedAt" IS NULL
+      AND EXISTS (SELECT 1 FROM "Invoices" i WHERE i."SubscriptionId" = cs."Id");
+    """);
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)

@@ -150,7 +150,8 @@ public class MappingProfile : Profile
                 s.MandateEmailRecipient,
                 s.MandateEmailStatus,
                 s.MandateEmailLastError,
-                s.MandateEmailAttemptCount
+                s.MandateEmailAttemptCount,
+                s.BillingAuthorizedAt
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()

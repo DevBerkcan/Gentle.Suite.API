@@ -381,9 +381,31 @@ public class QuoteServiceImpl : IQuoteService
             $"Rechnung {inv.InvoiceNumber} aus Angebot {quote.QuoteNumber} erstellt", ct: ct);
 
         if (inv.Type == InvoiceType.Recurring)
-            await _invoiceService.HandleRecurringSetupAsync(inv.Id, ct);
+            await AuthorizeSubscriptionBillingAsync(quote, inv, ct);
 
         return (await _invoiceService.GetByIdAsync(inv.Id, ct))!;
+    }
+
+    // Marks the subscriptions tied to this quote's recurring lines as billable now that the
+    // user has actually issued the invoice for them (not right at quote-signature time).
+    private async Task AuthorizeSubscriptionBillingAsync(Quote quote, Invoice inv, CancellationToken ct)
+    {
+        var recurringLines = quote.Lines.Where(l => l.LineType == QuoteLineType.RecurringMonthly && l.SubscriptionPlanId != null).ToList();
+        var authorizedSubscriptionIds = new List<Guid>();
+        foreach (var line in recurringLines)
+        {
+            var sub = await _db.CustomerSubscriptions.FirstOrDefaultAsync(s => s.QuoteLineId == line.Id, ct);
+            if (sub == null)
+            {
+                _logger.LogWarning("Recurring quote line {LineId} on quote {QuoteNumber} has no matching subscription; billing cannot be authorized automatically.", line.Id, quote.QuoteNumber);
+                continue;
+            }
+            sub.BillingAuthorizedAt ??= DateTimeOffset.UtcNow;
+            authorizedSubscriptionIds.Add(sub.Id);
+        }
+        if (authorizedSubscriptionIds.Count == 1)
+            inv.SubscriptionId = authorizedSubscriptionIds[0];
+        await _db.SaveChangesAsync(ct);
     }
 
 

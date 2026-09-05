@@ -111,21 +111,21 @@ public class InvoiceServiceImpl : IInvoiceService
                          && s.Plan.Name == line.Title)
                 .FirstOrDefaultAsync(ct);
 
-            Guid subscriptionId;
-
+            CustomerSubscription sub;
             if (existingSub != null)
             {
-                subscriptionId = existingSub.Id;
+                sub = existingSub;
 
                 var existingRecurringInvoice = await _db.Invoices
-                    .Where(i => i.SubscriptionId == subscriptionId
+                    .Where(i => i.SubscriptionId == sub.Id
                              && i.BillingPeriodStart == null
                              && i.BillingPeriodEnd == null)
                     .FirstOrDefaultAsync(ct);
 
                 if (existingRecurringInvoice != null && existingRecurringInvoice.Id != inv.Id)
                 {
-                    inv.SubscriptionId = subscriptionId;
+                    inv.SubscriptionId = sub.Id;
+                    sub.BillingAuthorizedAt ??= now;
                     await _db.SaveChangesAsync(ct);
                     continue;
                 }
@@ -144,7 +144,7 @@ public class InvoiceServiceImpl : IInvoiceService
                 _db.SubscriptionPlans.Add(plan);
                 await _db.SaveChangesAsync(ct);
 
-                var sub = new CustomerSubscription
+                sub = new CustomerSubscription
                 {
                     CustomerId = inv.CustomerId,
                     PlanId = plan.Id,
@@ -155,16 +155,14 @@ public class InvoiceServiceImpl : IInvoiceService
                 };
                 _db.CustomerSubscriptions.Add(sub);
                 await _db.SaveChangesAsync(ct);
-
-                subscriptionId = sub.Id;
             }
 
-            if (inv.SubscriptionId != subscriptionId)
-            {
-                inv.SubscriptionId = subscriptionId;
-                await _db.SaveChangesAsync(ct);
-            }
-
+            // This invoice IS the "issued invoice" for a subscription created directly (no quote
+            // in between), so it authorizes billing immediately rather than waiting for a later one.
+            sub.BillingAuthorizedAt ??= now;
+            if (inv.SubscriptionId != sub.Id)
+                inv.SubscriptionId = sub.Id;
+            await _db.SaveChangesAsync(ct);
         }
 
         if (!inv.IsFinalized)
@@ -173,76 +171,6 @@ public class InvoiceServiceImpl : IInvoiceService
         }
     }
 
-
-    public async Task HandleRecurringSetupFromQuoteAsync(Guid invoiceId, List<QuoteLine> recurringLines, CancellationToken ct)
-    {
-        var inv = await _db.Invoices
-            .Include(i => i.Customer)
-            .FirstOrDefaultAsync(i => i.Id == invoiceId, ct)
-            ?? throw new KeyNotFoundException();
-
-        // Calculate total from recurring lines only
-        var monthlyPrice = recurringLines.Sum(l =>
-        {
-            var baseAmount = l.Quantity * l.UnitPrice;
-            var discount = baseAmount * ((l.DiscountPercent) / 100m);
-            return baseAmount - discount;
-        });
-
-        // Create plan name from the first recurring line or subject
-        var firstRecurring = recurringLines.First();
-        var planName = firstRecurring.Title;
-        if (recurringLines.Count > 1)
-            planName = $"{firstRecurring.Title} + {recurringLines.Count - 1} weitere Leistungen";
-
-        var planDescription = recurringLines.FirstOrDefault()?.Description ?? string.Empty;
-
-        var existingSub = await _db.CustomerSubscriptions
-            .Include(s => s.Plan)
-            .Where(s => s.CustomerId == inv.CustomerId && s.Status == SubscriptionStatus.Active)
-            .FirstOrDefaultAsync(ct);
-
-        Guid subscriptionId;
-
-        if (existingSub != null)
-        {
-            subscriptionId = existingSub.Id;
-        }
-        else
-        {
-            var plan = new SubscriptionPlan
-            {
-                Name = planName,
-                Description = planDescription,
-                MonthlyPrice = monthlyPrice,
-                BillingCycle = BillingCycle.Monthly,
-                Category = SubscriptionPlanCategory.Allgemein,
-                IsActive = true
-            };
-            _db.SubscriptionPlans.Add(plan);
-            await _db.SaveChangesAsync(ct);
-
-            var now = DateTimeOffset.UtcNow;
-            var sub = new CustomerSubscription
-            {
-                CustomerId = inv.CustomerId,
-                PlanId = plan.Id,
-                Status = SubscriptionStatus.PendingConfirmation,
-                StartDate = now,
-                NextBillingDate = now.AddMonths(1),
-                ConfirmedAt = null
-            };
-            _db.CustomerSubscriptions.Add(sub);
-            await _db.SaveChangesAsync(ct);
-
-            subscriptionId = sub.Id;
-        }
-
-        inv.SubscriptionId = subscriptionId;
-        await _db.SaveChangesAsync(ct);
-
-        await FinalizeAsync(invoiceId, new FinalizeInvoiceRequest { SendEmail = true }, ct);
-    }
 
     public async Task<InvoiceDetailDto> UpdateAsync(Guid id, UpdateInvoiceRequest req, CancellationToken ct)
     {

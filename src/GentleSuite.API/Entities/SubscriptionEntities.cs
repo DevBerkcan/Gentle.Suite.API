@@ -63,6 +63,8 @@ public class CustomerSubscription : BaseEntity
     public string? MandateEmailStatus { get; set; }
     public string? MandateEmailLastError { get; set; }
     public int MandateEmailAttemptCount { get; set; }
+    /// <summary>Set once the user has actually issued the invoice covering this contract; only then may SubscriptionBillingJob start billing it.</summary>
+    public DateTimeOffset? BillingAuthorizedAt { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity
