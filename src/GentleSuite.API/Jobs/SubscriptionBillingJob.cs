@@ -213,7 +213,10 @@ public class SubscriptionBillingJob
 
         var invoicesToCollect = await _db.Invoices
             .Where(i => i.SubscriptionId != null &&
-                        i.PaymentCollectionStatus == "scheduled" &&
+                        (i.PaymentCollectionStatus == "scheduled" ||
+                         i.PaymentCollectionStatus == "open" ||
+                         i.PaymentCollectionStatus == "pending" ||
+                         i.PaymentCollectionStatus == "authorized") &&
                         i.PaymentCollectionDueDate != null &&
                         i.PaymentCollectionDueDate.Value.Date <= today &&
                         i.Status != InvoiceStatus.Paid &&
