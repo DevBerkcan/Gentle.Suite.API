@@ -16,6 +16,7 @@ frontend/
 # Secrets — NIEMALS committen
 .env
 appsettings.Production.json
+appsettings.Development.json
 appsettings.*.local.json
 
 # Publish output

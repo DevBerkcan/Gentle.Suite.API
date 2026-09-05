@@ -26,9 +26,17 @@ builder.Host.UseSerilog();
 var connStr = builder.Configuration.GetConnectionString("Default") ?? "Server=localhost,1433;Database=gentlesuite;User Id=sa;Password=YourStrong!Passw0rd;Encrypt=False;TrustServerCertificate=True";
 EnsureSqlServerDatabaseExists(connStr);
 builder.Services.AddDbContext<AppDbContext>(o => o.UseSqlServer(connStr));
-builder.Services.AddIdentity<AppUser, IdentityRole>(o => { o.Password.RequireDigit = true; o.Password.RequiredLength = 8; o.Password.RequireNonAlphanumeric = false; }).AddEntityFrameworkStores<AppDbContext>().AddDefaultTokenProviders();
+builder.Services.AddIdentity<AppUser, IdentityRole>(o =>
+{
+    o.Password.RequireDigit = true; o.Password.RequiredLength = 8; o.Password.RequireNonAlphanumeric = false;
+    o.Lockout.MaxFailedAccessAttempts = 5;
+    o.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+    o.Lockout.AllowedForNewUsers = true;
+}).AddEntityFrameworkStores<AppDbContext>().AddDefaultTokenProviders();
 
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "GentleSuiteSecretKey_MinLength32Chars!!";
+var jwtKey = builder.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
+    throw new InvalidOperationException("Jwt:Key ist nicht konfiguriert oder zu kurz (mind. 32 Zeichen). Für lokale Entwicklung in appsettings.Development.json setzen, für Produktion in appsettings.Production.json oder als Umgebungsvariable Jwt__Key.");
 builder.Services.AddAuthentication(o => { o.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme; o.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme; })
     .AddJwtBearer(o =>
     {
@@ -117,7 +125,9 @@ builder.Services.AddSwaggerGen(c =>
     c.AddSecurityRequirement(new OpenApiSecurityRequirement { { new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" } }, Array.Empty<string>() } });
 });
 
-builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
+    ?? new[] { "https://gentlesuite.vercel.app", "http://localhost:3000" };
+builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.WithOrigins(allowedOrigins).AllowAnyMethod().AllowAnyHeader()));
 
 var app = builder.Build();
 
@@ -405,6 +415,11 @@ await db.Database.ExecuteSqlRawAsync("""
     // not right when the customer signs the quote. Backfill: subscriptions that already have at
     // least one invoice were clearly already running under the old flow and must keep billing.
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='BillingAuthorizedAt') ALTER TABLE "CustomerSubscriptions" ADD "BillingAuthorizedAt" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='LegalTextBlocksSnapshot') ALTER TABLE "Quotes" ADD "LegalTextBlocksSnapshot" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='DataSource') ALTER TABLE "Customers" ADD "DataSource" INT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='DataSourceNote') ALTER TABLE "Customers" ADD "DataSourceNote" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='PrivacyNoticeSentAt') ALTER TABLE "Customers" ADD "PrivacyNoticeSentAt" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='PrivacyNoticeVersion') ALTER TABLE "Customers" ADD "PrivacyNoticeVersion" NVARCHAR(64) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""
     UPDATE cs SET cs."BillingAuthorizedAt" = cs."ConfirmedAt"
     FROM "CustomerSubscriptions" cs
@@ -444,8 +459,11 @@ app.UseExceptionHandler(a => a.Run(async ctx =>
 }));
 
 app.UseSerilogRequestLogging();
-app.UseSwagger();
-app.UseSwaggerUI();
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 app.UseMiddleware<GentleSuite.API.Middleware.GentleBookApiKeyMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
