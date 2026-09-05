@@ -61,6 +61,7 @@ public class SubscriptionBillingJob
                 s.ContractQuoteId != null &&
                 s.BusinessCustomerConfirmed &&
                 s.AgreedMonthlyPrice > 0 &&
+                s.BillingAuthorizedAt != null &&
                 s.NextBillingDate.Date <= today.AddDays(preNotificationDays))
             .ToListAsync();
 
