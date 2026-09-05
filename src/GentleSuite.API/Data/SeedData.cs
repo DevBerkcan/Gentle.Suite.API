@@ -403,7 +403,10 @@ END;
                     <div style='background:#ffffff;border:1px solid #eaecf0;border-top:0;border-radius:0 0 12px 12px;padding:36px 32px'>
                       <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
                       <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Monatliche Zahlung sicher einrichten</h1>
-                      <p style='line-height:1.65;color:#475467'>für den vereinbarten Tarif <strong>{{ PlanName }}</strong> über <strong>{{ MonthlyPrice }} EUR monatlich</strong> benötigen wir einmalig Ihre Zustimmung zur automatischen Zahlungsabwicklung über Mollie.</p>
+                      <p style='line-height:1.65;color:#475467'>für den vereinbarten Tarif <strong>{{ PlanName }}</strong> über <strong>{{ MonthlyPrice }} EUR monatlich</strong> möchten wir bereits jetzt Ihre Zustimmung zur automatischen Zahlungsabwicklung über Mollie einholen.</p>
+                      <div style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:16px 18px;margin:20px 0;color:#065f46;font-size:14px;line-height:1.6'>
+                        <strong>Wichtig:</strong> Mit dieser Einrichtung wird jetzt noch <strong>nichts abgebucht</strong>. Die eigentliche Abrechnung beginnt erst, sobald wir die vereinbarte Leistung erbracht und Ihnen die Rechnung dafür gestellt haben. Sie richten hier lediglich vorab die Zahlungsart ein, damit dann alles reibungslos läuft.
+                      </div>
                       <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
                         <div style='margin-bottom:8px'><strong>Vertragsgrundlage:</strong> Angebot {{ ContractReference }}</div>
                         <div style='margin-bottom:8px'><strong>Angenommen am:</strong> {{ ContractAcceptedAt }}</div>
