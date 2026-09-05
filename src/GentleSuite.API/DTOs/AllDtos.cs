@@ -32,8 +32,13 @@ public class CustomerDetailDto
     public List<Guid> DesiredServiceIds { get; set; } = new();
     public bool OnboardingIntakeDone { get; set; }
     public bool IntakePending { get; set; }
+    public OpportunitySource? DataSource { get; set; }
+    public string? DataSourceNote { get; set; }
+    public DateTimeOffset? PrivacyNoticeSentAt { get; set; }
+    public string? PrivacyNoticeVersion { get; set; }
 }
-public record CreateCustomerRequest(string CompanyName, string? Industry, string? Website, string? TaxId, string? VatId, CreateContactRequest PrimaryContact, CreateLocationRequest? PrimaryLocation, List<Guid>? DesiredServiceIds);
+public record CreateCustomerRequest(string CompanyName, string? Industry, string? Website, string? TaxId, string? VatId, CreateContactRequest PrimaryContact, CreateLocationRequest? PrimaryLocation, List<Guid>? DesiredServiceIds, OpportunitySource? DataSource = null, string? DataSourceNote = null);
+public record UpdatePrivacyNoticeRequest(string Version);
 public record CreateCustomerQuickRequest(string Email, string? CompanyName);
 public record CustomerIntakeSubmitRequest(string CompanyName, string FirstName, string LastName, string? Phone, string? Street, string? City, string? ZipCode, string? Country);
 public record CustomerIntakeInfoDto(string? CompanyName, string Email, bool AlreadyCompleted);

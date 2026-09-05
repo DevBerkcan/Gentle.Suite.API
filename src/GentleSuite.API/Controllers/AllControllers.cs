@@ -21,17 +21,20 @@ using Microsoft.EntityFrameworkCore;
 namespace GentleSuite.API.Controllers;
 
 [ApiController, Route("api/[controller]")]
-public class AuthController(UserManager<AppUser> userManager, IConfiguration config) : ControllerBase
+public class AuthController(UserManager<AppUser> userManager, SignInManager<AppUser> signInManager, IConfiguration config) : ControllerBase
 {
     [HttpPost("login")]
     public async Task<ActionResult<LoginResponse>> Login(LoginRequest req)
     {
         var user = await userManager.FindByEmailAsync(req.Email);
-        if (user == null || !await userManager.CheckPasswordAsync(user, req.Password)) return Unauthorized("Ungültige Anmeldedaten");
+        if (user == null) return Unauthorized("Ungültige Anmeldedaten");
+        var checkResult = await signInManager.CheckPasswordSignInAsync(user, req.Password, lockoutOnFailure: true);
+        if (checkResult.IsLockedOut) return Unauthorized("Konto vorübergehend gesperrt wegen zu vieler fehlgeschlagener Anmeldeversuche. Bitte später erneut versuchen.");
+        if (!checkResult.Succeeded) return Unauthorized("Ungültige Anmeldedaten");
         var roles = await userManager.GetRolesAsync(user);
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, user.Id), new(ClaimTypes.Name, user.FullName), new(ClaimTypes.Email, user.Email!) };
         claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Key"] ?? "GentleSuiteSecretKey_MinLength32Chars!!"));
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key ist nicht konfiguriert.")));
         var expiry = DateTimeOffset.UtcNow.AddDays(7);
         var token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(claims: claims, expires: expiry.UtcDateTime, signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
         return Ok(new LoginResponse(token, user.Email!, user.FullName, roles.ToList(), expiry));
@@ -66,6 +69,7 @@ public class CustomersController(ICustomerService svc) : ControllerBase
     [HttpGet] public async Task<ActionResult<PagedResult<CustomerListDto>>> List([FromQuery] PaginationParams p, [FromQuery] CustomerStatus? status, [FromQuery] Guid? serviceId) => Ok(await svc.GetCustomersAsync(p, status, serviceId));
     [HttpPost("check-duplicate")] public async Task<ActionResult<DuplicateCheckResultDto>> CheckDuplicate(DuplicateCheckRequest req) => Ok(await svc.CheckDuplicateAsync(req));
     [HttpGet("{id}")] public async Task<ActionResult<CustomerDetailDto>> Get(Guid id) { var r = await svc.GetByIdAsync(id); return r == null ? NotFound() : Ok(r); }
+    [HttpPost("{id}/privacy-notice-sent")] public async Task<ActionResult<CustomerDetailDto>> MarkPrivacyNoticeSent(Guid id, UpdatePrivacyNoticeRequest req) => Ok(await svc.MarkPrivacyNoticeSentAsync(id, req));
     [HttpPost] public async Task<ActionResult<CustomerDetailDto>> Create(CreateCustomerRequest req) => Ok(await svc.CreateAsync(req));
     [HttpPost("quick")] public async Task<ActionResult<CustomerDetailDto>> CreateQuick(CreateCustomerQuickRequest req) => Ok(await svc.CreateQuickAsync(req));
     [HttpPut("{id}")] public async Task<ActionResult<CustomerDetailDto>> Update(Guid id, UpdateCustomerRequest req) => Ok(await svc.UpdateAsync(id, req));

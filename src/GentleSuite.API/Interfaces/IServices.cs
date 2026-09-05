@@ -11,6 +11,7 @@ public interface ICustomerService
     Task<CustomerDetailDto> CreateAsync(CreateCustomerRequest req, CancellationToken ct = default);
     Task<CustomerDetailDto> UpdateAsync(Guid id, UpdateCustomerRequest req, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
+    Task<CustomerDetailDto> MarkPrivacyNoticeSentAsync(Guid id, UpdatePrivacyNoticeRequest req, CancellationToken ct = default);
     Task<ContactDto> AddContactAsync(Guid customerId, CreateContactRequest req, CancellationToken ct = default);
     Task<ContactDto> UpdateContactAsync(Guid customerId, Guid contactId, UpdateContactRequest req, CancellationToken ct = default);
     Task DeleteContactAsync(Guid customerId, Guid contactId, CancellationToken ct = default);
