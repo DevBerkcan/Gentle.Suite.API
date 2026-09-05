@@ -11,6 +11,8 @@ using GentleSuite.Application.Interfaces;
 
 namespace GentleSuite.Infrastructure.Pdf;
 
+public record LegalTextSnapshotItem(string Key, string Title, string Content);
+
 public class PdfService : IPdfService
 {
     private readonly AppDbContext _db;
@@ -37,11 +39,18 @@ public class PdfService : IPdfService
         var loc = quote.Customer.Locations.FirstOrDefault(l => l.IsPrimary) ?? quote.Customer.Locations.FirstOrDefault();
         var oneTime = quote.Lines.Where(l => l.LineType == QuoteLineType.OneTime).OrderBy(l => l.SortOrder).ToList();
         var recurring = quote.Lines.Where(l => l.LineType == QuoteLineType.RecurringMonthly).OrderBy(l => l.SortOrder).ToList();
-        List<LegalTextBlock>? legal = null;
-        if (!string.IsNullOrEmpty(quote.LegalTextBlocks))
+        List<(string Title, string Content)>? legal = null;
+        if (!string.IsNullOrEmpty(quote.LegalTextBlocksSnapshot))
+        {
+            // Frozen at send time, so a later edit to the master text doesn't change what an already-sent quote shows.
+            var snapshot = JsonSerializer.Deserialize<List<LegalTextSnapshotItem>>(quote.LegalTextBlocksSnapshot);
+            if (snapshot?.Any() == true) legal = snapshot.Select(s => (s.Title, s.Content)).ToList();
+        }
+        else if (!string.IsNullOrEmpty(quote.LegalTextBlocks))
         {
             var keys = JsonSerializer.Deserialize<List<string>>(quote.LegalTextBlocks);
-            if (keys?.Any() == true) legal = await _db.LegalTextBlocks.Where(b => keys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
+            if (keys?.Any() == true) legal = (await _db.LegalTextBlocks.Where(b => keys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct))
+                .Select(b => (b.Title, b.Content)).ToList();
         }
         List<PaymentTermOption>? paymentTerms = null;
         if (!string.IsNullOrEmpty(quote.PaymentTermKeys))

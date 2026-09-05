@@ -64,6 +64,8 @@ public class Quote : GobdEntity
 
     // Legal text blocks (JSON array of keys)
     public string? LegalTextBlocks { get; set; }
+    /// <summary>Frozen title+content of the referenced LegalTextBlocks at send time, so later edits to the master texts don't silently change what an already-sent/signed quote shows.</summary>
+    public string? LegalTextBlocksSnapshot { get; set; }
 
     // Payment terms offered to the customer (JSON array of keys) + the one the customer picked
     public string? PaymentTermKeys { get; set; }

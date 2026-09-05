@@ -167,10 +167,20 @@ public class QuoteServiceImpl : IQuoteService
 
         var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .Replace("+", "").Replace("/", "").Replace("=", "");
-        using var sha = SHA256.Create();
         quote.ApprovalToken = token;
-        quote.ApprovalTokenHash = Convert.ToBase64String(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(token)));
+        quote.ApprovalTokenHash = HashApprovalToken(token);
         quote.ApprovalTokenExpiry = DateTimeOffset.UtcNow.AddDays(req.ExpirationDays);
+
+        if (!string.IsNullOrEmpty(quote.LegalTextBlocks))
+        {
+            var keys = JsonSerializer.Deserialize<List<string>>(quote.LegalTextBlocks) ?? new List<string>();
+            if (keys.Count > 0)
+            {
+                var blocks = await _db.LegalTextBlocks.Where(b => keys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder)
+                    .Select(b => new { b.Key, b.Title, b.Content }).ToListAsync(ct);
+                quote.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks);
+            }
+        }
         quote.ExpiresAt = quote.ApprovalTokenExpiry;
         quote.Status = QuoteStatus.Sent;
         quote.SentAt = DateTimeOffset.UtcNow;
@@ -203,9 +213,16 @@ public class QuoteServiceImpl : IQuoteService
     }
 
 
+    private static string HashApprovalToken(string token)
+    {
+        using var sha = SHA256.Create();
+        return Convert.ToBase64String(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(token)));
+    }
+
     public async Task<QuoteDetailDto?> GetByApprovalTokenAsync(string token, CancellationToken ct)
     {
-        var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts).Include(q => q.Lines.OrderBy(l => l.SortOrder)).FirstOrDefaultAsync(q => q.ApprovalToken == token, ct);
+        var tokenHash = HashApprovalToken(token);
+        var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts).Include(q => q.Lines.OrderBy(l => l.SortOrder)).FirstOrDefaultAsync(q => q.ApprovalTokenHash == tokenHash, ct);
         if (quote == null || !quote.IsCurrentVersion || quote.ApprovalTokenExpiry < DateTimeOffset.UtcNow) return null;
         if (quote.Status == QuoteStatus.Sent) { quote.Status = QuoteStatus.Viewed; quote.ViewedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
         var dto = _mapper.Map<QuoteDetailDto>(quote);
@@ -215,9 +232,11 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task ProcessApprovalAsync(string token, ApprovalRequest req, string? ipAddress, CancellationToken ct)
     {
-        var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts).Include(q => q.Lines).FirstOrDefaultAsync(q => q.ApprovalToken == token, ct) ?? throw new KeyNotFoundException();
+        var tokenHash = HashApprovalToken(token);
+        var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts).Include(q => q.Lines).FirstOrDefaultAsync(q => q.ApprovalTokenHash == tokenHash, ct) ?? throw new KeyNotFoundException();
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Dieses Angebot wurde durch eine neuere Version ersetzt.");
         if (quote.ApprovalTokenExpiry < DateTimeOffset.UtcNow) throw new InvalidOperationException("Link expired");
+        if (quote.RespondedAt != null) throw new InvalidOperationException("Über dieses Angebot wurde bereits entschieden. Der Link kann nicht erneut verwendet werden.");
         quote.CustomerComment = req.Comment; quote.RespondedAt = DateTimeOffset.UtcNow;
         if (req.Accepted)
         {
@@ -538,11 +557,12 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task<byte[]> GeneratePdfByTokenAsync(string token, CancellationToken ct)
     {
+        var tokenHash = HashApprovalToken(token);
         var quote = await _db.Quotes
             .Include(q => q.Customer).ThenInclude(c => c.Contacts)
             .Include(q => q.Customer).ThenInclude(c => c.Locations)
             .Include(q => q.Lines)
-            .FirstOrDefaultAsync(q => q.ApprovalToken == token, ct)
+            .FirstOrDefaultAsync(q => q.ApprovalTokenHash == tokenHash, ct)
             ?? throw new KeyNotFoundException();
 
         if (!quote.IsCurrentVersion || quote.ApprovalTokenExpiry < DateTimeOffset.UtcNow)
