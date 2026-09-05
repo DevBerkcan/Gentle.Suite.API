@@ -124,7 +124,7 @@ public class SubscriptionBillingJob
                 Status = InvoiceStatus.Final,
                 IsFinalized = true,
                 FinalizedAt = DateTimeOffset.UtcNow,
-                RetentionUntil = DateTimeOffset.UtcNow.AddYears(10),
+                RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears),
                 PaymentCollectionStatus = "scheduled",
                 PaymentCollectionDueDate = collectionDueDate,
                 PaymentTerms = $"Der Rechnungsbetrag von {grossTotal:N2} € wird am {collectionDueDate:dd.MM.yyyy} auf Grundlage des erteilten SEPA-Lastschriftmandats automatisch über Mollie eingezogen. Vertragsgrundlage: {sub.ContractReference}, Version {sub.ContractVersion}. Mollie-Mandat: {sub.MollieMandateId}."

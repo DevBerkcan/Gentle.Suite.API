@@ -89,7 +89,7 @@ public class RecurringInvoiceJob
                 Status = InvoiceStatus.Draft,
                 BillingPeriodStart = billingStart,
                 BillingPeriodEnd = billingEnd,
-                RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+                RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears)
             };
 
             foreach (var l in sourceInv.Lines)

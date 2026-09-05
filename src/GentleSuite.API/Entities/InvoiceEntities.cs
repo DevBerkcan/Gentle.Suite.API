@@ -10,6 +10,9 @@ namespace GentleSuite.Domain.Entities;
 /// </summary>
 public class Invoice : GobdEntity
 {
+    /// <summary>§14b Abs. 1 S. 1 UStG n.F. (Viertes Bürokratieentlastungsgesetz, ab 1.1.2025): 8 statt vormals 10 Jahre.</summary>
+    public const int RetentionYears = 8;
+
     // === Pflichtangaben §14 UStG ===
     public string InvoiceNumber { get; set; } = string.Empty;  // Fortlaufend, unveränderbar
     public InvoiceType Type { get; set; } = InvoiceType.Standard;

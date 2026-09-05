@@ -65,7 +65,7 @@ public class InvoiceServiceImpl : IInvoiceService
             SellerVatId = co?.VatId,
             Status = InvoiceStatus.Draft,
             Type = req.Type,
-            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears)
         };
         if (req.Lines != null)
             foreach (var l in req.Lines)
@@ -343,7 +343,7 @@ public class InvoiceServiceImpl : IInvoiceService
             Status = InvoiceStatus.Final,
             IsFinalized = true,
             FinalizedAt = DateTimeOffset.UtcNow,
-            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears)
         };
         foreach (var l in orig.Lines) storno.Lines.Add(new InvoiceLine { Title = l.Title, Description = $"Storno: {l.Description}", Quantity = l.Quantity, UnitPrice = -l.UnitPrice, VatPercent = l.VatPercent, SortOrder = l.SortOrder });
         storno.RecalculateTotals();
@@ -551,7 +551,7 @@ public class InvoiceServiceImpl : IInvoiceService
             SellerTaxId = co?.TaxId,
             SellerVatId = co?.VatId,
             Status = InvoiceStatus.Draft,
-            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears)
         };
         int sort = 0;
         foreach (var e in entries.OrderBy(e => e.Date))

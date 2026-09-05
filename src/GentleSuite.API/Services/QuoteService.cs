@@ -373,7 +373,7 @@ public class QuoteServiceImpl : IQuoteService
             SellerTaxId = co?.TaxId,
             SellerVatId = co?.VatId,
             Status = InvoiceStatus.Draft,
-            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears)
         };
 
         foreach (var l in quote.Lines)
