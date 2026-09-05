@@ -87,6 +87,13 @@ public class Customer : BaseEntity
     public Guid? OnboardingToken { get; set; }          // Einmaliger Link-Token für Kunden-Intake-Formular
     public bool OnboardingIntakeDone { get; set; }      // true nach Formular-Ausfüllung durch Kunden
 
+    // Woher stammen die Daten dieses Kontakts (Rechenschaftspflicht Art. 5 Abs. 2 DSGVO)
+    public OpportunitySource? DataSource { get; set; }
+    public string? DataSourceNote { get; set; }
+    // Nachweis der Datenschutzinformation bei indirekter Erhebung (Art. 14 DSGVO)
+    public DateTimeOffset? PrivacyNoticeSentAt { get; set; }
+    public string? PrivacyNoticeVersion { get; set; }
+
     public List<Contact> Contacts { get; set; } = new();
     public List<Location> Locations { get; set; } = new();
     public List<CustomerService> DesiredServices { get; set; } = new();

@@ -61,7 +61,7 @@ public class CustomerServiceImpl : ICustomerService
 
         var year = DateTime.UtcNow.Year;
         var number = await _seq.NextNumberAsync("Customer", year, "KD", 5, ct);
-        var cust = new Customer { CompanyName = req.CompanyName, Industry = req.Industry, Website = req.Website, TaxId = req.TaxId, VatId = req.VatId, Status = CustomerStatus.Lead, CustomerNumber = number };
+        var cust = new Customer { CompanyName = req.CompanyName, Industry = req.Industry, Website = req.Website, TaxId = req.TaxId, VatId = req.VatId, Status = CustomerStatus.Lead, CustomerNumber = number, DataSource = req.DataSource, DataSourceNote = req.DataSourceNote };
         cust.Contacts.Add(new Contact { FirstName = req.PrimaryContact.FirstName, LastName = req.PrimaryContact.LastName, Email = req.PrimaryContact.Email, Phone = req.PrimaryContact.Phone, Position = req.PrimaryContact.Position, IsPrimary = true });
         if (req.PrimaryLocation != null) cust.Locations.Add(new Location { Label = req.PrimaryLocation.Label, Street = req.PrimaryLocation.Street, City = req.PrimaryLocation.City, ZipCode = req.PrimaryLocation.ZipCode, Country = req.PrimaryLocation.Country, IsPrimary = true });
         if (req.DesiredServiceIds?.Any() == true) foreach (var sid in req.DesiredServiceIds) cust.DesiredServices.Add(new CustomerService { ServiceCatalogItemId = sid });
@@ -88,6 +88,14 @@ public class CustomerServiceImpl : ICustomerService
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct) { var c = await _db.Customers.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); c.IsDeleted = true; c.DeletedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
+    public async Task<CustomerDetailDto> MarkPrivacyNoticeSentAsync(Guid id, UpdatePrivacyNoticeRequest req, CancellationToken ct)
+    {
+        var c = await _db.Customers.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        c.PrivacyNoticeSentAt = DateTimeOffset.UtcNow; c.PrivacyNoticeVersion = req.Version;
+        await _db.SaveChangesAsync(ct);
+        await _act.LogAsync(c.Id, "Customer", c.Id, "PrivacyNoticeSent", $"Datenschutzhinweis (Version {req.Version}) als bereitgestellt vermerkt", ct: ct);
+        return (await GetByIdAsync(id, ct))!;
+    }
     public async Task<ContactDto> AddContactAsync(Guid cid, CreateContactRequest req, CancellationToken ct) { var co = new Contact { CustomerId = cid, FirstName = req.FirstName, LastName = req.LastName, Email = req.Email, Phone = req.Phone, Position = req.Position, IsPrimary = req.IsPrimary }; _db.Contacts.Add(co); await _db.SaveChangesAsync(ct); return _m.Map<ContactDto>(co); }
     public async Task<ContactDto> UpdateContactAsync(Guid cid, Guid contactId, UpdateContactRequest req, CancellationToken ct) { var c = await _db.Contacts.FirstOrDefaultAsync(x => x.Id == contactId && x.CustomerId == cid, ct) ?? throw new KeyNotFoundException(); c.FirstName = req.FirstName; c.LastName = req.LastName; c.Email = req.Email; c.Phone = req.Phone; c.Position = req.Position; c.IsPrimary = req.IsPrimary; await _db.SaveChangesAsync(ct); return _m.Map<ContactDto>(c); }
     public async Task DeleteContactAsync(Guid cid, Guid contactId, CancellationToken ct) { var c = await _db.Contacts.FirstOrDefaultAsync(x => x.Id == contactId && x.CustomerId == cid, ct) ?? throw new KeyNotFoundException(); _db.Contacts.Remove(c); await _db.SaveChangesAsync(ct); }
@@ -151,9 +159,17 @@ public class CustomerServiceImpl : ICustomerService
             .Include(x => x.Contacts)
             .Include(x => x.Locations)
             .Include(x => x.Notes)
+            .Include(x => x.Invoices)
             .FirstOrDefaultAsync(x => x.Id == customerId, ct) ?? throw new KeyNotFoundException();
 
-        // Keep references for accounting integrity, redact personal/business-identifying fields.
+        // GoBD: a finalized invoice must remain unchanged for its full retention period, and
+        // Invoice.CustomerName is read live from Customer.CompanyName (no snapshot) — so redacting
+        // the company name would silently corrupt an already-issued, hash-chained document.
+        var heldInvoice = c.Invoices.FirstOrDefault(i => i.IsFinalized && (i.RetentionUntil == null || i.RetentionUntil > DateTimeOffset.UtcNow));
+        if (heldInvoice != null)
+            throw new InvalidOperationException($"Vollständige Löschung derzeit nicht möglich: Rechnung {heldInvoice.InvoiceNumber} unterliegt noch der gesetzlichen Aufbewahrungspflicht" + (heldInvoice.RetentionUntil.HasValue ? $" bis {heldInvoice.RetentionUntil:dd.MM.yyyy}" : "") + ". Kontaktdaten und Notizen können unabhängig davon bereinigt werden (siehe unten), Firmenname/Firmendaten bleiben bis zum Fristablauf erhalten, da sie auf der Rechnung ausgewiesen sind.");
+
+        // No retention-relevant invoice exists — safe to redact the full company-level record too.
         c.CompanyName = $"Geloeschter Kunde {c.CustomerNumber ?? c.Id.ToString()[..8]}";
         c.Industry = null;
         c.Website = null;
@@ -161,6 +177,15 @@ public class CustomerServiceImpl : ICustomerService
         c.VatId = null;
         c.Status = CustomerStatus.Inactive;
         c.ReminderStop = true;
+
+        var emailLogs = await _db.EmailLogs.Where(e => e.CustomerId == customerId).ToListAsync(ct);
+        foreach (var log in emailLogs)
+        {
+            log.To = $"deleted+{log.Id:N}@example.invalid";
+            log.Cc = null;
+            log.Subject = "[GDPR entfernt]";
+            log.Body = "[Inhalt entfernt]";
+        }
 
         foreach (var contact in c.Contacts)
         {
