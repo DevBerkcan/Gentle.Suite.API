@@ -138,6 +138,7 @@ public class QuoteDetailDto
     public string? PrimaryContactEmail { get; set; }
     public List<QuoteLineDto> Lines { get; set; } = new();
     public List<string>? LegalTextBlockKeys { get; set; }
+    public List<LegalTextBlockDto>? LegalTextBlockOptions { get; set; }
     public List<string>? PaymentTermKeys { get; set; }
     public List<PaymentTermOptionDto>? PaymentTermOptions { get; set; }
     public string? ChosenPaymentTermKey { get; set; }
@@ -151,7 +152,7 @@ public record CreateQuoteRequest(Guid CustomerId, Guid? ContactId, string? Subje
 public record CreateQuoteLineRequest(Guid? ServiceCatalogItemId, string Title, string? Description, decimal Quantity, decimal UnitPrice, decimal DiscountPercent = 0, QuoteLineType LineType = QuoteLineType.OneTime, int VatPercent = 19, int SortOrder = 0, Guid? SubscriptionPlanId = null);
 public record SendQuoteRequest(string? RecipientEmail = null, string? Message = null, int ExpirationDays = 14, bool RequireSignature = true);
 public record ApprovalRequest(bool Accepted, string? Comment, string? SignatureData, string? SignedByName, string? SignedByEmail, bool B2bAuthorityConfirmed = false, string? ChosenPaymentTermKey = null, int? ChosenInstallmentMonths = null);
-public record UpdateQuoteRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, decimal? TaxRate, TaxMode? TaxMode, List<string>? PaymentTermKeys = null, List<int>? InstallmentPeriodOptionsMonths = null);
+public record UpdateQuoteRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, decimal? TaxRate, TaxMode? TaxMode, List<string>? PaymentTermKeys = null, List<int>? InstallmentPeriodOptionsMonths = null, List<string>? LegalTextBlockKeys = null);
 public record QuoteTemplateDto(Guid Id, string Name, string? Description, List<QuoteTemplateLineDto> Lines);
 public record QuoteTemplateLineDto(Guid Id, string Title, string? Description, decimal Quantity, decimal UnitPrice, QuoteLineType LineType, int SortOrder);
 
@@ -278,8 +279,8 @@ public record ServiceCatalogItemDto(Guid Id, Guid CategoryId, string Name, strin
 public record EmailLogDto(Guid Id, string To, string Subject, EmailStatus Status, string? Error, DateTimeOffset CreatedAt, DateTimeOffset? SentAt, string? TemplateKey);
 
 // === Legal Text ===
-public record LegalTextBlockDto(Guid Id, string Key, string Title, string Content, int SortOrder);
-public record CreateLegalTextRequest(string Key, string Title, string Content, int SortOrder = 0);
+public record LegalTextBlockDto(Guid Id, string Key, string Title, string Content, int SortOrder, LegalDocumentType Type, bool AutoAttachToQuotes, string? AttachmentFileName);
+public record CreateLegalTextRequest(string Key, string Title, string Content, int SortOrder = 0, LegalDocumentType Type = LegalDocumentType.Sonstiges, bool AutoAttachToQuotes = false);
 
 // === Payment Terms ===
 public record PaymentTermOptionDto(Guid Id, string Key, string Title, string Content, int SortOrder);

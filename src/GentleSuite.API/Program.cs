@@ -450,6 +450,14 @@ await db.Database.ExecuteSqlRawAsync("""
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='InstallmentsCompleted') ALTER TABLE "CustomerSubscriptions" ADD "InstallmentsCompleted" INT NOT NULL DEFAULT 0;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='InstallmentSourceTitle') ALTER TABLE "CustomerSubscriptions" ADD "InstallmentSourceTitle" NVARCHAR(400) NULL;""");
 
+    // Rechtliches: AGB/Datenschutz/Verträge als kategorisierte Rechtsdokumente, optional als Datei-Anhang
+    // statt/zusätzlich zu Text, mit automatischem Anhängen an jedes Angebot (AGB/Datenschutz).
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='Type') ALTER TABLE "LegalTextBlocks" ADD "Type" INT NOT NULL DEFAULT 3;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AutoAttachToQuotes') ALTER TABLE "LegalTextBlocks" ADD "AutoAttachToQuotes" BIT NOT NULL DEFAULT 0;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AttachmentPath') ALTER TABLE "LegalTextBlocks" ADD "AttachmentPath" NVARCHAR(500) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AttachmentFileName') ALTER TABLE "LegalTextBlocks" ADD "AttachmentFileName" NVARCHAR(260) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AttachmentContentType') ALTER TABLE "LegalTextBlocks" ADD "AttachmentContentType" NVARCHAR(100) NULL;""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)

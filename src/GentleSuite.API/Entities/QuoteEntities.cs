@@ -111,6 +111,14 @@ public class LegalTextBlock : BaseEntity
     public string Content { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
     public int SortOrder { get; set; }
+
+    public LegalDocumentType Type { get; set; } = LegalDocumentType.Sonstiges;
+    /// <summary>If true, this block is included on every quote sent, without needing to be picked manually (AGB/Datenschutz).</summary>
+    public bool AutoAttachToQuotes { get; set; }
+    /// <summary>Storage path if this document was uploaded as a file (e.g. a signed AGB PDF) instead of/in addition to Content.</summary>
+    public string? AttachmentPath { get; set; }
+    public string? AttachmentFileName { get; set; }
+    public string? AttachmentContentType { get; set; }
 }
 
 public class PaymentTermOption : BaseEntity

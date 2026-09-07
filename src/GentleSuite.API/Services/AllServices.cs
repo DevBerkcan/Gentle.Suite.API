@@ -949,12 +949,40 @@ public class CompanySettingsServiceImpl : ICompanySettingsService
 // === Legal Text + Email Log ===
 public class LegalTextServiceImpl : ILegalTextService
 {
-    private readonly AppDbContext _db; private readonly IMapper _m;
-    public LegalTextServiceImpl(AppDbContext db, IMapper m) { _db = db; _m = m; }
+    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IFileStorageService _fs;
+    public LegalTextServiceImpl(AppDbContext db, IMapper m, IFileStorageService fs) { _db = db; _m = m; _fs = fs; }
     public async Task<List<LegalTextBlockDto>> GetAllAsync(CancellationToken ct) => _m.Map<List<LegalTextBlockDto>>(await _db.LegalTextBlocks.Where(l => l.IsActive).OrderBy(l => l.SortOrder).ToListAsync(ct));
-    public async Task<LegalTextBlockDto> CreateAsync(CreateLegalTextRequest req, CancellationToken ct) { var l = new LegalTextBlock { Key = req.Key, Title = req.Title, Content = req.Content, SortOrder = req.SortOrder, IsActive = true }; _db.LegalTextBlocks.Add(l); await _db.SaveChangesAsync(ct); return _m.Map<LegalTextBlockDto>(l); }
-    public async Task<LegalTextBlockDto> UpdateAsync(Guid id, CreateLegalTextRequest req, CancellationToken ct) { var l = await _db.LegalTextBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); l.Key = req.Key; l.Title = req.Title; l.Content = req.Content; l.SortOrder = req.SortOrder; await _db.SaveChangesAsync(ct); return _m.Map<LegalTextBlockDto>(l); }
+    public async Task<LegalTextBlockDto> CreateAsync(CreateLegalTextRequest req, CancellationToken ct) { var l = new LegalTextBlock { Key = req.Key, Title = req.Title, Content = req.Content, SortOrder = req.SortOrder, Type = req.Type, AutoAttachToQuotes = req.AutoAttachToQuotes, IsActive = true }; _db.LegalTextBlocks.Add(l); await _db.SaveChangesAsync(ct); return _m.Map<LegalTextBlockDto>(l); }
+    public async Task<LegalTextBlockDto> UpdateAsync(Guid id, CreateLegalTextRequest req, CancellationToken ct) { var l = await _db.LegalTextBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); l.Key = req.Key; l.Title = req.Title; l.Content = req.Content; l.SortOrder = req.SortOrder; l.Type = req.Type; l.AutoAttachToQuotes = req.AutoAttachToQuotes; await _db.SaveChangesAsync(ct); return _m.Map<LegalTextBlockDto>(l); }
     public async Task DeleteAsync(Guid id, CancellationToken ct) { var l = await _db.LegalTextBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); _db.LegalTextBlocks.Remove(l); await _db.SaveChangesAsync(ct); }
+
+    public async Task<LegalTextBlockDto> UploadAttachmentAsync(Guid id, Stream stream, string fileName, string contentType, CancellationToken ct)
+    {
+        var l = await _db.LegalTextBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        if (!string.IsNullOrEmpty(l.AttachmentPath)) { try { await _fs.DeleteAsync(l.AttachmentPath, ct); } catch { } }
+        l.AttachmentPath = await _fs.UploadAsync(stream, fileName, contentType, ct);
+        l.AttachmentFileName = fileName;
+        l.AttachmentContentType = contentType;
+        await _db.SaveChangesAsync(ct);
+        return _m.Map<LegalTextBlockDto>(l);
+    }
+
+    public async Task<(Stream Stream, string FileName, string ContentType)> DownloadAttachmentAsync(Guid id, CancellationToken ct)
+    {
+        var l = await _db.LegalTextBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        if (string.IsNullOrEmpty(l.AttachmentPath)) throw new InvalidOperationException("Für dieses Dokument wurde keine Datei hochgeladen.");
+        var stream = await _fs.DownloadAsync(l.AttachmentPath, ct);
+        return (stream, l.AttachmentFileName ?? "dokument.pdf", l.AttachmentContentType ?? "application/octet-stream");
+    }
+
+    public async Task<LegalTextBlockDto> DeleteAttachmentAsync(Guid id, CancellationToken ct)
+    {
+        var l = await _db.LegalTextBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        if (!string.IsNullOrEmpty(l.AttachmentPath)) { try { await _fs.DeleteAsync(l.AttachmentPath, ct); } catch { } }
+        l.AttachmentPath = null; l.AttachmentFileName = null; l.AttachmentContentType = null;
+        await _db.SaveChangesAsync(ct);
+        return _m.Map<LegalTextBlockDto>(l);
+    }
 }
 public class PaymentTermServiceImpl : IPaymentTermService
 {

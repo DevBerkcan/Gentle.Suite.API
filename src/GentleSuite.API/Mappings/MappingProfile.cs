@@ -65,6 +65,7 @@ public class MappingProfile : Profile
             .ForMember(d => d.SignedByEmail, o => o.MapFrom(s => s.SignedByEmail))
             .ForMember(d => d.SignedAt, o => o.MapFrom(s => s.SignedAt))
             .ForMember(d => d.LegalTextBlockKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.LegalTextBlocks) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.LegalTextBlocks, (JsonSerializerOptions?)null)))
+            .ForMember(d => d.LegalTextBlockOptions, o => o.Ignore())
             .ForMember(d => d.PaymentTermKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.PaymentTermKeys) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.PaymentTermKeys, (JsonSerializerOptions?)null)))
             .ForMember(d => d.PaymentTermOptions, o => o.Ignore())
             .ForMember(d => d.InstallmentPeriodOptionsMonths, o => o.MapFrom(s => string.IsNullOrEmpty(s.InstallmentPeriodOptionsMonths) ? new List<int>() : JsonSerializer.Deserialize<List<int>>(s.InstallmentPeriodOptionsMonths, (JsonSerializerOptions?)null)));

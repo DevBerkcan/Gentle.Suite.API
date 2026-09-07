@@ -73,6 +73,7 @@ public interface IQuoteService
     Task<QuoteDetailDto> CreateNewVersionAsync(Guid id, CancellationToken ct = default);
     Task<List<QuoteVersionDto>> GetVersionsAsync(Guid id, CancellationToken ct = default);
     Task<byte[]> GeneratePdfByTokenAsync(string token, CancellationToken ct = default);
+    Task<(Stream Stream, string FileName, string ContentType)> DownloadLegalAttachmentByTokenAsync(string token, string key, CancellationToken ct = default);
 
 }
 
@@ -222,6 +223,9 @@ public interface ILegalTextService
     Task<LegalTextBlockDto> CreateAsync(CreateLegalTextRequest req, CancellationToken ct = default);
     Task<LegalTextBlockDto> UpdateAsync(Guid id, CreateLegalTextRequest req, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
+    Task<LegalTextBlockDto> UploadAttachmentAsync(Guid id, Stream stream, string fileName, string contentType, CancellationToken ct = default);
+    Task<(Stream Stream, string FileName, string ContentType)> DownloadAttachmentAsync(Guid id, CancellationToken ct = default);
+    Task<LegalTextBlockDto> DeleteAttachmentAsync(Guid id, CancellationToken ct = default);
 }
 
 public interface IPaymentTermService

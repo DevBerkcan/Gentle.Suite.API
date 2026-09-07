@@ -287,6 +287,12 @@ public class ApprovalController(IQuoteService svc) : ControllerBase
         var pdf = await svc.GeneratePdfByTokenAsync(token);
         return File(pdf, "application/pdf", $"Angebot-{quote.QuoteNumber}.pdf");
     }
+    [HttpGet("{token}/legal/{key}")]
+    public async Task<IActionResult> DownloadLegalAttachment(string token, string key)
+    {
+        var (stream, fileName, contentType) = await svc.DownloadLegalAttachmentByTokenAsync(token, key);
+        return File(stream, contentType, fileName);
+    }
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
@@ -533,6 +539,16 @@ public class LegalTextsController(ILegalTextService svc) : ControllerBase
     [HttpPost] public async Task<ActionResult<LegalTextBlockDto>> Create(CreateLegalTextRequest req) => Ok(await svc.CreateAsync(req));
     [HttpPut("{id}")] public async Task<ActionResult<LegalTextBlockDto>> Update(Guid id, CreateLegalTextRequest req) => Ok(await svc.UpdateAsync(id, req));
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
+    [HttpPost("{id}/attachment")]
+    public async Task<ActionResult<LegalTextBlockDto>> UploadAttachment(Guid id, IFormFile file)
+        => Ok(await svc.UploadAttachmentAsync(id, file.OpenReadStream(), file.FileName, file.ContentType));
+    [HttpGet("{id}/attachment")]
+    public async Task<IActionResult> DownloadAttachment(Guid id)
+    {
+        var (stream, fileName, contentType) = await svc.DownloadAttachmentAsync(id);
+        return File(stream, contentType, fileName);
+    }
+    [HttpDelete("{id}/attachment")] public async Task<ActionResult<LegalTextBlockDto>> DeleteAttachment(Guid id) => Ok(await svc.DeleteAttachmentAsync(id));
 }
 
 [ApiController, Route("api/paymentterms"), Authorize]

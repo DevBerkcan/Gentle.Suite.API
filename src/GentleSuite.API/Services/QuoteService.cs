@@ -22,9 +22,10 @@ public class QuoteServiceImpl : IQuoteService
     private readonly IInvoiceService _invoiceService;
     private readonly ISubscriptionService _subscriptionSvc;
     private readonly IMolliePaymentService _mollie;
+    private readonly IFileStorageService _fs;
     private readonly ILogger<QuoteServiceImpl> _logger;
-    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService, ISubscriptionService subscriptionSvc, IMolliePaymentService mollie, ILogger<QuoteServiceImpl> logger)
-    { _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _subscriptionSvc = subscriptionSvc; _mollie = mollie; _logger = logger; }
+    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService, ISubscriptionService subscriptionSvc, IMolliePaymentService mollie, IFileStorageService fs, ILogger<QuoteServiceImpl> logger)
+    { _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _subscriptionSvc = subscriptionSvc; _mollie = mollie; _fs = fs; _logger = logger; }
 
     public async Task<PagedResult<QuoteListDto>> GetQuotesAsync(PaginationParams p, QuoteStatus? status, Guid? customerId, CancellationToken ct)
     {
@@ -52,6 +53,7 @@ public class QuoteServiceImpl : IQuoteService
         if (q == null) return null;
         var dto = _mapper.Map<QuoteDetailDto>(q);
         await ResolvePaymentTermOptionsAsync(dto, q.PaymentTermKeys, ct);
+        await ResolveLegalTextOptionsAsync(dto, q.LegalTextBlocks, ct);
         return dto;
     }
 
@@ -62,6 +64,18 @@ public class QuoteServiceImpl : IQuoteService
         if (keys == null || keys.Count == 0) return;
         var options = await _db.PaymentTermOptions.Where(o => keys.Contains(o.Key) && o.IsActive).OrderBy(o => o.SortOrder).ToListAsync(ct);
         dto.PaymentTermOptions = _mapper.Map<List<PaymentTermOptionDto>>(options);
+    }
+
+    /// <summary>Manually chosen legal blocks plus anything marked "automatisch anhängen" (AGB/Datenschutz),
+    /// so the admin/customer can see the full set of documents that actually go out with this quote.</summary>
+    private async Task ResolveLegalTextOptionsAsync(QuoteDetailDto dto, string? legalTextBlockKeysJson, CancellationToken ct)
+    {
+        var chosenKeys = string.IsNullOrEmpty(legalTextBlockKeysJson) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(legalTextBlockKeysJson) ?? new List<string>();
+        var autoKeys = await _db.LegalTextBlocks.Where(b => b.IsActive && b.AutoAttachToQuotes).Select(b => b.Key).ToListAsync(ct);
+        var allKeys = chosenKeys.Union(autoKeys).ToList();
+        if (allKeys.Count == 0) return;
+        var options = await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
+        dto.LegalTextBlockOptions = _mapper.Map<List<LegalTextBlockDto>>(options);
     }
 
     public async Task<QuoteDetailDto> CreateAsync(CreateQuoteRequest req, CancellationToken ct)
@@ -177,14 +191,27 @@ public class QuoteServiceImpl : IQuoteService
         quote.ApprovalTokenHash = HashApprovalToken(token);
         quote.ApprovalTokenExpiry = DateTimeOffset.UtcNow.AddDays(req.ExpirationDays);
 
-        if (!string.IsNullOrEmpty(quote.LegalTextBlocks))
+        var chosenKeys = string.IsNullOrEmpty(quote.LegalTextBlocks)
+            ? new List<string>()
+            : JsonSerializer.Deserialize<List<string>>(quote.LegalTextBlocks) ?? new List<string>();
+        // AGB/Datenschutz marked "automatisch anhängen" go out with every quote, regardless of manual selection.
+        var autoAttachKeys = await _db.LegalTextBlocks.Where(b => b.IsActive && b.AutoAttachToQuotes).Select(b => b.Key).ToListAsync(ct);
+        var allKeys = chosenKeys.Union(autoAttachKeys).ToList();
+        List<EmailAttachment> legalAttachments = new();
+        if (allKeys.Count > 0)
         {
-            var keys = JsonSerializer.Deserialize<List<string>>(quote.LegalTextBlocks) ?? new List<string>();
-            if (keys.Count > 0)
+            var blocks = await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
+            quote.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks.Select(b => new { b.Key, b.Title, b.Content, b.AttachmentFileName }));
+            foreach (var b in blocks.Where(b => !string.IsNullOrEmpty(b.AttachmentPath)))
             {
-                var blocks = await _db.LegalTextBlocks.Where(b => keys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder)
-                    .Select(b => new { b.Key, b.Title, b.Content }).ToListAsync(ct);
-                quote.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks);
+                try
+                {
+                    using var fileStream = await _fs.DownloadAsync(b.AttachmentPath!, ct);
+                    using var ms = new MemoryStream();
+                    await fileStream.CopyToAsync(ms, ct);
+                    legalAttachments.Add(new EmailAttachment(b.AttachmentFileName ?? $"{b.Key}.pdf", ms.ToArray(), b.AttachmentContentType ?? "application/pdf"));
+                }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to load legal document attachment {Key} for quote {QuoteId}", b.Key, quote.Id); }
             }
         }
         quote.ExpiresAt = quote.ApprovalTokenExpiry;
@@ -214,7 +241,7 @@ public class QuoteServiceImpl : IQuoteService
         if (!string.IsNullOrWhiteSpace(req.Message))
             variables["Message"] = req.Message;
 
-        await _email.SendTemplatedEmailAsync(recipientEmail, "quote-sent", variables, quote.CustomerId, ct: ct);
+        await _email.SendTemplatedEmailAsync(recipientEmail, "quote-sent", variables, quote.CustomerId, attachments: legalAttachments.Count > 0 ? legalAttachments : null, ct: ct);
         await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "Sent", $"Angebot {quote.QuoteNumber} versendet", ct: ct);
     }
 
@@ -248,6 +275,7 @@ public class QuoteServiceImpl : IQuoteService
         if (quote.Status == QuoteStatus.Sent) { quote.Status = QuoteStatus.Viewed; quote.ViewedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
         var dto = _mapper.Map<QuoteDetailDto>(quote);
         await ResolvePaymentTermOptionsAsync(dto, quote.PaymentTermKeys, ct);
+        await ResolveLegalTextOptionsAsync(dto, quote.LegalTextBlocks, ct);
         return dto;
     }
 
@@ -488,6 +516,7 @@ public class QuoteServiceImpl : IQuoteService
         if (req.Notes != null) quote.Notes = req.Notes;
         if (req.PaymentTermKeys != null) quote.PaymentTermKeys = JsonSerializer.Serialize(req.PaymentTermKeys);
         if (req.InstallmentPeriodOptionsMonths != null) quote.InstallmentPeriodOptionsMonths = JsonSerializer.Serialize(req.InstallmentPeriodOptionsMonths);
+        if (req.LegalTextBlockKeys != null) quote.LegalTextBlocks = JsonSerializer.Serialize(req.LegalTextBlockKeys);
         if (req.TaxRate.HasValue) quote.TaxRate = companyTaxMode == TaxMode.SmallBusiness ? 0 : req.TaxRate.Value;
         if (req.TaxMode.HasValue) quote.TaxMode = EnforceCompanyTaxMode(companyTaxMode, req.TaxMode.Value);
         if (companyTaxMode == TaxMode.SmallBusiness) quote.TaxMode = TaxMode.SmallBusiness;
@@ -622,6 +651,18 @@ public class QuoteServiceImpl : IQuoteService
 
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "GentleSuite" };
         return await _pdf.GenerateQuotePdfAsync(quote, co, ct);
+    }
+
+    public async Task<(Stream Stream, string FileName, string ContentType)> DownloadLegalAttachmentByTokenAsync(string token, string key, CancellationToken ct)
+    {
+        var tokenHash = HashApprovalToken(token);
+        var quote = await _db.Quotes.FirstOrDefaultAsync(q => q.ApprovalTokenHash == tokenHash, ct) ?? throw new KeyNotFoundException();
+        if (!quote.IsCurrentVersion || quote.ApprovalTokenExpiry <= DateTimeOffset.UtcNow || quote.Status is QuoteStatus.Expired or QuoteStatus.Inactive)
+            throw new InvalidOperationException("Link expired or invalid.");
+        var block = await _db.LegalTextBlocks.FirstOrDefaultAsync(b => b.Key == key && b.IsActive, ct) ?? throw new KeyNotFoundException("Dokument nicht gefunden.");
+        if (string.IsNullOrEmpty(block.AttachmentPath)) throw new InvalidOperationException("Für dieses Dokument wurde keine Datei hochgeladen.");
+        var stream = await _fs.DownloadAsync(block.AttachmentPath, ct);
+        return (stream, block.AttachmentFileName ?? "dokument.pdf", block.AttachmentContentType ?? "application/octet-stream");
     }
 
 

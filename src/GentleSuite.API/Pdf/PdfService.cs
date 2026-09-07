@@ -11,7 +11,7 @@ using GentleSuite.Application.Interfaces;
 
 namespace GentleSuite.Infrastructure.Pdf;
 
-public record LegalTextSnapshotItem(string Key, string Title, string Content);
+public record LegalTextSnapshotItem(string Key, string Title, string Content, string? AttachmentFileName = null);
 
 public class PdfService : IPdfService
 {
@@ -44,13 +44,16 @@ public class PdfService : IPdfService
         {
             // Frozen at send time, so a later edit to the master text doesn't change what an already-sent quote shows.
             var snapshot = JsonSerializer.Deserialize<List<LegalTextSnapshotItem>>(quote.LegalTextBlocksSnapshot);
-            if (snapshot?.Any() == true) legal = snapshot.Select(s => (s.Title, s.Content)).ToList();
+            if (snapshot?.Any() == true) legal = snapshot.Select(s => (s.Title, string.IsNullOrEmpty(s.AttachmentFileName) ? s.Content : $"Dieses Dokument liegt als Anhang bei ({s.AttachmentFileName}).")).ToList();
         }
-        else if (!string.IsNullOrEmpty(quote.LegalTextBlocks))
+        else
         {
-            var keys = JsonSerializer.Deserialize<List<string>>(quote.LegalTextBlocks);
-            if (keys?.Any() == true) legal = (await _db.LegalTextBlocks.Where(b => keys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct))
-                .Select(b => (b.Title, b.Content)).ToList();
+            // Draft preview before send: show manually chosen blocks plus anything marked "automatisch anhängen".
+            var keys = string.IsNullOrEmpty(quote.LegalTextBlocks) ? new List<string>() : (JsonSerializer.Deserialize<List<string>>(quote.LegalTextBlocks) ?? new List<string>());
+            var autoKeys = await _db.LegalTextBlocks.Where(b => b.IsActive && b.AutoAttachToQuotes).Select(b => b.Key).ToListAsync(ct);
+            var allKeys = keys.Union(autoKeys).ToList();
+            if (allKeys.Count > 0) legal = (await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct))
+                .Select(b => (b.Title, string.IsNullOrEmpty(b.AttachmentFileName) ? b.Content : $"Dieses Dokument liegt als Anhang bei ({b.AttachmentFileName}).")).ToList();
         }
         List<PaymentTermOption>? paymentTerms = null;
         if (!string.IsNullOrEmpty(quote.PaymentTermKeys))
