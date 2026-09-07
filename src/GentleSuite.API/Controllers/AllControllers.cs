@@ -882,12 +882,28 @@ public class CalendarController(AppDbContext db) : ControllerBase
         events.AddRange(activities.Where(a => a.DueDate.HasValue).Select(a => new CalendarEventDto(a.Id.ToString(), a.DueDate!.Value, a.Subject, a.CustomerName, "activity", a.CustomerName != null ? $"/customers/{a.Id}" : "/customers", "#22c55e")));
 
         var subs = await db.CustomerSubscriptions
-            .Where(s => s.NextBillingDate >= start && s.NextBillingDate < end && s.Status == GentleSuite.Domain.Enums.SubscriptionStatus.Active)
+            .Where(s => s.NextBillingDate >= start && s.NextBillingDate < end && s.Status == GentleSuite.Domain.Enums.SubscriptionStatus.Active && !s.IsInstallmentPlan)
             .Include(s => s.Customer)
             .Include(s => s.Plan)
             .Select(s => new { s.Id, PlanName = s.Plan.Name, CustomerName = s.Customer.CompanyName, s.NextBillingDate })
             .ToListAsync();
         events.AddRange(subs.Select(s => new CalendarEventDto(s.Id.ToString(), s.NextBillingDate, $"Serienrechnung: {s.PlanName}", s.CustomerName, "subscription", $"/subscriptions", "#a855f7")));
+
+        var installments = await db.CustomerSubscriptions
+            .Where(s => s.NextBillingDate >= start && s.NextBillingDate < end && s.Status == GentleSuite.Domain.Enums.SubscriptionStatus.Active && s.IsInstallmentPlan)
+            .Include(s => s.Customer)
+            .Include(s => s.Plan)
+            .Select(s => new { s.Id, s.InstallmentSourceTitle, PlanName = s.Plan.Name, CustomerName = s.Customer.CompanyName, s.NextBillingDate, s.InstallmentsCompleted, s.ContractDurationMonths })
+            .ToListAsync();
+        events.AddRange(installments.Select(s => new CalendarEventDto(s.Id.ToString(), s.NextBillingDate, $"Ratenzahlung: {s.InstallmentSourceTitle ?? s.PlanName} (Rate {s.InstallmentsCompleted + 1} von {s.ContractDurationMonths})", s.CustomerName, "installment", $"/installments", "#ec4899")));
+
+        var expiringQuotes = await db.Quotes
+            .Where(q => q.IsCurrentVersion && q.ExpiresAt >= start && q.ExpiresAt < end
+                && (q.Status == GentleSuite.Domain.Enums.QuoteStatus.Sent || q.Status == GentleSuite.Domain.Enums.QuoteStatus.Viewed))
+            .Include(q => q.Customer)
+            .Select(q => new { q.Id, q.QuoteNumber, CustomerName = q.Customer.CompanyName, q.ExpiresAt })
+            .ToListAsync();
+        events.AddRange(expiringQuotes.Where(q => q.ExpiresAt.HasValue).Select(q => new CalendarEventDto(q.Id.ToString(), q.ExpiresAt!.Value, $"Angebot läuft ab: {q.QuoteNumber}", q.CustomerName, "quote-expiring", $"/quotes/{q.Id}", "#f59e0b")));
 
         return Ok(events.OrderBy(e => e.Date).ToList());
     }
