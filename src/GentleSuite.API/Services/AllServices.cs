@@ -585,9 +585,41 @@ public class SubscriptionServiceImpl : ISubscriptionService
     public async Task<SubscriptionPlanDto> CreatePlanAsync(CreatePlanRequest req, CancellationToken ct) { var plan = new SubscriptionPlan { Name = req.Name, Description = req.Description, MonthlyPrice = req.MonthlyPrice, BillingCycle = req.BillingCycle, Category = req.Category, IsActive = true }; _db.SubscriptionPlans.Add(plan); await _db.SaveChangesAsync(ct); return _m.Map<SubscriptionPlanDto>(plan); }
     public async Task<SubscriptionPlanDto> UpdatePlanAsync(Guid id, UpdatePlanRequest req, CancellationToken ct) { var plan = await _db.SubscriptionPlans.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); plan.Name = req.Name; plan.Description = req.Description; plan.MonthlyPrice = req.MonthlyPrice; plan.BillingCycle = req.BillingCycle; plan.Category = req.Category; plan.IsActive = req.IsActive; await _db.SaveChangesAsync(ct); return _m.Map<SubscriptionPlanDto>(plan); }
     public async Task DeletePlanAsync(Guid id, CancellationToken ct) { var plan = await _db.SubscriptionPlans.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); plan.IsDeleted = true; plan.DeletedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
-    public async Task<List<CustomerSubscriptionDto>> GetAllAsync(CancellationToken ct) => _m.Map<List<CustomerSubscriptionDto>>(await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).OrderByDescending(s => s.CreatedAt).ToListAsync(ct));
-    public async Task<CustomerSubscriptionDto> GetByIdAsync(Guid sid, CancellationToken ct) => _m.Map<CustomerSubscriptionDto>(await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).FirstOrDefaultAsync(s => s.Id == sid, ct) ?? throw new KeyNotFoundException());
-    public async Task<List<CustomerSubscriptionDto>> GetCustomerSubscriptionsAsync(Guid cid, CancellationToken ct) => _m.Map<List<CustomerSubscriptionDto>>(await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).Where(s => s.CustomerId == cid).OrderByDescending(s => s.CreatedAt).ToListAsync(ct));
+    /// <summary>Sum of NetTotal across all Paid invoices per subscription — actual money received, not just invoiced.</summary>
+    private async Task<Dictionary<Guid, decimal>> GetPaidAmountsAsync(IEnumerable<Guid> subscriptionIds, CancellationToken ct)
+    {
+        var ids = subscriptionIds.ToList();
+        if (ids.Count == 0) return new Dictionary<Guid, decimal>();
+        return await _db.Invoices
+            .Where(i => i.SubscriptionId != null && ids.Contains(i.SubscriptionId.Value) && i.Status == InvoiceStatus.Paid)
+            .GroupBy(i => i.SubscriptionId!.Value)
+            .Select(g => new { SubscriptionId = g.Key, Sum = g.Sum(x => x.NetTotal) })
+            .ToDictionaryAsync(x => x.SubscriptionId, x => x.Sum, ct);
+    }
+
+    public async Task<List<CustomerSubscriptionDto>> GetAllAsync(CancellationToken ct)
+    {
+        var subs = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
+        var dtos = _m.Map<List<CustomerSubscriptionDto>>(subs);
+        var paid = await GetPaidAmountsAsync(subs.Select(s => s.Id), ct);
+        return dtos.Select(d => d with { PaidAmount = paid.GetValueOrDefault(d.Id) }).ToList();
+    }
+
+    public async Task<CustomerSubscriptionDto> GetByIdAsync(Guid sid, CancellationToken ct)
+    {
+        var sub = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).FirstOrDefaultAsync(s => s.Id == sid, ct) ?? throw new KeyNotFoundException();
+        var dto = _m.Map<CustomerSubscriptionDto>(sub);
+        var paid = await GetPaidAmountsAsync(new[] { sid }, ct);
+        return dto with { PaidAmount = paid.GetValueOrDefault(sid) };
+    }
+
+    public async Task<List<CustomerSubscriptionDto>> GetCustomerSubscriptionsAsync(Guid cid, CancellationToken ct)
+    {
+        var subs = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).Where(s => s.CustomerId == cid).OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
+        var dtos = _m.Map<List<CustomerSubscriptionDto>>(subs);
+        var paid = await GetPaidAmountsAsync(subs.Select(s => s.Id), ct);
+        return dtos.Select(d => d with { PaidAmount = paid.GetValueOrDefault(d.Id) }).ToList();
+    }
     public async Task<List<EligibleSubscriptionQuoteDto>> GetEligibleQuotesAsync(Guid customerId, CancellationToken ct) => await _db.Quotes
         .AsNoTracking()
         .Include(q => q.Lines)
@@ -691,6 +723,70 @@ public class SubscriptionServiceImpl : ISubscriptionService
     public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || s.ContractQuoteId == null || !s.BusinessCustomerConfirmed)) throw new InvalidOperationException("Das Abonnement kann erst mit B2B-Vertragsnachweis und gültigem Mollie-Mandat aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
     public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || s.ContractQuoteId == null || !s.BusinessCustomerConfirmed) throw new InvalidOperationException("Das Abonnement kann erst mit B2B-Vertragsnachweis und gültigem Mollie-Mandat aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
     public async Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid sid, CancellationToken ct) => await _db.Invoices.Where(i => i.SubscriptionId == sid).OrderByDescending(i => i.InvoiceDate).Select(i => new SubscriptionInvoiceDto(i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate)).ToListAsync(ct);
+
+    // === Ratenzahlung (installment plans) ===
+    public async Task<CustomerSubscriptionDto> CreateInstallmentPlanFromQuoteAsync(Guid customerId, Guid quoteId, int months, CancellationToken ct)
+    {
+        if (months <= 0) throw new ArgumentException("Die Ratenanzahl muss größer als 0 sein.");
+
+        var quote = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == quoteId, ct)
+            ?? throw new ArgumentException("Das ausgewählte Vertragsangebot wurde nicht gefunden.");
+        if (quote.CustomerId != customerId)
+            throw new InvalidOperationException("Das Vertragsangebot gehört nicht zum ausgewählten Kunden.");
+        if (!quote.IsCurrentVersion || quote.Status is not (QuoteStatus.Accepted or QuoteStatus.Ordered) ||
+            quote.SignatureStatus != SignatureStatus.Signed || quote.SignedAt == null || !quote.B2bAuthorityConfirmed)
+            throw new InvalidOperationException("Für eine Ratenzahlung ist ein aktuell angenommenes B2B-Angebot mit Unterschrift und Vertretungsbestätigung erforderlich.");
+
+        var total = quote.SubtotalOneTime;
+        if (total <= 0)
+            throw new InvalidOperationException("Das Angebot enthält keine einmaligen Positionen, die in Raten aufgeteilt werden können.");
+
+        var alreadyExists = await _db.CustomerSubscriptions.AnyAsync(s => s.ContractQuoteId == quote.Id && s.IsInstallmentPlan, ct);
+        if (alreadyExists)
+            throw new InvalidOperationException("Für dieses Angebot wurde bereits ein Ratenzahlungsplan angelegt.");
+
+        var plan = await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Name == "Ratenzahlung (Systemtarif)", ct)
+            ?? throw new InvalidOperationException("Der Systemtarif für Ratenzahlungen wurde nicht gefunden.");
+
+        var perInstallment = Math.Floor(total / months * 100m) / 100m;
+        var title = !string.IsNullOrWhiteSpace(quote.Subject)
+            ? quote.Subject!
+            : string.Join(", ", quote.Lines.Where(l => l.LineType == QuoteLineType.OneTime).Select(l => l.Title));
+
+        var start = DateTimeOffset.UtcNow;
+        var subscription = new CustomerSubscription
+        {
+            CustomerId = customerId,
+            PlanId = plan.Id,
+            Status = SubscriptionStatus.PendingConfirmation,
+            StartDate = start,
+            // Unlike a normal subscription (where month 1 is bundled into ConvertToInvoiceAsync and
+            // NextBillingDate already points at month 2), an installment plan has no separate first-invoice
+            // step — the first invoice ever issued for it (via BillNowAsync/the daily job) IS installment 1,
+            // so NextBillingDate must start at "now", not one month out.
+            NextBillingDate = start,
+            ContractDurationMonths = months,
+            ContractQuoteId = quote.Id,
+            QuoteLineId = null,
+            ContractReference = quote.QuoteNumber,
+            ContractVersion = quote.Version,
+            ContractAcceptedAt = quote.SignedAt,
+            ContractAcceptedByName = quote.SignedByName,
+            ContractAcceptedByEmail = quote.SignedByEmail,
+            ContractAcceptedIpAddress = quote.SignedIpAddress,
+            AgreedMonthlyPrice = perInstallment,
+            ContractBillingCycle = BillingCycle.Monthly,
+            BusinessCustomerConfirmed = true,
+            BusinessCustomerConfirmedAt = DateTimeOffset.UtcNow,
+            IsInstallmentPlan = true,
+            TotalInstallmentAmount = total,
+            InstallmentSourceTitle = title
+        };
+        _db.CustomerSubscriptions.Add(subscription);
+        await _db.SaveChangesAsync(ct);
+        return await GetByIdAsync(subscription.Id, ct);
+    }
+
 }
 
 // === Expense ===

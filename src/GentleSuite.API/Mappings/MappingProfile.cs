@@ -66,7 +66,8 @@ public class MappingProfile : Profile
             .ForMember(d => d.SignedAt, o => o.MapFrom(s => s.SignedAt))
             .ForMember(d => d.LegalTextBlockKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.LegalTextBlocks) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.LegalTextBlocks, (JsonSerializerOptions?)null)))
             .ForMember(d => d.PaymentTermKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.PaymentTermKeys) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.PaymentTermKeys, (JsonSerializerOptions?)null)))
-            .ForMember(d => d.PaymentTermOptions, o => o.Ignore());
+            .ForMember(d => d.PaymentTermOptions, o => o.Ignore())
+            .ForMember(d => d.InstallmentPeriodOptionsMonths, o => o.MapFrom(s => string.IsNullOrEmpty(s.InstallmentPeriodOptionsMonths) ? new List<int>() : JsonSerializer.Deserialize<List<int>>(s.InstallmentPeriodOptionsMonths, (JsonSerializerOptions?)null)));
         CreateMap<Quote, QuoteVersionDto>()
             .ConstructUsing(s => new QuoteVersionDto(s.Id, s.QuoteGroupId, s.QuoteNumber, s.Version, s.IsCurrentVersion, s.Status, s.CreatedAt, s.SentAt));
         CreateMap<QuoteLine, QuoteLineDto>();
@@ -151,7 +152,12 @@ public class MappingProfile : Profile
                 s.MandateEmailStatus,
                 s.MandateEmailLastError,
                 s.MandateEmailAttemptCount,
-                s.BillingAuthorizedAt
+                s.BillingAuthorizedAt,
+                s.IsInstallmentPlan,
+                s.TotalInstallmentAmount,
+                s.InstallmentsCompleted,
+                s.InstallmentSourceTitle,
+                0m
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()

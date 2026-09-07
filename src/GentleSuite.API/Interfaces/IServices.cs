@@ -165,6 +165,7 @@ public interface ISubscriptionService
     Task UpdateStatusAsync(Guid subscriptionId, UpdateSubscriptionStatusRequest req, CancellationToken ct = default);
     Task ConfirmAsync(Guid subscriptionId, CancellationToken ct = default);
     Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid subscriptionId, CancellationToken ct = default);
+    Task<CustomerSubscriptionDto> CreateInstallmentPlanFromQuoteAsync(Guid customerId, Guid quoteId, int months, CancellationToken ct = default);
 }
 
 public interface IMolliePaymentService

@@ -409,7 +409,7 @@ public class ProjectsController(IProjectService svc, IHubContext<ProjectBoardHub
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
-public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentService mollie) : ControllerBase
+public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentService mollie, SubscriptionBillingJob billingJob) : ControllerBase
 {
     [HttpGet] public async Task<ActionResult<List<CustomerSubscriptionDto>>> All() => Ok(await svc.GetAllAsync());
     [HttpGet("plans")] public async Task<ActionResult<List<SubscriptionPlanDto>>> Plans() => Ok(await svc.GetPlansAsync());
@@ -435,6 +435,12 @@ public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentSer
         return result.Sent ? Ok(result) : BadRequest(result);
     }
     [HttpGet("{id}/invoices")] public async Task<ActionResult<List<SubscriptionInvoiceDto>>> GetInvoices(Guid id) => Ok(await svc.GetInvoicesAsync(id));
+    [HttpPost("{id}/bill-now")]
+    public async Task<ActionResult<CustomerSubscriptionDto>> BillNow(Guid id)
+    {
+        await billingJob.BillNowAsync(id);
+        return Ok(await svc.GetByIdAsync(id));
+    }
 }
 
 [ApiController, Route("api/mollie"), AllowAnonymous]

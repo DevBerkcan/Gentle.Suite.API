@@ -82,7 +82,8 @@ public class QuoteServiceImpl : IQuoteService
             OutroText = req.OutroText ?? co?.QuoteOutroTemplate, Notes = req.Notes,
             TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : req.TaxRate, TaxMode = taxMode, Status = QuoteStatus.Draft,
             LegalTextBlocks = req.LegalTextBlockKeys != null ? JsonSerializer.Serialize(req.LegalTextBlockKeys) : null,
-            PaymentTermKeys = req.PaymentTermKeys != null ? JsonSerializer.Serialize(req.PaymentTermKeys) : null
+            PaymentTermKeys = req.PaymentTermKeys != null ? JsonSerializer.Serialize(req.PaymentTermKeys) : null,
+            InstallmentPeriodOptionsMonths = req.InstallmentPeriodOptionsMonths != null ? JsonSerializer.Serialize(req.InstallmentPeriodOptionsMonths) : null
         };
         quote.QuoteGroupId = quote.Id;
         if (req.Lines != null) foreach (var l in req.Lines)
@@ -252,6 +253,16 @@ public class QuoteServiceImpl : IQuoteService
                     quote.ChosenPaymentTermKey = req.ChosenPaymentTermKey;
                 }
             }
+            if (!string.IsNullOrEmpty(quote.InstallmentPeriodOptionsMonths) && quote.SubtotalOneTime > 0)
+            {
+                var availableMonths = JsonSerializer.Deserialize<List<int>>(quote.InstallmentPeriodOptionsMonths) ?? new List<int>();
+                if (availableMonths.Count > 0)
+                {
+                    if (req.ChosenInstallmentMonths.HasValue && !availableMonths.Contains(req.ChosenInstallmentMonths.Value))
+                        throw new InvalidOperationException("Bitte wählen Sie eine gültige Zahlungsweise aus.");
+                    quote.ChosenInstallmentMonths = req.ChosenInstallmentMonths;
+                }
+            }
             quote.Status = QuoteStatus.Accepted;
             quote.B2bAuthorityConfirmed = true;
             if (!string.IsNullOrEmpty(req.SignatureData))
@@ -283,6 +294,21 @@ public class QuoteServiceImpl : IQuoteService
                 {
                     _logger.LogError(ex, "Auto subscription creation failed for quote {QuoteId} line {LineId}", quote.Id, line.Id);
                     await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "SubscriptionCreationFailed", $"Serienrechnung für Position \"{line.Title}\" konnte nicht automatisch angelegt werden: {ex.Message}", ct: ct);
+                }
+            }
+
+            if (quote.ChosenInstallmentMonths is > 0 && quote.SubtotalOneTime > 0)
+            {
+                try
+                {
+                    var created = await _subscriptionSvc.CreateInstallmentPlanFromQuoteAsync(quote.CustomerId, quote.Id, quote.ChosenInstallmentMonths.Value, ct);
+                    try { await _mollie.SendMandateEmailAsync(created.Id, ct); }
+                    catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for installment plan {SubscriptionId} (quote {QuoteId})", created.Id, quote.Id); }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Installment plan creation failed for quote {QuoteId}", quote.Id);
+                    await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "InstallmentPlanCreationFailed", $"Ratenzahlungsplan konnte nicht automatisch angelegt werden: {ex.Message}", ct: ct);
                 }
             }
         }
@@ -439,6 +465,7 @@ public class QuoteServiceImpl : IQuoteService
         if (req.OutroText != null) quote.OutroText = req.OutroText;
         if (req.Notes != null) quote.Notes = req.Notes;
         if (req.PaymentTermKeys != null) quote.PaymentTermKeys = JsonSerializer.Serialize(req.PaymentTermKeys);
+        if (req.InstallmentPeriodOptionsMonths != null) quote.InstallmentPeriodOptionsMonths = JsonSerializer.Serialize(req.InstallmentPeriodOptionsMonths);
         if (req.TaxRate.HasValue) quote.TaxRate = companyTaxMode == TaxMode.SmallBusiness ? 0 : req.TaxRate.Value;
         if (req.TaxMode.HasValue) quote.TaxMode = EnforceCompanyTaxMode(companyTaxMode, req.TaxMode.Value);
         if (companyTaxMode == TaxMode.SmallBusiness) quote.TaxMode = TaxMode.SmallBusiness;
@@ -472,7 +499,8 @@ public class QuoteServiceImpl : IQuoteService
             Subject = original.Subject, IntroText = original.IntroText,
             OutroText = original.OutroText, Notes = original.Notes,
             TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : original.TaxRate, TaxMode = taxMode,
-            Status = QuoteStatus.Draft, LegalTextBlocks = original.LegalTextBlocks, PaymentTermKeys = original.PaymentTermKeys, Version = 1
+            Status = QuoteStatus.Draft, LegalTextBlocks = original.LegalTextBlocks, PaymentTermKeys = original.PaymentTermKeys,
+            InstallmentPeriodOptionsMonths = original.InstallmentPeriodOptionsMonths, Version = 1
         };
         copy.QuoteGroupId = copy.Id;
         foreach (var l in original.Lines)
@@ -518,7 +546,8 @@ public class QuoteServiceImpl : IQuoteService
             TaxRate = taxMode == TaxMode.SmallBusiness ? 0 : current.TaxRate,
             TaxMode = taxMode,
             LegalTextBlocks = current.LegalTextBlocks,
-            PaymentTermKeys = current.PaymentTermKeys
+            PaymentTermKeys = current.PaymentTermKeys,
+            InstallmentPeriodOptionsMonths = current.InstallmentPeriodOptionsMonths
         };
 
         foreach (var l in current.Lines.OrderBy(l => l.SortOrder))

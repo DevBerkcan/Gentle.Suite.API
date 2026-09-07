@@ -71,6 +71,11 @@ public class Quote : GobdEntity
     public string? PaymentTermKeys { get; set; }
     public string? ChosenPaymentTermKey { get; set; }
 
+    // Ratenzahlung: optional installment periods (in months) offered for the OneTime-line total, and the
+    // one the customer picked at signing. Null/absent ChosenInstallmentMonths = pay the full amount now.
+    public string? InstallmentPeriodOptionsMonths { get; set; }
+    public int? ChosenInstallmentMonths { get; set; }
+
     public List<QuoteLine> Lines { get; set; } = new();
 
     public decimal SubtotalOneTime => Lines.Where(l => l.LineType == QuoteLineType.OneTime).Sum(l => l.Total);

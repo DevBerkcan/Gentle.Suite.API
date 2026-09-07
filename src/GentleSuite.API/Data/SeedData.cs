@@ -25,6 +25,28 @@ public static class SeedData
         await SeedAccounts(db); await SeedMissingEmailTemplates(db);
         await SeedDemoData(db);
         await SeedPriceListTemplates(db);
+        await SeedInstallmentSystemPlan(db);
+    }
+
+    /// <summary>
+    /// Ratenzahlung (installment plans) reuse CustomerSubscription.PlanId, which is a required FK
+    /// dereferenced unconditionally throughout the billing/mandate code. This synthetic, inactive
+    /// plan gives installment-plan rows something to point at without ever showing up in the normal
+    /// "new subscription" plan dropdown. Seeded independently of SeedSubscriptionPlans, which is
+    /// gated by "any plan exists" and would otherwise never re-run on existing installations.
+    /// </summary>
+    static async Task SeedInstallmentSystemPlan(AppDbContext db)
+    {
+        const string name = "Ratenzahlung (Systemtarif)";
+        if (await db.SubscriptionPlans.AnyAsync(p => p.Name == name)) return;
+        db.SubscriptionPlans.Add(new SubscriptionPlan
+        {
+            Name = name,
+            Description = "Interner Systemtarif für Ratenzahlungspläne – nicht manuell auswählbar.",
+            MonthlyPrice = 0,
+            IsActive = false
+        });
+        await db.SaveChangesAsync();
     }
 
     static async Task SeedRoles(RoleManager<IdentityRole> rm)

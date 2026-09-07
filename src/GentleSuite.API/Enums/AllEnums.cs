@@ -30,7 +30,7 @@ public enum ProjectBoardTaskStatus { Todo, InProgress, Done }
 public enum EmailStatus { Queued, Sending, Sent, Failed }
 
 // === Subscriptions ===
-public enum SubscriptionStatus { Active, Paused, Cancelled, Expired, PendingConfirmation }
+public enum SubscriptionStatus { Active, Paused, Cancelled, Expired, PendingConfirmation, Completed }
 public enum BillingCycle { Monthly, Quarterly, Yearly }
 public enum SubscriptionPlanCategory { Allgemein, DomainHosting, Wartungsvertrag, SLA, Software, Support, Sonstiges }
 

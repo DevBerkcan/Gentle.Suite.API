@@ -441,6 +441,15 @@ await db.Database.ExecuteSqlRawAsync("""
       AND EXISTS (SELECT 1 FROM "Invoices" i WHERE i."SubscriptionId" = cs."Id");
     """);
 
+    // Ratenzahlung (installment plans): fixed-total payment plans split into a fixed number of
+    // equal monthly installments, distinct from indefinite subscriptions.
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='InstallmentPeriodOptionsMonths') ALTER TABLE "Quotes" ADD "InstallmentPeriodOptionsMonths" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='ChosenInstallmentMonths') ALTER TABLE "Quotes" ADD "ChosenInstallmentMonths" INT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='IsInstallmentPlan') ALTER TABLE "CustomerSubscriptions" ADD "IsInstallmentPlan" BIT NOT NULL DEFAULT 0;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='TotalInstallmentAmount') ALTER TABLE "CustomerSubscriptions" ADD "TotalInstallmentAmount" DECIMAL(18,2) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='InstallmentsCompleted') ALTER TABLE "CustomerSubscriptions" ADD "InstallmentsCompleted" INT NOT NULL DEFAULT 0;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='InstallmentSourceTitle') ALTER TABLE "CustomerSubscriptions" ADD "InstallmentSourceTitle" NVARCHAR(400) NULL;""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)

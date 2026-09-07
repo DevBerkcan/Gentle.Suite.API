@@ -65,6 +65,18 @@ public class CustomerSubscription : BaseEntity
     public int MandateEmailAttemptCount { get; set; }
     /// <summary>Set once the user has actually issued the invoice covering this contract; only then may SubscriptionBillingJob start billing it.</summary>
     public DateTimeOffset? BillingAuthorizedAt { get; set; }
+
+    // Ratenzahlung (installment plan): a fixed total amount split into a fixed number of equal monthly
+    // installments, as opposed to an indefinite subscription. ContractDurationMonths is reused as the
+    // installment count, AgreedMonthlyPrice as the per-installment amount.
+    /// <summary>True if this row represents a fixed-total installment plan rather than an indefinite subscription.</summary>
+    public bool IsInstallmentPlan { get; set; }
+    /// <summary>Total amount (net) to be paid off across all installments, e.g. 4000.00.</summary>
+    public decimal? TotalInstallmentAmount { get; set; }
+    /// <summary>Number of installment invoices already issued.</summary>
+    public int InstallmentsCompleted { get; set; }
+    /// <summary>Product/service title shown on installment invoice lines instead of the synthetic Plan.Name.</summary>
+    public string? InstallmentSourceTitle { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity
