@@ -468,6 +468,8 @@ public class TimeTrackingController(ITimeTrackingService svc) : ControllerBase
 [ApiController, Route("api/[controller]"), Authorize]
 public class DashboardController(IDashboardService svc) : ControllerBase
 {
+    [HttpGet("overview"), ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public async Task<ActionResult<DashboardOverviewDto>> Overview(CancellationToken ct) => Ok(await svc.GetOverviewAsync(ct));
     [HttpGet("kpis")] public async Task<ActionResult<DashboardKpis>> Kpis() => Ok(await svc.GetKpisAsync());
     [HttpGet("finance")] public async Task<ActionResult<FinanceDashboardDto>> Finance() => Ok(await svc.GetFinanceDashboardAsync());
 }

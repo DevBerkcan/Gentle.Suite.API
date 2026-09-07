@@ -199,6 +199,7 @@ public interface IServiceCatalogService
 
 public interface IDashboardService
 {
+    Task<DashboardOverviewDto> GetOverviewAsync(CancellationToken ct = default);
     Task<DashboardKpis> GetKpisAsync(CancellationToken ct = default);
     Task<FinanceDashboardDto> GetFinanceDashboardAsync(CancellationToken ct = default);
 }

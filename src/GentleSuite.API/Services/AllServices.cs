@@ -851,7 +851,7 @@ public class ServiceCatalogServiceImpl : IServiceCatalogService
 }
 
 // === Dashboard ===
-public class DashboardServiceImpl : IDashboardService
+public partial class DashboardServiceImpl : IDashboardService
 {
     private readonly AppDbContext _db;
     public DashboardServiceImpl(AppDbContext db) { _db = db; }
@@ -864,8 +864,8 @@ public class DashboardServiceImpl : IDashboardService
         await _db.Quotes.CountAsync(q => q.IsCurrentVersion && (q.Status == QuoteStatus.Sent || q.Status == QuoteStatus.Viewed), ct),
         await _db.Invoices.CountAsync(i => (i.Status == InvoiceStatus.Open || i.Status == InvoiceStatus.Sent) && i.DueDate < DateTimeOffset.UtcNow, ct),
         await _db.Customers.CountAsync(c => c.Status == CustomerStatus.Active, ct),
-        await _db.CustomerSubscriptions.CountAsync(s => s.Status == SubscriptionStatus.Active, ct),
-        await _db.CustomerSubscriptions.Where(s => s.Status == SubscriptionStatus.Active).Include(s => s.Plan).SumAsync(s => s.AgreedMonthlyPrice ?? s.Plan.MonthlyPrice, ct));
+        await _db.CustomerSubscriptions.CountAsync(s => s.Status == SubscriptionStatus.Active && !s.IsInstallmentPlan, ct),
+        await _db.CustomerSubscriptions.Where(s => s.Status == SubscriptionStatus.Active && !s.IsInstallmentPlan && s.AgreedMonthlyPrice > 0).SumAsync(s => s.AgreedMonthlyPrice ?? 0, ct));
     }
 
     public async Task<FinanceDashboardDto> GetFinanceDashboardAsync(CancellationToken ct)
