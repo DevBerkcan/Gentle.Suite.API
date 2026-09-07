@@ -28,6 +28,7 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task<PagedResult<QuoteListDto>> GetQuotesAsync(PaginationParams p, QuoteStatus? status, Guid? customerId, CancellationToken ct)
     {
+        await QuoteLifecycle.ExpireAsync(_db, ct);
         var q = _db.Quotes.Include(x => x.Customer).Include(x => x.Lines).Where(x => x.IsCurrentVersion).AsQueryable();
         if (status.HasValue) q = q.Where(x => x.Status == status.Value);
         if (customerId.HasValue) q = q.Where(x => x.CustomerId == customerId.Value);
@@ -46,6 +47,7 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task<QuoteDetailDto?> GetByIdAsync(Guid id, CancellationToken ct)
     {
+        await QuoteLifecycle.ExpireAsync(_db, ct);
         var q = await _db.Quotes.Include(x => x.Customer).ThenInclude(c => c.Contacts).Include(x => x.Lines.OrderBy(l => l.SortOrder)).FirstOrDefaultAsync(x => x.Id == id, ct);
         if (q == null) return null;
         var dto = _mapper.Map<QuoteDetailDto>(q);
@@ -151,12 +153,15 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task SendAsync(Guid id, SendQuoteRequest req, CancellationToken ct)
     {
+        await QuoteLifecycle.ExpireAsync(_db, ct);
         var quote = await _db.Quotes
             .Include(q => q.Customer).ThenInclude(c => c.Contacts)
             .Include(q => q.Lines)
             .FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
 
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Nur aktuelle Angebotsversionen koennen versendet werden.");
+        if (quote.Status is not (QuoteStatus.Draft or QuoteStatus.Sent or QuoteStatus.Viewed)) throw new InvalidOperationException("Bitte eine neue Angebotsversion erstellen.");
+        if (req.ExpirationDays < 1 || req.ExpirationDays > 365) throw new ArgumentException("Die Gueltigkeit muss zwischen 1 und 365 Tagen liegen.");
         if (!quote.Lines.Any()) throw new ArgumentException("Ein Angebot ohne Positionen kann nicht versendet werden.");
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
         quote.TaxMode = EnforceCompanyTaxMode(co?.DefaultTaxMode ?? TaxMode.Standard, quote.TaxMode);
@@ -214,6 +219,20 @@ public class QuoteServiceImpl : IQuoteService
     }
 
 
+    public async Task<QuoteDetailDto> DeactivateAsync(Guid id, CancellationToken ct)
+    {
+        await QuoteLifecycle.ExpireAsync(_db, ct);
+        var changed = await _db.Quotes.Where(q => q.Id == id && q.IsCurrentVersion
+            && (q.Status == QuoteStatus.Draft || q.Status == QuoteStatus.Sent || q.Status == QuoteStatus.Viewed))
+            .ExecuteUpdateAsync(s => s.SetProperty(q => q.Status, QuoteStatus.Inactive)
+                .SetProperty(q => q.ApprovalTokenExpiry, DateTimeOffset.UtcNow)
+                .SetProperty(q => q.UpdatedAt, DateTimeOffset.UtcNow), ct);
+        if (changed == 0) throw new InvalidOperationException("Nur aktuelle Entwuerfe oder offene Angebote koennen deaktiviert werden.");
+        var quote = (await GetByIdAsync(id, ct))!;
+        await _activity.LogAsync(quote.CustomerId, "Quote", id, "Deactivated", $"Angebot {quote.QuoteNumber} auf nicht aktiv gesetzt", ct: ct);
+        return quote;
+    }
+
     private static string HashApprovalToken(string token)
     {
         using var sha = SHA256.Create();
@@ -222,9 +241,10 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task<QuoteDetailDto?> GetByApprovalTokenAsync(string token, CancellationToken ct)
     {
+        await QuoteLifecycle.ExpireAsync(_db, ct);
         var tokenHash = HashApprovalToken(token);
         var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts).Include(q => q.Lines.OrderBy(l => l.SortOrder)).FirstOrDefaultAsync(q => q.ApprovalTokenHash == tokenHash, ct);
-        if (quote == null || !quote.IsCurrentVersion || quote.ApprovalTokenExpiry < DateTimeOffset.UtcNow) return null;
+        if (quote == null || !quote.IsCurrentVersion || quote.ApprovalTokenExpiry <= DateTimeOffset.UtcNow || quote.Status is QuoteStatus.Expired or QuoteStatus.Inactive) return null;
         if (quote.Status == QuoteStatus.Sent) { quote.Status = QuoteStatus.Viewed; quote.ViewedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
         var dto = _mapper.Map<QuoteDetailDto>(quote);
         await ResolvePaymentTermOptionsAsync(dto, quote.PaymentTermKeys, ct);
@@ -233,10 +253,12 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task ProcessApprovalAsync(string token, ApprovalRequest req, string? ipAddress, CancellationToken ct)
     {
+        await QuoteLifecycle.ExpireAsync(_db, ct);
         var tokenHash = HashApprovalToken(token);
         var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts).Include(q => q.Lines).FirstOrDefaultAsync(q => q.ApprovalTokenHash == tokenHash, ct) ?? throw new KeyNotFoundException();
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Dieses Angebot wurde durch eine neuere Version ersetzt.");
-        if (quote.ApprovalTokenExpiry < DateTimeOffset.UtcNow) throw new InvalidOperationException("Link expired");
+        if (quote.ApprovalTokenExpiry <= DateTimeOffset.UtcNow || quote.Status is QuoteStatus.Expired or QuoteStatus.Inactive) throw new InvalidOperationException("Link expired");
+        if (quote.Status is not (QuoteStatus.Sent or QuoteStatus.Viewed)) throw new InvalidOperationException("Dieses Angebot ist nicht mehr offen.");
         if (quote.RespondedAt != null) throw new InvalidOperationException("Über dieses Angebot wurde bereits entschieden. Der Link kann nicht erneut verwendet werden.");
         quote.CustomerComment = req.Comment; quote.RespondedAt = DateTimeOffset.UtcNow;
         if (req.Accepted)
@@ -575,6 +597,7 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task<List<QuoteVersionDto>> GetVersionsAsync(Guid id, CancellationToken ct)
     {
+        await QuoteLifecycle.ExpireAsync(_db, ct);
         var quote = await _db.Quotes.FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
         var groupId = quote.QuoteGroupId == Guid.Empty ? quote.Id : quote.QuoteGroupId;
         var versions = await _db.Quotes
@@ -594,7 +617,7 @@ public class QuoteServiceImpl : IQuoteService
             .FirstOrDefaultAsync(q => q.ApprovalTokenHash == tokenHash, ct)
             ?? throw new KeyNotFoundException();
 
-        if (!quote.IsCurrentVersion || quote.ApprovalTokenExpiry < DateTimeOffset.UtcNow)
+        if (!quote.IsCurrentVersion || quote.ApprovalTokenExpiry <= DateTimeOffset.UtcNow || quote.Status is QuoteStatus.Expired or QuoteStatus.Inactive)
             throw new InvalidOperationException("Link expired or invalid.");
 
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "GentleSuite" };

@@ -51,6 +51,7 @@ public interface IOnboardingService
 
 public interface IQuoteService
 {
+    Task<QuoteDetailDto> DeactivateAsync(Guid id, CancellationToken ct = default);
     Task<PagedResult<QuoteListDto>> GetQuotesAsync(PaginationParams p, QuoteStatus? status = null, Guid? customerId = null, CancellationToken ct = default);
     Task<QuoteDetailDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<QuoteDetailDto> CreateAsync(CreateQuoteRequest req, CancellationToken ct = default);

@@ -264,6 +264,7 @@ public class QuotesController(IQuoteService svc) : ControllerBase
     [HttpPost("templates")] public async Task<ActionResult<QuoteTemplateDto>> CreateTemplate(CreateQuoteTemplateRequest req) => Ok(await svc.CreateTemplateAsync(req));
     [HttpPut("templates/{id}")] public async Task<ActionResult<QuoteTemplateDto>> UpdateTemplate(Guid id, UpdateQuoteTemplateRequest req) => Ok(await svc.UpdateTemplateAsync(id, req));
     [HttpDelete("templates/{id}")] public async Task<IActionResult> DeleteTemplate(Guid id) { await svc.DeleteTemplateAsync(id); return NoContent(); }
+    [HttpPost("{id}/deactivate")] public async Task<ActionResult<QuoteDetailDto>> Deactivate(Guid id) => Ok(await svc.DeactivateAsync(id));
     [HttpPost("{id}/order")] public async Task<ActionResult<QuoteDetailDto>> MarkAsOrdered(Guid id) => Ok(await svc.MarkAsOrderedAsync(id));
     [HttpPost("{id}/convert-to-invoice")] public async Task<ActionResult<InvoiceDetailDto>> ConvertToInvoice(Guid id) => Ok(await svc.ConvertToInvoiceAsync(id));
     [HttpPut("{id}")] public async Task<ActionResult<QuoteDetailDto>> Update(Guid id, UpdateQuoteRequest req) => Ok(await svc.UpdateAsync(id, req));

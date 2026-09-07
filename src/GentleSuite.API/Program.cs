@@ -506,6 +506,7 @@ app.MapHub<ProjectBoardHub>("/hubs/project-board");
 app.MapHangfireDashboard("/hangfire");
 // Explicitly remove deactivated jobs from Hangfire DB so they don't keep firing
 RecurringJob.RemoveIfExists("check-open-quotes");
+RecurringJob.AddOrUpdate<ReminderJobs>("expire-quotes", j => j.ExpireQuotesAsync(), "* * * * *");
 RecurringJob.RemoveIfExists("generate-recurring-expenses");
 RecurringJob.RemoveIfExists("generate-subscription-invoices");
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");

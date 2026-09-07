@@ -9,7 +9,7 @@ public enum OnboardingStepStatus { Pending, InProgress, Completed, Skipped }
 public enum TaskItemStatus { Open, InProgress, Done, Blocked }
 
 // === Quotes ===
-public enum QuoteStatus { Draft = 0, Sent = 1, Viewed = 2, Accepted = 3, Rejected = 4, Expired = 5, Ordered = 6 }
+public enum QuoteStatus { Draft = 0, Sent = 1, Viewed = 2, Accepted = 3, Rejected = 4, Expired = 5, Ordered = 6, Inactive = 7 }
 public enum QuoteLineType { OneTime, RecurringMonthly }
 
 // === Invoices (GoBD) ===

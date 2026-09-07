@@ -98,6 +98,8 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<TaskItem>().HasOne(x => x.Step).WithMany(x => x.Tasks).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<Project>().HasOne(x => x.Customer).WithMany(x => x.Projects).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<Quote>().HasOne(x => x.Customer).WithMany(x => x.Quotes).OnDelete(DeleteBehavior.Cascade);
+        // Prevent concurrent approval/view requests from reviving expired or inactive quotes.
+        mb.Entity<Quote>().Property(x => x.Status).IsConcurrencyToken();
         mb.Entity<Quote>().HasIndex(x => x.QuoteNumber).IsUnique();
         mb.Entity<Quote>().HasIndex(x => new { x.QuoteGroupId, x.Version }).IsUnique();
         mb.Entity<Quote>().HasIndex(x => new { x.QuoteGroupId, x.IsCurrentVersion }).HasFilter("[IsCurrentVersion] = 1");

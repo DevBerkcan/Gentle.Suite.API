@@ -78,8 +78,11 @@ public class ReminderJobs
         }
     }
 
+    public Task ExpireQuotesAsync() => GentleSuite.Infrastructure.Services.QuoteLifecycle.ExpireAsync(_db);
+
     public async Task CheckOpenQuotesAsync()
     {
+        await ExpireQuotesAsync();
         var open = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts)
             .Where(q => (q.Status == QuoteStatus.Sent || q.Status == QuoteStatus.Viewed) && q.SentAt.HasValue && q.SentAt.Value.AddDays(7) < DateTimeOffset.UtcNow).ToListAsync();
         foreach (var q in open)
