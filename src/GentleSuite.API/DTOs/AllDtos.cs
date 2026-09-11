@@ -114,6 +114,7 @@ public class QuoteDetailDto
     public Guid? ContactId { get; set; }
     public int Version { get; set; }
     public QuoteStatus Status { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
     public string? Subject { get; set; }
     public string? IntroText { get; set; }
     public string? OutroText { get; set; }
