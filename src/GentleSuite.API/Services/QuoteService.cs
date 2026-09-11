@@ -54,6 +54,7 @@ public class QuoteServiceImpl : IQuoteService
         var dto = _mapper.Map<QuoteDetailDto>(q);
         await ResolvePaymentTermOptionsAsync(dto, q.PaymentTermKeys, ct);
         await ResolveLegalTextOptionsAsync(dto, q.LegalTextBlocks, ct);
+        ResolvePaymentPlanOptions(dto, q);
         return dto;
     }
 
@@ -64,6 +65,33 @@ public class QuoteServiceImpl : IQuoteService
         if (keys == null || keys.Count == 0) return;
         var options = await _db.PaymentTermOptions.Where(o => keys.Contains(o.Key) && o.IsActive).OrderBy(o => o.SortOrder).ToListAsync(ct);
         dto.PaymentTermOptions = _mapper.Map<List<PaymentTermOptionDto>>(options);
+    }
+
+    /// <summary>Server-computed Preisangebot options (Einmalzahlung/Hybrid/Monatlich 12/24) from the quote's
+    /// SubtotalOneTime + stored PaymentPlanConfig — never trusted from the client, so admin and customer views
+    /// always show identical numbers.</summary>
+    private static void ResolvePaymentPlanOptions(QuoteDetailDto dto, Quote quote)
+    {
+        if (string.IsNullOrEmpty(quote.PaymentPlanConfig)) return;
+        var cfg = JsonSerializer.Deserialize<PaymentPlanConfigDto>(quote.PaymentPlanConfig);
+        if (cfg == null) return;
+        dto.PaymentPlanConfig = cfg;
+        var total = quote.SubtotalOneTime;
+        var downPayment = Math.Round(total * cfg.Hybrid.DownPaymentPercent / 100m, 2);
+        var hybridFinanced = Math.Round((total - downPayment) * (1 + cfg.Hybrid.SurchargePercent / 100m), 2);
+        var hybridTotal = downPayment + hybridFinanced;
+        var m12Total = Math.Round(total * (1 + cfg.Monthly12.SurchargePercent / 100m), 2);
+        var m24Total = Math.Round(total * (1 + cfg.Monthly24.SurchargePercent / 100m), 2);
+        dto.PaymentPlanOptions = new List<PaymentPlanOptionResolvedDto>
+        {
+            new("onetime", "Einmalzahlung", "100% des Projektpreises, keine Rate", null, null, total, null),
+            new("hybrid", "Hybrid-Modell", $"Anzahlung {cfg.Hybrid.DownPaymentPercent:0.#}% · Rest in {cfg.Hybrid.DurationMonths} Raten",
+                downPayment, Math.Round(hybridFinanced / cfg.Hybrid.DurationMonths, 2), hybridTotal, cfg.Hybrid.DurationMonths),
+            new("monthly12", "Monatlich 12 Monate", "0 € Anzahlung · voller Preis + Aufschlag über 12 Monate",
+                0m, Math.Round(m12Total / 12, 2), m12Total, 12),
+            new("monthly24", "Monatlich 24 Monate", "0 € Anzahlung · voller Preis + Aufschlag über 24 Monate",
+                0m, Math.Round(m24Total / 24, 2), m24Total, 24),
+        };
     }
 
     /// <summary>Manually chosen legal blocks plus anything marked "automatisch anhängen" (AGB/Datenschutz),
@@ -276,6 +304,7 @@ public class QuoteServiceImpl : IQuoteService
         var dto = _mapper.Map<QuoteDetailDto>(quote);
         await ResolvePaymentTermOptionsAsync(dto, quote.PaymentTermKeys, ct);
         await ResolveLegalTextOptionsAsync(dto, quote.LegalTextBlocks, ct);
+        ResolvePaymentPlanOptions(dto, quote);
         return dto;
     }
 
@@ -312,6 +341,15 @@ public class QuoteServiceImpl : IQuoteService
                         throw new InvalidOperationException("Bitte wählen Sie eine gültige Zahlungsweise aus.");
                     quote.ChosenInstallmentMonths = req.ChosenInstallmentMonths;
                 }
+            }
+            if (!string.IsNullOrEmpty(quote.PaymentPlanConfig) && quote.SubtotalOneTime > 0)
+            {
+                var validKeys = new[] { "onetime", "hybrid", "monthly12", "monthly24" };
+                if (string.IsNullOrWhiteSpace(req.ChosenPaymentPlanOptionKey) || !validKeys.Contains(req.ChosenPaymentPlanOptionKey))
+                    throw new InvalidOperationException("Bitte wählen Sie eine Zahlungsart aus.");
+                // Nur die Wahl speichern — die eigentliche Rechnung/Ratenzahlung entsteht erst, wenn der
+                // Admin bewusst auf "Überführen" klickt (TransferPaymentPlanAsync), nicht automatisch hier.
+                quote.ChosenPaymentPlanOptionKey = req.ChosenPaymentPlanOptionKey;
             }
             quote.Status = QuoteStatus.Accepted;
             quote.B2bAuthorityConfirmed = true;
@@ -503,6 +541,87 @@ public class QuoteServiceImpl : IQuoteService
         await _db.SaveChangesAsync(ct);
     }
 
+    /// <summary>Admin-triggered "Überführen": takes the customer's signed Preisangebot choice and creates the
+    /// matching invoice/Ratenzahlungsplan. Deliberately manual (not called from ProcessApprovalAsync) so the
+    /// admin keeps control before anything Mollie-related gets set up.</summary>
+    public async Task<QuoteDetailDto> TransferPaymentPlanAsync(Guid quoteId, CancellationToken ct)
+    {
+        var quote = await _db.Quotes.Include(q => q.Customer).Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == quoteId, ct) ?? throw new KeyNotFoundException();
+        if (quote.PaymentPlanTransferredAt != null)
+            throw new InvalidOperationException("Für dieses Angebot wurde die gewählte Zahlungsart bereits überführt.");
+        if (quote.SignatureStatus != SignatureStatus.Signed || string.IsNullOrEmpty(quote.ChosenPaymentPlanOptionKey))
+            throw new InvalidOperationException("Der Kunde hat noch keine Zahlungsart des Preisangebots gewählt.");
+        var cfg = string.IsNullOrEmpty(quote.PaymentPlanConfig) ? null : JsonSerializer.Deserialize<PaymentPlanConfigDto>(quote.PaymentPlanConfig);
+        if (cfg == null) throw new InvalidOperationException("Für dieses Angebot ist keine Preisangebot-Konfiguration hinterlegt.");
+
+        switch (quote.ChosenPaymentPlanOptionKey)
+        {
+            case "onetime":
+                await ConvertToInvoiceAsync(quote.Id, ct);
+                break;
+            case "monthly12":
+                await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 12, cfg.Monthly12.SurchargePercent, quote.SubtotalOneTime, null, null, "monthly12", ct);
+                break;
+            case "monthly24":
+                await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 24, cfg.Monthly24.SurchargePercent, quote.SubtotalOneTime, null, null, "monthly24", ct);
+                break;
+            case "hybrid":
+                var downPayment = Math.Round(quote.SubtotalOneTime * cfg.Hybrid.DownPaymentPercent / 100m, 2);
+                var financedBase = quote.SubtotalOneTime - downPayment;
+                var dpInvoice = await CreateDownPaymentInvoiceAsync(quote, downPayment, cfg.Hybrid.DownPaymentPercent, ct);
+                await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, cfg.Hybrid.DurationMonths, cfg.Hybrid.SurchargePercent, financedBase, cfg.Hybrid.DownPaymentPercent, dpInvoice.Id, "hybrid", ct);
+                break;
+            default:
+                throw new InvalidOperationException("Unbekannte Zahlungsart.");
+        }
+
+        quote.PaymentPlanTransferredAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "PaymentPlanTransferred",
+            $"Zahlungsart '{quote.ChosenPaymentPlanOptionKey}' aus Preisangebot überführt", ct: ct);
+        return (await GetByIdAsync(quote.Id, ct))!;
+    }
+
+    /// <summary>Hybrid-Modell: raises a single Draft invoice for just the down-payment amount, reusing the
+    /// same invoice-shape as ConvertToInvoiceAsync but with one synthetic "Anzahlung" line.</summary>
+    private async Task<InvoiceDetailDto> CreateDownPaymentInvoiceAsync(Quote quote, decimal downPaymentAmount, decimal downPaymentPercent, CancellationToken ct)
+    {
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+        var taxMode = EnforceCompanyTaxMode(co?.DefaultTaxMode ?? TaxMode.Standard, quote.TaxMode);
+        var invoiceNumber = await _seq.NextNumberAsync("Invoice", DateTime.UtcNow.Year, "RE", 4, ct, includeYear: false);
+        var inv = new Invoice
+        {
+            InvoiceNumber = invoiceNumber,
+            CustomerId = quote.CustomerId,
+            QuoteId = quote.Id,
+            Subject = $"Anzahlung – {quote.Subject}",
+            TaxMode = taxMode,
+            Type = InvoiceType.Standard,
+            InvoiceDate = DateTimeOffset.UtcNow,
+            DueDate = DateTimeOffset.UtcNow.AddDays(14),
+            SellerTaxId = co?.TaxId,
+            SellerVatId = co?.VatId,
+            Status = InvoiceStatus.Draft,
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears)
+        };
+        inv.Lines.Add(new InvoiceLine
+        {
+            Title = "Anzahlung",
+            Description = $"Anzahlung {downPaymentPercent:0.#}% zu Angebot {quote.QuoteNumber}",
+            Quantity = 1,
+            UnitPrice = downPaymentAmount,
+            VatPercent = EffectiveVatPercent(taxMode, 19),
+            SortOrder = 0,
+            LineType = (int)QuoteLineType.OneTime
+        });
+        inv.RecalculateTotals();
+        _db.Invoices.Add(inv);
+        await _db.SaveChangesAsync(ct);
+        await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "Created",
+            $"Anzahlungsrechnung {inv.InvoiceNumber} aus Angebot {quote.QuoteNumber} erstellt", ct: ct);
+        return (await _invoiceService.GetByIdAsync(inv.Id, ct))!;
+    }
+
 
     public async Task<QuoteDetailDto> UpdateAsync(Guid id, UpdateQuoteRequest req, CancellationToken ct)
     {
@@ -517,6 +636,7 @@ public class QuoteServiceImpl : IQuoteService
         if (req.PaymentTermKeys != null) quote.PaymentTermKeys = JsonSerializer.Serialize(req.PaymentTermKeys);
         if (req.InstallmentPeriodOptionsMonths != null) quote.InstallmentPeriodOptionsMonths = JsonSerializer.Serialize(req.InstallmentPeriodOptionsMonths);
         if (req.LegalTextBlockKeys != null) quote.LegalTextBlocks = JsonSerializer.Serialize(req.LegalTextBlockKeys);
+        if (req.PaymentPlanConfig != null) quote.PaymentPlanConfig = JsonSerializer.Serialize(req.PaymentPlanConfig);
         if (req.TaxRate.HasValue) quote.TaxRate = companyTaxMode == TaxMode.SmallBusiness ? 0 : req.TaxRate.Value;
         if (req.TaxMode.HasValue) quote.TaxMode = EnforceCompanyTaxMode(companyTaxMode, req.TaxMode.Value);
         if (companyTaxMode == TaxMode.SmallBusiness) quote.TaxMode = TaxMode.SmallBusiness;

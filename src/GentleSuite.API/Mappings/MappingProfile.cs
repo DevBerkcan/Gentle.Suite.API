@@ -68,7 +68,9 @@ public class MappingProfile : Profile
             .ForMember(d => d.LegalTextBlockOptions, o => o.Ignore())
             .ForMember(d => d.PaymentTermKeys, o => o.MapFrom(s => string.IsNullOrEmpty(s.PaymentTermKeys) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(s.PaymentTermKeys, (JsonSerializerOptions?)null)))
             .ForMember(d => d.PaymentTermOptions, o => o.Ignore())
-            .ForMember(d => d.InstallmentPeriodOptionsMonths, o => o.MapFrom(s => string.IsNullOrEmpty(s.InstallmentPeriodOptionsMonths) ? new List<int>() : JsonSerializer.Deserialize<List<int>>(s.InstallmentPeriodOptionsMonths, (JsonSerializerOptions?)null)));
+            .ForMember(d => d.InstallmentPeriodOptionsMonths, o => o.MapFrom(s => string.IsNullOrEmpty(s.InstallmentPeriodOptionsMonths) ? new List<int>() : JsonSerializer.Deserialize<List<int>>(s.InstallmentPeriodOptionsMonths, (JsonSerializerOptions?)null)))
+            .ForMember(d => d.PaymentPlanConfig, o => o.Ignore())
+            .ForMember(d => d.PaymentPlanOptions, o => o.Ignore());
         CreateMap<Quote, QuoteVersionDto>()
             .ConstructUsing(s => new QuoteVersionDto(s.Id, s.QuoteGroupId, s.QuoteNumber, s.Version, s.IsCurrentVersion, s.Status, s.CreatedAt, s.SentAt));
         CreateMap<QuoteLine, QuoteLineDto>();
@@ -158,7 +160,11 @@ public class MappingProfile : Profile
                 s.TotalInstallmentAmount,
                 s.InstallmentsCompleted,
                 s.InstallmentSourceTitle,
-                0m
+                0m,
+                s.InstallmentSurchargePercent,
+                s.DownPaymentPercent,
+                s.DownPaymentInvoiceId,
+                s.PaymentPlanOptionKey
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()

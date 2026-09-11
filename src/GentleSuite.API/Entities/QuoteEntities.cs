@@ -76,6 +76,14 @@ public class Quote : GobdEntity
     public string? InstallmentPeriodOptionsMonths { get; set; }
     public int? ChosenInstallmentMonths { get; set; }
 
+    // Preisangebot: richer payment-plan configurator superseding InstallmentPeriodOptionsMonths for new quotes
+    // (onetime / hybrid / monthly12 / monthly24, with down-payment and surcharge support). Unlike the legacy
+    // mechanism above, choosing an option at signing does NOT auto-create anything — an admin must explicitly
+    // "überführen" (transfer) it afterwards, hence PaymentPlanTransferredAt as an idempotency guard.
+    public string? PaymentPlanConfig { get; set; }
+    public string? ChosenPaymentPlanOptionKey { get; set; }
+    public DateTimeOffset? PaymentPlanTransferredAt { get; set; }
+
     public List<QuoteLine> Lines { get; set; } = new();
 
     public decimal SubtotalOneTime => Lines.Where(l => l.LineType == QuoteLineType.OneTime).Sum(l => l.Total);

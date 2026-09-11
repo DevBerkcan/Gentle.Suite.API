@@ -67,6 +67,7 @@ public interface IQuoteService
     Task DeleteTemplateAsync(Guid id, CancellationToken ct = default);
     Task<QuoteDetailDto> MarkAsOrderedAsync(Guid quoteId, CancellationToken ct = default);
     Task<InvoiceDetailDto> ConvertToInvoiceAsync(Guid quoteId, CancellationToken ct = default);
+    Task<QuoteDetailDto> TransferPaymentPlanAsync(Guid quoteId, CancellationToken ct = default);
     Task<QuoteDetailDto> UpdateAsync(Guid id, UpdateQuoteRequest req, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
     Task<QuoteDetailDto> DuplicateAsync(Guid id, CancellationToken ct = default);
@@ -168,6 +169,7 @@ public interface ISubscriptionService
     Task ConfirmAsync(Guid subscriptionId, CancellationToken ct = default);
     Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid subscriptionId, CancellationToken ct = default);
     Task<CustomerSubscriptionDto> CreateInstallmentPlanFromQuoteAsync(Guid customerId, Guid quoteId, int months, CancellationToken ct = default);
+    Task<CustomerSubscriptionDto> CreateSurchargedInstallmentPlanAsync(Guid customerId, Guid quoteId, int months, decimal surchargePercent, decimal financedBaseAmount, decimal? downPaymentPercent, Guid? downPaymentInvoiceId, string paymentPlanOptionKey, CancellationToken ct = default);
 }
 
 public interface IMolliePaymentService

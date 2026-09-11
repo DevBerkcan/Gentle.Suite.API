@@ -77,6 +77,17 @@ public class CustomerSubscription : BaseEntity
     public int InstallmentsCompleted { get; set; }
     /// <summary>Product/service title shown on installment invoice lines instead of the synthetic Plan.Name.</summary>
     public string? InstallmentSourceTitle { get; set; }
+
+    // Preisangebot: surcharge/down-payment metadata for plans created via the payment-plan "Überführen" flow.
+    // Null for plans created via the legacy CreateInstallmentPlanFromQuoteAsync (no surcharge/down-payment concept there).
+    /// <summary>Surcharge % already baked into TotalInstallmentAmount.</summary>
+    public decimal? InstallmentSurchargePercent { get; set; }
+    /// <summary>Hybrid plans only: down-payment % of the quote's SubtotalOneTime.</summary>
+    public decimal? DownPaymentPercent { get; set; }
+    public Guid? DownPaymentInvoiceId { get; set; }
+    public Invoice? DownPaymentInvoice { get; set; }
+    /// <summary>"hybrid" | "monthly12" | "monthly24" — which Preisangebot option this plan came from.</summary>
+    public string? PaymentPlanOptionKey { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity

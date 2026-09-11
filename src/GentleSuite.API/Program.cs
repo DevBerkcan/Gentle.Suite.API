@@ -458,6 +458,15 @@ await db.Database.ExecuteSqlRawAsync("""
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AttachmentFileName') ALTER TABLE "LegalTextBlocks" ADD "AttachmentFileName" NVARCHAR(260) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AttachmentContentType') ALTER TABLE "LegalTextBlocks" ADD "AttachmentContentType" NVARCHAR(100) NULL;""");
 
+    // Preisangebot: konfigurierbare Zahlungsoptionen (Einmalzahlung/Hybrid/Monatlich 12/24) im Angebot
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='PaymentPlanConfig') ALTER TABLE "Quotes" ADD "PaymentPlanConfig" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='ChosenPaymentPlanOptionKey') ALTER TABLE "Quotes" ADD "ChosenPaymentPlanOptionKey" NVARCHAR(32) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='PaymentPlanTransferredAt') ALTER TABLE "Quotes" ADD "PaymentPlanTransferredAt" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='InstallmentSurchargePercent') ALTER TABLE "CustomerSubscriptions" ADD "InstallmentSurchargePercent" DECIMAL(18,2) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='DownPaymentPercent') ALTER TABLE "CustomerSubscriptions" ADD "DownPaymentPercent" DECIMAL(18,2) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='DownPaymentInvoiceId') ALTER TABLE "CustomerSubscriptions" ADD "DownPaymentInvoiceId" UNIQUEIDENTIFIER NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='PaymentPlanOptionKey') ALTER TABLE "CustomerSubscriptions" ADD "PaymentPlanOptionKey" NVARCHAR(32) NULL;""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)

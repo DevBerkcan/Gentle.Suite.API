@@ -787,6 +787,68 @@ public class SubscriptionServiceImpl : ISubscriptionService
         return await GetByIdAsync(subscription.Id, ct);
     }
 
+    // === Preisangebot: Ratenzahlungsplan mit Aufschlag/Anzahlung (Hybrid/Monatlich 12/24) ===
+    public async Task<CustomerSubscriptionDto> CreateSurchargedInstallmentPlanAsync(Guid customerId, Guid quoteId, int months, decimal surchargePercent, decimal financedBaseAmount, decimal? downPaymentPercent, Guid? downPaymentInvoiceId, string paymentPlanOptionKey, CancellationToken ct)
+    {
+        if (months <= 0) throw new ArgumentException("Die Ratenanzahl muss größer als 0 sein.");
+
+        var quote = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == quoteId, ct)
+            ?? throw new ArgumentException("Das ausgewählte Vertragsangebot wurde nicht gefunden.");
+        if (quote.CustomerId != customerId)
+            throw new InvalidOperationException("Das Vertragsangebot gehört nicht zum ausgewählten Kunden.");
+        if (!quote.IsCurrentVersion || quote.Status is not (QuoteStatus.Accepted or QuoteStatus.Ordered) ||
+            quote.SignatureStatus != SignatureStatus.Signed || quote.SignedAt == null || !quote.B2bAuthorityConfirmed)
+            throw new InvalidOperationException("Für eine Ratenzahlung ist ein aktuell angenommenes B2B-Angebot mit Unterschrift und Vertretungsbestätigung erforderlich.");
+        if (financedBaseAmount <= 0)
+            throw new InvalidOperationException("Der zu finanzierende Betrag muss größer als 0 sein.");
+
+        var alreadyExists = await _db.CustomerSubscriptions.AnyAsync(s => s.ContractQuoteId == quote.Id && s.IsInstallmentPlan, ct);
+        if (alreadyExists)
+            throw new InvalidOperationException("Für dieses Angebot wurde bereits ein Ratenzahlungsplan angelegt.");
+
+        var plan = await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Name == "Ratenzahlung (Systemtarif)", ct)
+            ?? throw new InvalidOperationException("Der Systemtarif für Ratenzahlungen wurde nicht gefunden.");
+
+        var total = Math.Round(financedBaseAmount * (1 + surchargePercent / 100m), 2);
+        var perInstallment = Math.Floor(total / months * 100m) / 100m;
+        var title = !string.IsNullOrWhiteSpace(quote.Subject)
+            ? quote.Subject!
+            : string.Join(", ", quote.Lines.Where(l => l.LineType == QuoteLineType.OneTime).Select(l => l.Title));
+
+        var start = DateTimeOffset.UtcNow;
+        var subscription = new CustomerSubscription
+        {
+            CustomerId = customerId,
+            PlanId = plan.Id,
+            Status = SubscriptionStatus.PendingConfirmation,
+            StartDate = start,
+            NextBillingDate = start,
+            ContractDurationMonths = months,
+            ContractQuoteId = quote.Id,
+            QuoteLineId = null,
+            ContractReference = quote.QuoteNumber,
+            ContractVersion = quote.Version,
+            ContractAcceptedAt = quote.SignedAt,
+            ContractAcceptedByName = quote.SignedByName,
+            ContractAcceptedByEmail = quote.SignedByEmail,
+            ContractAcceptedIpAddress = quote.SignedIpAddress,
+            AgreedMonthlyPrice = perInstallment,
+            ContractBillingCycle = BillingCycle.Monthly,
+            BusinessCustomerConfirmed = true,
+            BusinessCustomerConfirmedAt = DateTimeOffset.UtcNow,
+            IsInstallmentPlan = true,
+            TotalInstallmentAmount = total,
+            InstallmentSourceTitle = title,
+            InstallmentSurchargePercent = surchargePercent,
+            DownPaymentPercent = downPaymentPercent,
+            DownPaymentInvoiceId = downPaymentInvoiceId,
+            PaymentPlanOptionKey = paymentPlanOptionKey
+        };
+        _db.CustomerSubscriptions.Add(subscription);
+        await _db.SaveChangesAsync(ct);
+        return await GetByIdAsync(subscription.Id, ct);
+    }
+
 }
 
 // === Expense ===

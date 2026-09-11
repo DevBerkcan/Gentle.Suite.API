@@ -135,6 +135,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<CustomerSubscription>().HasIndex(x => x.ContractQuoteId);
         mb.Entity<CustomerSubscription>().HasOne(x => x.QuoteLine).WithMany().HasForeignKey(x => x.QuoteLineId).OnDelete(DeleteBehavior.Restrict);
         mb.Entity<CustomerSubscription>().HasIndex(x => x.QuoteLineId).IsUnique().HasFilter("[QuoteLineId] IS NOT NULL");
+        mb.Entity<CustomerSubscription>().HasOne(x => x.DownPaymentInvoice).WithMany().HasForeignKey(x => x.DownPaymentInvoiceId).OnDelete(DeleteBehavior.Restrict);
         mb.Entity<JournalEntryLine>().HasOne(x => x.JournalEntry).WithMany(x => x.Lines).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<Milestone>().HasOne(x => x.Project).WithMany(x => x.Milestones).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<ProjectComment>().HasOne(x => x.Project).WithMany(x => x.Comments).OnDelete(DeleteBehavior.Cascade);
