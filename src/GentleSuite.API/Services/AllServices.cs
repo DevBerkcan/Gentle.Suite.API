@@ -842,6 +842,9 @@ public class SubscriptionServiceImpl : ISubscriptionService
             InstallmentSurchargePercent = surchargePercent,
             DownPaymentPercent = downPaymentPercent,
             DownPaymentInvoiceId = downPaymentInvoiceId,
+            // "Überführen" IST die bewusste Admin-Freigabe (Pendant zu AuthorizeSubscriptionBillingAsync bei
+            // der Serienrechnung) — kein separater "Rechnung jetzt senden"-Klick mehr nötig.
+            BillingAuthorizedAt = DateTimeOffset.UtcNow,
             PaymentPlanOptionKey = paymentPlanOptionKey
         };
         _db.CustomerSubscriptions.Add(subscription);

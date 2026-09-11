@@ -560,17 +560,29 @@ public class QuoteServiceImpl : IQuoteService
                 await ConvertToInvoiceAsync(quote.Id, ct);
                 break;
             case "monthly12":
-                await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 12, cfg.Monthly12.SurchargePercent, quote.SubtotalOneTime, null, null, "monthly12", ct);
+            {
+                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 12, cfg.Monthly12.SurchargePercent, quote.SubtotalOneTime, null, null, "monthly12", ct);
+                try { await _mollie.SendMandateEmailAsync(created.Id, ct); }
+                catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for surcharged installment plan {SubscriptionId} (quote {QuoteId})", created.Id, quote.Id); }
                 break;
+            }
             case "monthly24":
-                await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 24, cfg.Monthly24.SurchargePercent, quote.SubtotalOneTime, null, null, "monthly24", ct);
+            {
+                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 24, cfg.Monthly24.SurchargePercent, quote.SubtotalOneTime, null, null, "monthly24", ct);
+                try { await _mollie.SendMandateEmailAsync(created.Id, ct); }
+                catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for surcharged installment plan {SubscriptionId} (quote {QuoteId})", created.Id, quote.Id); }
                 break;
+            }
             case "hybrid":
+            {
                 var downPayment = Math.Round(quote.SubtotalOneTime * cfg.Hybrid.DownPaymentPercent / 100m, 2);
                 var financedBase = quote.SubtotalOneTime - downPayment;
                 var dpInvoice = await CreateDownPaymentInvoiceAsync(quote, downPayment, cfg.Hybrid.DownPaymentPercent, ct);
-                await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, cfg.Hybrid.DurationMonths, cfg.Hybrid.SurchargePercent, financedBase, cfg.Hybrid.DownPaymentPercent, dpInvoice.Id, "hybrid", ct);
+                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, cfg.Hybrid.DurationMonths, cfg.Hybrid.SurchargePercent, financedBase, cfg.Hybrid.DownPaymentPercent, dpInvoice.Id, "hybrid", ct);
+                try { await _mollie.SendMandateEmailAsync(created.Id, ct); }
+                catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for surcharged installment plan {SubscriptionId} (quote {QuoteId})", created.Id, quote.Id); }
                 break;
+            }
             default:
                 throw new InvalidOperationException("Unbekannte Zahlungsart.");
         }
