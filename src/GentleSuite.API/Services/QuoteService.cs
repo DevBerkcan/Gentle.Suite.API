@@ -73,24 +73,26 @@ public class QuoteServiceImpl : IQuoteService
     private static void ResolvePaymentPlanOptions(QuoteDetailDto dto, Quote quote)
     {
         if (string.IsNullOrEmpty(quote.PaymentPlanConfig)) return;
-        var cfg = JsonSerializer.Deserialize<PaymentPlanConfigDto>(quote.PaymentPlanConfig);
+        PaymentPlanConfigDto? cfg;
+        try { cfg = JsonSerializer.Deserialize<PaymentPlanConfigDto>(quote.PaymentPlanConfig); }
+        catch (JsonException) { return; } // altes/inkompatibles Format — Preisangebot muss neu konfiguriert werden
         if (cfg == null) return;
         dto.PaymentPlanConfig = cfg;
-        var total = quote.SubtotalOneTime;
-        var downPayment = Math.Round(total * cfg.Hybrid.DownPaymentPercent / 100m, 2);
-        var hybridFinanced = Math.Round((total - downPayment) * (1 + cfg.Hybrid.SurchargePercent / 100m), 2);
-        var hybridTotal = downPayment + hybridFinanced;
-        var m12Total = Math.Round(total * (1 + cfg.Monthly12.SurchargePercent / 100m), 2);
-        var m24Total = Math.Round(total * (1 + cfg.Monthly24.SurchargePercent / 100m), 2);
+        var projectPrice = quote.SubtotalOneTime;
+        var hybridDown = Math.Round(cfg.Hybrid.TotalAmount * cfg.Hybrid.DownPaymentPercent / 100m, 2);
+        var hybridFinanced = cfg.Hybrid.TotalAmount - hybridDown;
+        var hybridMonthly = cfg.Hybrid.DurationMonths > 0 ? Math.Round(hybridFinanced / cfg.Hybrid.DurationMonths, 2) : 0m;
+        var m12Monthly = Math.Round(cfg.Monthly12.TotalAmount / 12, 2);
+        var m24Monthly = Math.Round(cfg.Monthly24.TotalAmount / 24, 2);
         dto.PaymentPlanOptions = new List<PaymentPlanOptionResolvedDto>
         {
-            new("onetime", "Einmalzahlung", "100% des Projektpreises, keine Rate", null, null, total, null),
+            new("onetime", "Einmalzahlung", "100% des Projektpreises, keine Rate", null, null, projectPrice, null),
             new("hybrid", "Hybrid-Modell", $"Anzahlung {cfg.Hybrid.DownPaymentPercent:0.#}% · Rest in {cfg.Hybrid.DurationMonths} Raten",
-                downPayment, Math.Round(hybridFinanced / cfg.Hybrid.DurationMonths, 2), hybridTotal, cfg.Hybrid.DurationMonths),
-            new("monthly12", "Monatlich 12 Monate", "0 € Anzahlung · voller Preis + Aufschlag über 12 Monate",
-                0m, Math.Round(m12Total / 12, 2), m12Total, 12),
-            new("monthly24", "Monatlich 24 Monate", "0 € Anzahlung · voller Preis + Aufschlag über 24 Monate",
-                0m, Math.Round(m24Total / 24, 2), m24Total, 24),
+                hybridDown, hybridMonthly, cfg.Hybrid.TotalAmount, cfg.Hybrid.DurationMonths),
+            new("monthly12", "Monatlich 12 Monate", "0 € Anzahlung · in 12 Monatsraten",
+                0m, m12Monthly, cfg.Monthly12.TotalAmount, 12),
+            new("monthly24", "Monatlich 24 Monate", "0 € Anzahlung · in 24 Monatsraten",
+                0m, m24Monthly, cfg.Monthly24.TotalAmount, 24),
         };
     }
 
@@ -561,24 +563,27 @@ public class QuoteServiceImpl : IQuoteService
                 break;
             case "monthly12":
             {
-                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 12, cfg.Monthly12.SurchargePercent, quote.SubtotalOneTime, null, null, "monthly12", ct);
+                var infoSurcharge = quote.SubtotalOneTime > 0 ? Math.Round((cfg.Monthly12.TotalAmount / quote.SubtotalOneTime - 1) * 100m, 2) : (decimal?)null;
+                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 12, cfg.Monthly12.TotalAmount, infoSurcharge, null, null, "monthly12", ct);
                 try { await _mollie.SendMandateEmailAsync(created.Id, ct); }
                 catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for surcharged installment plan {SubscriptionId} (quote {QuoteId})", created.Id, quote.Id); }
                 break;
             }
             case "monthly24":
             {
-                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 24, cfg.Monthly24.SurchargePercent, quote.SubtotalOneTime, null, null, "monthly24", ct);
+                var infoSurcharge = quote.SubtotalOneTime > 0 ? Math.Round((cfg.Monthly24.TotalAmount / quote.SubtotalOneTime - 1) * 100m, 2) : (decimal?)null;
+                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, 24, cfg.Monthly24.TotalAmount, infoSurcharge, null, null, "monthly24", ct);
                 try { await _mollie.SendMandateEmailAsync(created.Id, ct); }
                 catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for surcharged installment plan {SubscriptionId} (quote {QuoteId})", created.Id, quote.Id); }
                 break;
             }
             case "hybrid":
             {
-                var downPayment = Math.Round(quote.SubtotalOneTime * cfg.Hybrid.DownPaymentPercent / 100m, 2);
-                var financedBase = quote.SubtotalOneTime - downPayment;
+                var downPayment = Math.Round(cfg.Hybrid.TotalAmount * cfg.Hybrid.DownPaymentPercent / 100m, 2);
+                var financedBase = cfg.Hybrid.TotalAmount - downPayment;
+                var infoSurcharge = quote.SubtotalOneTime > 0 ? Math.Round((cfg.Hybrid.TotalAmount / quote.SubtotalOneTime - 1) * 100m, 2) : (decimal?)null;
                 var dpInvoice = await CreateDownPaymentInvoiceAsync(quote, downPayment, cfg.Hybrid.DownPaymentPercent, ct);
-                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, cfg.Hybrid.DurationMonths, cfg.Hybrid.SurchargePercent, financedBase, cfg.Hybrid.DownPaymentPercent, dpInvoice.Id, "hybrid", ct);
+                var created = await _subscriptionSvc.CreateSurchargedInstallmentPlanAsync(quote.CustomerId, quote.Id, cfg.Hybrid.DurationMonths, financedBase, infoSurcharge, cfg.Hybrid.DownPaymentPercent, dpInvoice.Id, "hybrid", ct);
                 try { await _mollie.SendMandateEmailAsync(created.Id, ct); }
                 catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for surcharged installment plan {SubscriptionId} (quote {QuoteId})", created.Id, quote.Id); }
                 break;

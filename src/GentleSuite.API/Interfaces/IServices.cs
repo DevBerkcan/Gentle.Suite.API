@@ -169,7 +169,7 @@ public interface ISubscriptionService
     Task ConfirmAsync(Guid subscriptionId, CancellationToken ct = default);
     Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid subscriptionId, CancellationToken ct = default);
     Task<CustomerSubscriptionDto> CreateInstallmentPlanFromQuoteAsync(Guid customerId, Guid quoteId, int months, CancellationToken ct = default);
-    Task<CustomerSubscriptionDto> CreateSurchargedInstallmentPlanAsync(Guid customerId, Guid quoteId, int months, decimal surchargePercent, decimal financedBaseAmount, decimal? downPaymentPercent, Guid? downPaymentInvoiceId, string paymentPlanOptionKey, CancellationToken ct = default);
+    Task<CustomerSubscriptionDto> CreateSurchargedInstallmentPlanAsync(Guid customerId, Guid quoteId, int months, decimal financedAmount, decimal? informationalSurchargePercent, decimal? downPaymentPercent, Guid? downPaymentInvoiceId, string paymentPlanOptionKey, CancellationToken ct = default);
 }
 
 public interface IMolliePaymentService

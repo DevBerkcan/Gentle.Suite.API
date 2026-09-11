@@ -788,7 +788,7 @@ public class SubscriptionServiceImpl : ISubscriptionService
     }
 
     // === Preisangebot: Ratenzahlungsplan mit Aufschlag/Anzahlung (Hybrid/Monatlich 12/24) ===
-    public async Task<CustomerSubscriptionDto> CreateSurchargedInstallmentPlanAsync(Guid customerId, Guid quoteId, int months, decimal surchargePercent, decimal financedBaseAmount, decimal? downPaymentPercent, Guid? downPaymentInvoiceId, string paymentPlanOptionKey, CancellationToken ct)
+    public async Task<CustomerSubscriptionDto> CreateSurchargedInstallmentPlanAsync(Guid customerId, Guid quoteId, int months, decimal financedAmount, decimal? informationalSurchargePercent, decimal? downPaymentPercent, Guid? downPaymentInvoiceId, string paymentPlanOptionKey, CancellationToken ct)
     {
         if (months <= 0) throw new ArgumentException("Die Ratenanzahl muss größer als 0 sein.");
 
@@ -799,7 +799,7 @@ public class SubscriptionServiceImpl : ISubscriptionService
         if (!quote.IsCurrentVersion || quote.Status is not (QuoteStatus.Accepted or QuoteStatus.Ordered) ||
             quote.SignatureStatus != SignatureStatus.Signed || quote.SignedAt == null || !quote.B2bAuthorityConfirmed)
             throw new InvalidOperationException("Für eine Ratenzahlung ist ein aktuell angenommenes B2B-Angebot mit Unterschrift und Vertretungsbestätigung erforderlich.");
-        if (financedBaseAmount <= 0)
+        if (financedAmount <= 0)
             throw new InvalidOperationException("Der zu finanzierende Betrag muss größer als 0 sein.");
 
         var alreadyExists = await _db.CustomerSubscriptions.AnyAsync(s => s.ContractQuoteId == quote.Id && s.IsInstallmentPlan, ct);
@@ -809,7 +809,7 @@ public class SubscriptionServiceImpl : ISubscriptionService
         var plan = await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Name == "Ratenzahlung (Systemtarif)", ct)
             ?? throw new InvalidOperationException("Der Systemtarif für Ratenzahlungen wurde nicht gefunden.");
 
-        var total = Math.Round(financedBaseAmount * (1 + surchargePercent / 100m), 2);
+        var total = Math.Round(financedAmount, 2);
         var perInstallment = Math.Floor(total / months * 100m) / 100m;
         var title = !string.IsNullOrWhiteSpace(quote.Subject)
             ? quote.Subject!
@@ -839,7 +839,7 @@ public class SubscriptionServiceImpl : ISubscriptionService
             IsInstallmentPlan = true,
             TotalInstallmentAmount = total,
             InstallmentSourceTitle = title,
-            InstallmentSurchargePercent = surchargePercent,
+            InstallmentSurchargePercent = informationalSurchargePercent,
             DownPaymentPercent = downPaymentPercent,
             DownPaymentInvoiceId = downPaymentInvoiceId,
             // "Überführen" IST die bewusste Admin-Freigabe (Pendant zu AuthorizeSubscriptionBillingAsync bei

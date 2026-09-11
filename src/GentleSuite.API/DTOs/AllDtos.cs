@@ -159,8 +159,8 @@ public record ApprovalRequest(bool Accepted, string? Comment, string? SignatureD
 public record UpdateQuoteRequest(string? Subject, string? IntroText, string? OutroText, string? Notes, decimal? TaxRate, TaxMode? TaxMode, List<string>? PaymentTermKeys = null, List<int>? InstallmentPeriodOptionsMonths = null, List<string>? LegalTextBlockKeys = null, PaymentPlanConfigDto? PaymentPlanConfig = null);
 
 // === Preisangebot (payment-plan configurator) ===
-public record PaymentPlanHybridConfigDto(decimal DownPaymentPercent, decimal SurchargePercent, int DurationMonths);
-public record PaymentPlanMonthlyConfigDto(decimal SurchargePercent);
+public record PaymentPlanHybridConfigDto(decimal DownPaymentPercent, decimal TotalAmount, int DurationMonths);
+public record PaymentPlanMonthlyConfigDto(decimal TotalAmount);
 public record PaymentPlanConfigDto(PaymentPlanHybridConfigDto Hybrid, PaymentPlanMonthlyConfigDto Monthly12, PaymentPlanMonthlyConfigDto Monthly24);
 public record PaymentPlanOptionResolvedDto(string Key, string Title, string Subtitle, decimal? DownPayment, decimal? MonthlyAmount, decimal TotalAmount, int? Months);
 public record QuoteTemplateDto(Guid Id, string Name, string? Description, List<QuoteTemplateLineDto> Lines);
