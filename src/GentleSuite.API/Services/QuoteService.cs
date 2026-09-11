@@ -78,22 +78,7 @@ public class QuoteServiceImpl : IQuoteService
         catch (JsonException) { return; } // altes/inkompatibles Format — Preisangebot muss neu konfiguriert werden
         if (cfg == null) return;
         dto.PaymentPlanConfig = cfg;
-        var projectPrice = quote.SubtotalOneTime;
-        var hybridDown = Math.Round(cfg.Hybrid.TotalAmount * cfg.Hybrid.DownPaymentPercent / 100m, 2);
-        var hybridFinanced = cfg.Hybrid.TotalAmount - hybridDown;
-        var hybridMonthly = cfg.Hybrid.DurationMonths > 0 ? Math.Round(hybridFinanced / cfg.Hybrid.DurationMonths, 2) : 0m;
-        var m12Monthly = Math.Round(cfg.Monthly12.TotalAmount / 12, 2);
-        var m24Monthly = Math.Round(cfg.Monthly24.TotalAmount / 24, 2);
-        dto.PaymentPlanOptions = new List<PaymentPlanOptionResolvedDto>
-        {
-            new("onetime", "Einmalzahlung", "100% des Projektpreises, keine Rate", null, null, projectPrice, null),
-            new("hybrid", "Hybrid-Modell", $"Anzahlung {cfg.Hybrid.DownPaymentPercent:0.#}% · Rest in {cfg.Hybrid.DurationMonths} Raten",
-                hybridDown, hybridMonthly, cfg.Hybrid.TotalAmount, cfg.Hybrid.DurationMonths),
-            new("monthly12", "Monatlich 12 Monate", "0 € Anzahlung · in 12 Monatsraten",
-                0m, m12Monthly, cfg.Monthly12.TotalAmount, 12),
-            new("monthly24", "Monatlich 24 Monate", "0 € Anzahlung · in 24 Monatsraten",
-                0m, m24Monthly, cfg.Monthly24.TotalAmount, 24),
-        };
+        dto.PaymentPlanOptions = PaymentPlanCalculator.Resolve(cfg, quote.SubtotalOneTime);
     }
 
     /// <summary>Manually chosen legal blocks plus anything marked "automatisch anhängen" (AGB/Datenschutz),
