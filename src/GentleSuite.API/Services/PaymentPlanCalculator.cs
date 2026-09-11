@@ -1,4 +1,5 @@
 using GentleSuite.Application.DTOs;
+using System.Linq;
 
 namespace GentleSuite.Infrastructure.Services;
 
@@ -15,7 +16,7 @@ public static class PaymentPlanCalculator
         var m12Monthly = Math.Round(cfg.Monthly12.TotalAmount / 12, 2);
         var m24Monthly = Math.Round(cfg.Monthly24.TotalAmount / 24, 2);
 
-        return new List<PaymentPlanOptionResolvedDto>
+        var all = new List<PaymentPlanOptionResolvedDto>
         {
             new("onetime", "Einmalzahlung", "100% des Projektpreises, keine Rate", null, null, projectPrice, null),
             new("hybrid", "Hybrid-Modell", $"Anzahlung {cfg.Hybrid.DownPaymentPercent:0.#}% · Rest in {cfg.Hybrid.DurationMonths} Raten",
@@ -25,5 +26,8 @@ public static class PaymentPlanCalculator
             new("monthly24", "Monatlich 24 Monate", "0 € Anzahlung · in 24 Monatsraten",
                 0m, m24Monthly, cfg.Monthly24.TotalAmount, 24),
         };
+        // Nicht konfigurierte Optionen (Gesamtsumme <= 0) werden nicht angezeigt — verhindert
+        // irreführende "0,00 €"-Einträge im PDF und auf der Freigabeseite.
+        return all.Where(o => o.TotalAmount > 0).ToList();
     }
 }

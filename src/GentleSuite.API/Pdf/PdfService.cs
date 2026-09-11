@@ -103,13 +103,14 @@ public class PdfService : IPdfService
                 }
                 if (planOptions?.Any() == true)
                 {
-                    col.Item().PaddingTop(14).Text("Zahlungsoptionen").Bold().FontSize(10).FontColor("#344054");
+                    var singleOption = planOptions.Count == 1;
+                    col.Item().PaddingTop(14).Text(singleOption ? "Zahlungsweise" : "Zahlungsoptionen").Bold().FontSize(10).FontColor("#344054");
                     foreach (var opt in planOptions)
                     {
                         var chosen = opt.Key == quote.ChosenPaymentPlanOptionKey;
                         col.Item().PaddingTop(6).Text(t =>
                         {
-                            t.Span(chosen ? "☑ " : "☐ ").FontSize(9);
+                            if (!singleOption) t.Span(chosen ? "☑ " : "☐ ").FontSize(9);
                             t.Span(opt.Title).Bold().FontSize(9).FontColor(chosen ? "#101828" : "#344054");
                             t.Span($"  —  {opt.TotalAmount:N2} €").FontSize(9);
                         });
@@ -118,7 +119,7 @@ public class PdfService : IPdfService
                             opt.DownPayment.HasValue && opt.DownPayment.Value > 0 ? $"{opt.DownPayment:N2} € Anzahlung" : null,
                             opt.MonthlyAmount.HasValue && opt.MonthlyAmount.Value > 0 ? $"{opt.MonthlyAmount:N2} €/Monat" + (opt.Months.HasValue ? $" × {opt.Months}" : "") : null,
                         }.Where(s => s != null));
-                        if (!string.IsNullOrEmpty(sub)) col.Item().PaddingTop(2).PaddingLeft(14).Text(sub).FontSize(8).FontColor("#667085");
+                        if (!string.IsNullOrEmpty(sub)) col.Item().PaddingTop(2).PaddingLeft(singleOption ? 0 : 14).Text(sub).FontSize(8).FontColor("#667085");
                     }
                 }
                 if (legal?.Any() == true) foreach (var b in legal) { col.Item().PaddingTop(12).Text(b.Title).Bold().FontSize(9).FontColor("#344054"); col.Item().PaddingTop(3).Text(b.Content).FontSize(7.5f).FontColor("#667085"); }
