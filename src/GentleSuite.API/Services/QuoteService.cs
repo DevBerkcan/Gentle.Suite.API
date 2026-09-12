@@ -450,13 +450,20 @@ public class QuoteServiceImpl : IQuoteService
             .Include(q => q.Lines)
             .FirstOrDefaultAsync(q => q.Id == quoteId, ct) ?? throw new KeyNotFoundException();
 
+        // Serienrechnungs-Positionen gehören nicht in diese Rechnung — sie werden separat über die
+        // normale Serienrechnungs-Logik ab dem nächsten Monat abgerechnet (AuthorizeSubscriptionBillingAsync
+        // liest die zugehörigen Subscriptions direkt aus quote.Lines, unabhängig von inv.Lines, daher bleibt
+        // die Freischaltung dafür unten unverändert erhalten, auch ohne dass die Zeilen hier erscheinen).
+        var oneTimeLines = quote.Lines.Where(l => l.LineType == QuoteLineType.OneTime).ToList();
+        if (oneTimeLines.Count == 0)
+            throw new InvalidOperationException("Dieses Angebot enthält keine einmaligen Positionen, die abgerechnet werden können. Die Serienrechnung startet automatisch nächsten Monat.");
+
+        var hasRecurring = quote.Lines.Any(l => l.LineType == QuoteLineType.RecurringMonthly);
+
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
         var taxMode = EnforceCompanyTaxMode(co?.DefaultTaxMode ?? TaxMode.Standard, quote.TaxMode);
         var year = DateTime.UtcNow.Year;
         var invoiceNumber = await _seq.NextNumberAsync("Invoice", year, "RE", 4, ct, includeYear: false);
-
-        var hasRecurring = quote.Lines.Any(l => l.LineType == QuoteLineType.RecurringMonthly);
-        var invoiceType = hasRecurring ? InvoiceType.Recurring : InvoiceType.Standard;
 
         var inv = new Invoice
         {
@@ -468,7 +475,7 @@ public class QuoteServiceImpl : IQuoteService
             OutroText = quote.OutroText ?? co?.InvoiceOutroTemplate,
             Notes = quote.Notes,
             TaxMode = taxMode,
-            Type = invoiceType,
+            Type = InvoiceType.Standard,
             InvoiceDate = DateTimeOffset.UtcNow,
             DueDate = DateTimeOffset.UtcNow.AddDays(14),
             SellerTaxId = co?.TaxId,
@@ -477,7 +484,7 @@ public class QuoteServiceImpl : IQuoteService
             RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears)
         };
 
-        foreach (var l in quote.Lines)
+        foreach (var l in oneTimeLines)
         {
             inv.Lines.Add(new InvoiceLine
             {
@@ -488,7 +495,7 @@ public class QuoteServiceImpl : IQuoteService
                 VatPercent = EffectiveVatPercent(taxMode, l.VatPercent),
                 DiscountPercent = l.DiscountPercent,
                 SortOrder = l.SortOrder,
-                LineType = (int)l.LineType  
+                LineType = (int)l.LineType
             });
         }
 
@@ -500,7 +507,7 @@ public class QuoteServiceImpl : IQuoteService
         await _activity.LogAsync(inv.CustomerId, "Invoice", inv.Id, "Created",
             $"Rechnung {inv.InvoiceNumber} aus Angebot {quote.QuoteNumber} erstellt", ct: ct);
 
-        if (inv.Type == InvoiceType.Recurring)
+        if (hasRecurring)
             await AuthorizeSubscriptionBillingAsync(quote, inv, ct);
 
         return (await _invoiceService.GetByIdAsync(inv.Id, ct))!;
