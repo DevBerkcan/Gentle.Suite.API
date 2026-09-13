@@ -27,6 +27,7 @@ public static class SeedData
         await SeedPriceListTemplates(db);
         await SeedInstallmentSystemPlan(db);
         await SeedContractTemplates(db);
+        await SeedContractClauseBlocks(db);
     }
 
     /// <summary>Seeds the 3 starter Vertragsarten so der "Verträge"-Bereich nicht leer ist.
@@ -163,10 +164,143 @@ public static class SeedData
         var webdesignVertragSections = JsonSerializer.Serialize(new[] { geltungsbereich, vertragsschlussLang, webErstellung, webImpressum, webLogo, mitwirkung, abnahme, verguetung, laufzeitProjekt, maengel, haftung, rechte, vertraulichkeit, sonstiges });
 
         db.ContractTemplates.AddRange(
-            new ContractTemplate { Key = "wartungsvertrag", Name = "Wartungsvertrag", SortOrder = 1, SectionsJson = wartungsvertragSections },
-            new ContractTemplate { Key = "seo-vertrag", Name = "SEO-Vertrag", SortOrder = 2, SectionsJson = seoVertragSections },
-            new ContractTemplate { Key = "webdesign-vertrag", Name = "Webdesign-Vertrag", SortOrder = 3, SectionsJson = webdesignVertragSections }
+            new ContractTemplate { Key = "wartungsvertrag", Name = "Wartungsvertrag", SortOrder = 1, SectionsJson = wartungsvertragSections, DefaultBlockKeysJson = JsonSerializer.Serialize(new[] { "wartung-leistung", "wartung-sla" }) },
+            new ContractTemplate { Key = "seo-vertrag", Name = "SEO-Vertrag", SortOrder = 2, SectionsJson = seoVertragSections, DefaultBlockKeysJson = JsonSerializer.Serialize(new[] { "marketing-seo" }) },
+            new ContractTemplate { Key = "webdesign-vertrag", Name = "Webdesign-Vertrag", SortOrder = 3, SectionsJson = webdesignVertragSections, DefaultBlockKeysJson = JsonSerializer.Serialize(new[] { "webseiten-erstellung", "webseiten-impressum", "design-logo" }) }
         );
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Backfills DefaultBlockKeysJson on templates seeded before this field existed (no-op once set).</summary>
+    static async Task BackfillTemplateDefaultBlockKeys(AppDbContext db)
+    {
+        var map = new Dictionary<string, string[]>
+        {
+            ["wartungsvertrag"] = new[] { "wartung-leistung", "wartung-sla" },
+            ["seo-vertrag"] = new[] { "marketing-seo" },
+            ["webdesign-vertrag"] = new[] { "webseiten-erstellung", "webseiten-impressum", "design-logo" },
+        };
+        var templates = await db.ContractTemplates.Where(t => t.DefaultBlockKeysJson == null && map.Keys.Contains(t.Key)).ToListAsync();
+        if (templates.Count == 0) return;
+        foreach (var t in templates) t.DefaultBlockKeysJson = JsonSerializer.Serialize(map[t.Key]);
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Leistungsbausteine-Katalog für den Vertrags-Assistenten. "kern" wird immer generiert (kein Toggle),
+    /// "kreativ" wird automatisch angehängt sobald ein Werkvertrags-Leistungsbaustein (IsCreativeWork) gewählt wurde,
+    /// "optionen" sind die vier immer verfügbaren Zusatz-Klauseln, alle übrigen Kategorien sind die Leistungen-Kacheln.
+    /// Texte übernehmen 1:1 die bereits in SeedContractTemplates genutzten, fachlich vorformulierten Klauseln.</summary>
+    static async Task SeedContractClauseBlocks(AppDbContext db)
+    {
+        await BackfillTemplateDefaultBlockKeys(db);
+        if (await db.ContractClauseBlocks.AnyAsync()) return;
+
+        var blocks = new List<ContractClauseBlock>
+        {
+            // kern — immer enthalten
+            new() { Key = "geltungsbereich", Category = "kern", SortOrder = 1, Title = "Geltungsbereich und Gegenstand", Content = """
+                Der vorliegende Vertrag gilt für alle Leistungen, die zwischen Anbieter und Kunde vereinbart werden. Der Gegenstand des Vertrags sind die im Abschnitt „Spezifizierte Leistungen" genannten Leistungen des Anbieters. Abweichende Vereinbarungen bedürfen der Schriftform.
+                """ },
+            new() { Key = "vertragsschluss", Category = "kern", SortOrder = 2, Title = "Vertragsschluss", Content = """
+                Angebote des Anbieters sind freibleibend. Ein Vertrag kommt erst mit Übermittlung des beidseitig online unterschriebenen Dokumentes zustande.
+                """ },
+            new() { Key = "mitwirkung", Category = "kern", SortOrder = 3, Title = "Mitwirkungspflichten des Kunden", Content = """
+                Der Kunde stellt dem Anbieter alle für die Durchführung des Auftrags notwendigen Informationen und Materialien rechtzeitig zur Verfügung.
+
+                Der Kunde ist verpflichtet, die von ihm zum Zwecke der Auftragserfüllung zur Verfügung zu stellenden Informationen, Daten, Werke (Texte, Bilder, Layouts, Grafiken etc.) und Zugänge vollständig, rechtzeitig und korrekt mitzuteilen. Leistet der Kunde notwendige Mit- bzw. Zuarbeit verspätet, haftet der Anbieter nicht für dadurch entstehende Verzögerungen.
+                """ },
+            new() { Key = "vertraulichkeit", Category = "kern", SortOrder = 4, Title = "Vertraulichkeit", Content = """
+                Beide Parteien verpflichten sich, alle im Rahmen der Zusammenarbeit erlangten Kenntnisse vertraulich zu behandeln. Der Anbieter verpflichtet sich, die Geheimhaltungspflicht sämtlichen Angestellten und/oder Dritten, welche Zugang zu den betreffenden Geschäftsvorgängen haben, aufzuerlegen.
+
+                Die Geheimhaltungspflicht gilt zeitlich unbegrenzt über die Dauer dieses Vertrages hinaus.
+                """ },
+            new() { Key = "sonstiges", Category = "kern", SortOrder = 5, Title = "Sonstiges", Content = """
+                Änderungen oder Ergänzungen dieses Vertrags bedürfen der Schriftform. Dies gilt auch für das Schriftformerfordernis selbst.
+
+                Sollten Teile dieses Vertrags unwirksam sein oder werden, bleibt die Wirksamkeit des Vertrags im Übrigen unberührt.
+
+                Der Vertrag unterliegt dem materiellen Recht der Bundesrepublik Deutschland unter Ausschluss des UN-Kaufrechts. Sofern der Kunde Kaufmann, juristische Person des öffentlichen Rechts oder öffentlich-rechtliches Sondervermögen ist, oder keinen allgemeinen Gerichtsstand in Deutschland hat, vereinbaren die Parteien den Sitz des Anbieters als Gerichtsstand für sämtliche Streitigkeiten aus diesem Vertragsverhältnis.
+                """ },
+
+            // kreativ — automatisch bei mind. einem IsCreativeWork-Leistungsbaustein
+            new() { Key = "abnahme", Category = "kreativ", SortOrder = 1, Title = "Abnahme", Content = """
+                Der Anbieter legt dem Kunden nach Fertigstellung die erbrachten Leistungen zur Abnahme vor. Abnahmeverweigerungen haben schriftlich und unter Angabe von Gründen zu erfolgen.
+
+                Bleibt eine Rückmeldung des Kunden innerhalb von zwei Wochen aus, gilt die Leistung als abgenommen.
+                """ },
+            new() { Key = "maengel", Category = "kreativ", SortOrder = 2, Title = "Mängelgewährleistung", Content = """
+                Ein unwesentlicher Mangel begründet keine Mängelansprüche. Die Wahl der Art der Nacherfüllung liegt beim Anbieter. Die Verjährungsfrist für Mängel und sonstige Ansprüche beträgt ein (1) Jahr; diese Verjährungsverkürzung gilt nicht für Ansprüche, die aus Vorsatz, grober Fahrlässigkeit oder aus der Verletzung von Leib, Leben oder Gesundheit durch den Anbieter resultieren. Im Übrigen bleibt die gesetzliche Mängelgewährleistung unberührt.
+
+                Mängel sind vom Kunden unverzüglich nach Feststellung schriftlich anzuzeigen.
+                """ },
+            new() { Key = "rechteeinraumung", Category = "kreativ", SortOrder = 3, Title = "Rechteeinräumung", Content = """
+                Nach vollständiger Bezahlung des Auftrags durch den Kunden räumt der Anbieter dem Kunden an den entsprechenden Arbeitsergebnissen ein einfaches Nutzungsrecht ein. Weitergehende Rechte können zusätzlich vereinbart werden.
+                """ },
+
+            // optionen — vier immer wählbare Zusatz-Klauseln
+            new() { Key = "ansprechpartner", Category = "optionen", SortOrder = 1, Title = "Ansprechpartner", Content = """
+                Der Kunde benennt einen Ansprechpartner, der für alle Fragen im Zusammenhang mit diesem Vertrag zuständig ist. Der Anbieter wird dem Kunden ebenfalls einen solchen Ansprechpartner benennen.
+                """ },
+            new() { Key = "av-vertrag", Category = "optionen", SortOrder = 2, Title = "Auftragsverarbeitung (AV-Vertrag)", Content = """
+                Sofern für einzelne Leistungen der Abschluss eines Vertrages über Auftragsverarbeitung (AV-Vertrag) nach Art. 28 DSGVO erforderlich ist, verpflichten sich beide Vertragsparteien, einen solchen Vertrag vor Beginn der Erbringung der betreffenden Leistungen abzuschließen. Der AV-Vertrag ist grundsätzlich vom Anbieter zu stellen.
+                """ },
+            new() { Key = "eigenwerbung", Category = "optionen", SortOrder = 3, Title = "Eigenwerbung", Content = """
+                Sofern nichts Abweichendes vereinbart wurde, erlaubt der Kunde dem Anbieter, das Projekt zum Zwecke der Eigenwerbung (Referenzen/Portfolio) in angemessener Weise öffentlich darzustellen.
+                """ },
+            new() { Key = "kuenstlersozialkasse", Category = "optionen", SortOrder = 4, Title = "Künstlersozialkasse", Content = """
+                Sofern der Anbieter im Rahmen dieses Vertrags künstlerische oder publizistische Leistungen erbringt und der Kunde abgabepflichtiges Unternehmen im Sinne des Künstlersozialversicherungsgesetzes (KSVG) ist, weist der Anbieter den Kunden auf eine mögliche Abgabepflicht zur Künstlersozialkasse hin. Die Prüfung und Erfüllung dieser Abgabepflicht obliegt dem Kunden.
+                """ },
+
+            // webseiten
+            new() { Key = "webseiten-erstellung", Category = "webseiten", SortOrder = 1, IsCreativeWork = true, Title = "Spezifizierte Leistungen: Erstellung von Webseiten", Content = """
+                Gegenstand des Vertrags zur Erstellung von Webseiten ist die Entwicklung neuer Webseiten unter Beachtung der Vorgaben des Kunden. Der Vertrag zur Erstellung von Webseiten ist ein Werkvertrag im Sinne von §§ 631 ff. BGB.
+
+                Die erstellten Webseiten sind für Mobilgeräte optimiert sowie für alle gängigen Browser in ihrer jeweils aktuellen Fassung (jeweils die letzten zwei Versionen).
+
+                Nach Fertigstellung der Webseite wird der Anbieter den Kunden zur Abnahme der Webseite auffordern.
+                """ },
+            new() { Key = "webseiten-impressum", Category = "webseiten", SortOrder = 2, Title = "Spezifizierte Leistungen: Impressum und Datenschutzerklärung", Content = """
+                Der Anbieter erstellt die Datenschutzerklärung und/oder das Impressum für die Webseite des Kunden mithilfe von Generatoren. Der Anbieter schuldet hierbei lediglich die Erstellung der Texte mit den Generatoren; für die rechtliche und inhaltliche Überprüfung ist der Kunde selbst verantwortlich. Dem Anbieter ist es von Rechts wegen nicht erlaubt, Rechtsberatungsleistungen gegenüber dem Kunden zu erbringen.
+
+                Der Kunde ist verpflichtet, dem Anbieter sämtliche notwendigen Informationen rechtzeitig, korrekt und vollständig mitzuteilen, und Änderungen selbstständig und unverzüglich zu melden.
+                """ },
+
+            // design
+            new() { Key = "design-logo", Category = "design", SortOrder = 1, IsCreativeWork = true, Title = "Spezifizierte Leistungen: Logogestaltung und -Konzeption", Content = """
+                Der Anbieter übernimmt für den Kunden dessen Logogestaltung und -Konzeption auf Basis einer Anfrage des Kunden mit einer möglichst genauen Beschreibung des gewünschten Logos.
+
+                Dem Kunden steht das Recht auf Korrekturschleife(n) zu. Nach Durchführung dieser Korrekturschleife(n) werden weitere Anpassungswünsche nicht mehr berücksichtigt; weitere Änderungen kann der Anbieter gegen ein zusätzlich zu vereinbarendes Entgelt erstellen.
+                """ },
+
+            // marketing
+            new() { Key = "marketing-seo", Category = "marketing", SortOrder = 1, Title = "Spezifizierte Leistungen: SEO-Marketing", Content = """
+                Der Anbieter und der Kunde haben Dienstleistungen im Bereich des SEO-Marketings vereinbart. Der Anbieter schuldet in diesem Rahmen als Leistungserbringung ausschließlich die Durchführung von Maßnahmen, die nach eigener Erfahrung des Anbieters das Suchmaschinen-Ranking positiv beeinflussen können oder die vom Kunden ausdrücklich verlangt werden. Ein bestimmtes Ergebnis (z. B. ein bestimmtes Ranking in der Google-Trefferliste) wird im Rahmen der SEO-Dienstleistungen nicht geschuldet.
+                """ },
+            new() { Key = "marketing-social", Category = "marketing", SortOrder = 2, Title = "Spezifizierte Leistungen: Social-Media-Marketing", Content = """
+                Der Anbieter und der Kunde haben Dienstleistungen im Bereich des Social-Media-Marketings vereinbart. Der Anbieter schuldet in diesem Rahmen als Leistungserbringung ausschließlich die Durchführung der vereinbarten Maßnahmen (z. B. Content-Erstellung, Community-Management, Kampagnensteuerung) auf den vereinbarten Plattformen. Ein bestimmtes Ergebnis (z. B. eine bestimmte Reichweite, Followerzahl oder Interaktionsrate) wird im Rahmen der Social-Media-Marketing-Dienstleistungen nicht geschuldet.
+                """ },
+
+            // wartung
+            new() { Key = "wartung-leistung", Category = "wartung", SortOrder = 1, Title = "Leistungsumfang (Wartung & Pflege)", Content = """
+                Der Vertrag beinhaltet die technische Wartung und Pflege der Website im Rahmen einer Fair-Use-Regelung.
+
+                Inkludiert: Sicherheitsupdates, Plugin-Updates, CMS-Updates, Performance-Monitoring, Backup-Management, SSL-Zertifikat, kleine Textänderungen, Bildaustausch, Anpassungen bestehender Inhalte, Fehleranalyse und -behebung.
+
+                Nicht inkludiert: Neuentwicklung von Features/Seiten, Redesign, SEO-Maßnahmen, Content-Erstellung, Drittanbieter-Lizenzen, Hosting-Kosten, Marketing-Leistungen.
+
+                Fair-Use: Die inkludierten Leistungen gelten im Rahmen einer fairen Nutzung. Bei überdurchschnittlich hohem Änderungsaufwand behält sich der Anbieter vor, zusätzliche Leistungen separat anzubieten.
+                """ },
+            new() { Key = "wartung-sla", Category = "wartung", SortOrder = 2, Title = "Service Level Agreement (SLA)", Content = """
+                S0 - Kritisch: Website nicht erreichbar / Sicherheitsvorfall. Reaktionszeit: 4 Stunden (Geschäftszeiten).
+                S1 - Hoch: Wesentliche Funktion eingeschränkt. Reaktionszeit: 8 Stunden.
+                S2 - Mittel: Nicht-kritische Fehler. Reaktionszeit: 24 Stunden.
+                S3 - Niedrig: Optimierungen, Wünsche. Reaktionszeit: 48 Stunden.
+
+                Geschäftszeiten: Mo-Fr 09:00-18:00 Uhr. Notfälle (S0) auch außerhalb nach Vereinbarung.
+                """ },
+        };
+
+        db.ContractClauseBlocks.AddRange(blocks);
         await db.SaveChangesAsync();
     }
 

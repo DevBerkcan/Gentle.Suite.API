@@ -55,7 +55,7 @@ public interface IQuoteService
     Task<PagedResult<QuoteListDto>> GetQuotesAsync(PaginationParams p, QuoteStatus? status = null, Guid? customerId = null, CancellationToken ct = default);
     Task<QuoteDetailDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<QuoteDetailDto> CreateAsync(CreateQuoteRequest req, CancellationToken ct = default);
-    Task<QuoteDetailDto> CreateFromTemplateAsync(Guid customerId, Guid templateId, CancellationToken ct = default);
+    Task<QuoteDetailDto> CreateFromTemplateAsync(Guid customerId, Guid templateId, CancellationToken ct = default, string? introText = null, string? outroText = null);
     Task<QuoteDetailDto> UpdateLinesAsync(Guid id, List<CreateQuoteLineRequest> lines, CancellationToken ct = default);
     Task SendAsync(Guid id, SendQuoteRequest req, CancellationToken ct = default);
     Task<QuoteDetailDto?> GetByApprovalTokenAsync(string token, CancellationToken ct = default);
@@ -268,6 +268,18 @@ public interface IAgencyContractService
     Task<bool> IsQuoteContractSatisfiedAsync(Guid quoteId, CancellationToken ct = default);
     /// <summary>True if a FullyExecuted AgencyContract exists for this subscription (or it doesn't require one).</summary>
     Task<bool> IsSubscriptionContractSatisfiedAsync(Guid subscriptionId, CancellationToken ct = default);
+    /// <summary>Auto-derived Auftragnehmer/Auftraggeber data for the wizard's read-only header (from Quote/Subscription/Customer/CompanySettings).</summary>
+    Task<ContractPartyPreviewDto> GetPartyPreviewAsync(Guid? quoteId, Guid? subscriptionId, CancellationToken ct = default);
+    /// <summary>Generates an AgencyContract's sections from the wizard's structured Rahmenbedingungen/Leistungen answers.</summary>
+    Task<AgencyContractDto> CreateFromWizardAsync(GenerateContractRequest req, CancellationToken ct = default);
+}
+
+public interface IContractClauseBlockService
+{
+    Task<List<ContractClauseBlockDto>> GetAllAsync(CancellationToken ct = default);
+    Task<ContractClauseBlockDto> CreateAsync(CreateContractClauseBlockRequest req, CancellationToken ct = default);
+    Task<ContractClauseBlockDto> UpdateAsync(Guid id, UpdateContractClauseBlockRequest req, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
 public interface IBankTransactionService

@@ -1194,14 +1194,15 @@ public class ContractTemplateServiceImpl : IContractTemplateService
 
     private static ContractTemplateDto ToDto(ContractTemplate t) => new(
         t.Id, t.Key, t.Name, t.IsActive, t.SortOrder,
-        JsonSerializer.Deserialize<List<ContractSectionDto>>(t.SectionsJson) ?? new());
+        JsonSerializer.Deserialize<List<ContractSectionDto>>(t.SectionsJson) ?? new(),
+        string.IsNullOrEmpty(t.DefaultBlockKeysJson) ? new() : JsonSerializer.Deserialize<List<string>>(t.DefaultBlockKeysJson));
 
     public async Task<List<ContractTemplateDto>> GetAllAsync(CancellationToken ct) =>
         (await _db.ContractTemplates.OrderBy(t => t.SortOrder).ToListAsync(ct)).Select(ToDto).ToList();
 
     public async Task<ContractTemplateDto> CreateAsync(CreateContractTemplateRequest req, CancellationToken ct)
     {
-        var t = new ContractTemplate { Key = req.Key, Name = req.Name, SortOrder = req.SortOrder, IsActive = true, SectionsJson = JsonSerializer.Serialize(req.Sections) };
+        var t = new ContractTemplate { Key = req.Key, Name = req.Name, SortOrder = req.SortOrder, IsActive = true, SectionsJson = JsonSerializer.Serialize(req.Sections), DefaultBlockKeysJson = req.DefaultBlockKeys != null ? JsonSerializer.Serialize(req.DefaultBlockKeys) : null };
         _db.ContractTemplates.Add(t);
         await _db.SaveChangesAsync(ct);
         return ToDto(t);
@@ -1211,6 +1212,7 @@ public class ContractTemplateServiceImpl : IContractTemplateService
     {
         var t = await _db.ContractTemplates.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
         t.Name = req.Name; t.IsActive = req.IsActive; t.SortOrder = req.SortOrder; t.SectionsJson = JsonSerializer.Serialize(req.Sections);
+        t.DefaultBlockKeysJson = req.DefaultBlockKeys != null ? JsonSerializer.Serialize(req.DefaultBlockKeys) : null;
         await _db.SaveChangesAsync(ct);
         return ToDto(t);
     }
@@ -1219,6 +1221,41 @@ public class ContractTemplateServiceImpl : IContractTemplateService
     {
         var t = await _db.ContractTemplates.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
         _db.ContractTemplates.Remove(t);
+        await _db.SaveChangesAsync(ct);
+    }
+}
+
+// === Contract Clause Blocks (Leistungsbausteine) ===
+public class ContractClauseBlockServiceImpl : IContractClauseBlockService
+{
+    private readonly AppDbContext _db;
+    public ContractClauseBlockServiceImpl(AppDbContext db) { _db = db; }
+
+    private static ContractClauseBlockDto ToDto(ContractClauseBlock b) => new(b.Id, b.Key, b.Category, b.Title, b.Content, b.IsActive, b.SortOrder, b.IsCreativeWork);
+
+    public async Task<List<ContractClauseBlockDto>> GetAllAsync(CancellationToken ct) =>
+        (await _db.ContractClauseBlocks.OrderBy(b => b.Category).ThenBy(b => b.SortOrder).ToListAsync(ct)).Select(ToDto).ToList();
+
+    public async Task<ContractClauseBlockDto> CreateAsync(CreateContractClauseBlockRequest req, CancellationToken ct)
+    {
+        var b = new ContractClauseBlock { Key = req.Key, Category = req.Category, Title = req.Title, Content = req.Content, SortOrder = req.SortOrder, IsCreativeWork = req.IsCreativeWork, IsActive = true };
+        _db.ContractClauseBlocks.Add(b);
+        await _db.SaveChangesAsync(ct);
+        return ToDto(b);
+    }
+
+    public async Task<ContractClauseBlockDto> UpdateAsync(Guid id, UpdateContractClauseBlockRequest req, CancellationToken ct)
+    {
+        var b = await _db.ContractClauseBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        b.Category = req.Category; b.Title = req.Title; b.Content = req.Content; b.IsActive = req.IsActive; b.SortOrder = req.SortOrder; b.IsCreativeWork = req.IsCreativeWork;
+        await _db.SaveChangesAsync(ct);
+        return ToDto(b);
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct)
+    {
+        var b = await _db.ContractClauseBlocks.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        _db.ContractClauseBlocks.Remove(b);
         await _db.SaveChangesAsync(ct);
     }
 }
@@ -1489,6 +1526,109 @@ public class AgencyContractServiceImpl : IAgencyContractService
         if (sub.ContractQuoteId != null)
             return await _db.AgencyContracts.AnyAsync(c => c.QuoteId == sub.ContractQuoteId && c.Status == AgencyContractStatus.FullyExecuted, ct);
         return false;
+    }
+
+    /// <summary>Loads the customer + a suggested Vergütung amount/label from the originating Quote or Subscription —
+    /// the single place both GetPartyPreviewAsync and CreateFromWizardAsync pull auto-derived party data from.</summary>
+    private async Task<(Customer Customer, decimal SuggestedBetrag, string SuggestedLabel)> ResolvePartyDataAsync(Guid? quoteId, Guid? subscriptionId, CancellationToken ct)
+    {
+        if (quoteId != null)
+        {
+            var quote = await _db.Quotes.Include(q => q.Customer).ThenInclude(cu => cu.Contacts).Include(q => q.Customer).ThenInclude(cu => cu.Locations).Include(q => q.Lines)
+                .FirstOrDefaultAsync(q => q.Id == quoteId, ct) ?? throw new KeyNotFoundException("Angebot nicht gefunden.");
+            return (quote.Customer, quote.GrandTotal, "Angebotssumme");
+        }
+        if (subscriptionId != null)
+        {
+            var sub = await _db.CustomerSubscriptions.Include(s => s.Customer).ThenInclude(cu => cu.Contacts).Include(s => s.Customer).ThenInclude(cu => cu.Locations).Include(s => s.Plan)
+                .FirstOrDefaultAsync(s => s.Id == subscriptionId, ct) ?? throw new KeyNotFoundException("Abonnement nicht gefunden.");
+            var betrag = sub.IsInstallmentPlan ? (sub.TotalInstallmentAmount ?? 0) : (sub.AgreedMonthlyPrice ?? sub.Plan.MonthlyPrice);
+            var label = sub.IsInstallmentPlan ? "Ratenzahlungssumme" : "Monatlicher Betrag";
+            return (sub.Customer, betrag, label);
+        }
+        throw new InvalidOperationException("Ein Angebot oder Abonnement muss angegeben werden.");
+    }
+
+    public async Task<ContractPartyPreviewDto> GetPartyPreviewAsync(Guid? quoteId, Guid? subscriptionId, CancellationToken ct)
+    {
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "Gentle Group" };
+        var (customer, betrag, label) = await ResolvePartyDataAsync(quoteId, subscriptionId, ct);
+        var contact = customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? customer.Contacts.FirstOrDefault();
+        var loc = customer.Locations.FirstOrDefault(l => l.IsPrimary) ?? customer.Locations.FirstOrDefault();
+        var auftraggeberAdresse = loc != null ? $"{loc.Street}, {loc.ZipCode} {loc.City}" : "";
+        return new ContractPartyPreviewDto(co.CompanyName, $"{co.Street}, {co.ZipCode} {co.City}", customer.CompanyName, auftraggeberAdresse, contact?.FullName, betrag, label);
+    }
+
+    private static string BuildVerguetungText(GenerateContractRequest req)
+    {
+        var betrag = $"Die Vergütung für die Leistungen des Anbieters beträgt {req.VerguetungBetrag:N2} €" + (string.IsNullOrWhiteSpace(req.VerguetungAnmerkung) ? "." : $" ({req.VerguetungAnmerkung}).");
+        return $"{betrag}\n\nRechnungen sind, sofern nicht anders vereinbart, innerhalb von {req.ZahlungsfristTage} Tagen nach Erhalt ohne Abzug zahlbar.";
+    }
+
+    private static string BuildLaufzeitText(GenerateContractRequest req)
+    {
+        if (req.HatFesteLaufzeit)
+            return $"Der Vertrag beginnt mit der Unterzeichnung und läuft über eine feste Laufzeit von {req.LaufzeitMonate} Monaten. Er kann von beiden Seiten mit einer Frist von {req.KuendigungsfristMonate} Monaten zum Ende der Laufzeit gekündigt werden. Erfolgt keine Kündigung, verlängert sich der Vertrag automatisch um die ursprüngliche Laufzeit.";
+        return "Der Vertrag beginnt mit der Unterzeichnung und endet nach Erbringung der vereinbarten Leistungen, sofern nicht anders vereinbart.";
+    }
+
+    public async Task<AgencyContractDto> CreateFromWizardAsync(GenerateContractRequest req, CancellationToken ct)
+    {
+        if (req.QuoteId == null && req.SubscriptionId == null)
+            throw new InvalidOperationException("Ein Vertrag muss entweder einem Angebot oder einer Serienrechnung/Ratenzahlung zugeordnet sein.");
+
+        var (customer, _, _) = await ResolvePartyDataAsync(req.QuoteId, req.SubscriptionId, ct);
+        var contact = customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? customer.Contacts.FirstOrDefault();
+        var loc = customer.Locations.FirstOrDefault(l => l.IsPrimary) ?? customer.Locations.FirstOrDefault();
+        var addressSnapshot = new CustomerAddressSnapshotDto(customer.CompanyName, loc?.Street, loc?.ZipCode, loc?.City, loc?.Country, contact?.FullName);
+
+        var allBlocks = await _db.ContractClauseBlocks.Where(b => b.IsActive).ToListAsync(ct);
+        var kernBlocks = allBlocks.Where(b => b.Category == "kern" && b.Key != "sonstiges").OrderBy(b => b.SortOrder).ToList();
+        var sonstigesBlock = allBlocks.FirstOrDefault(b => b.Key == "sonstiges");
+        var kreativBlocks = allBlocks.Where(b => b.Category == "kreativ").OrderBy(b => b.SortOrder).ToList();
+
+        var sections = new List<ContractSectionDto>();
+        foreach (var b in kernBlocks) sections.Add(new ContractSectionDto(b.Title, b.Content));
+
+        sections.Add(new ContractSectionDto("Vergütung", BuildVerguetungText(req)));
+        sections.Add(new ContractSectionDto(req.HatFesteLaufzeit ? "Vertragslaufzeit und Kündigung" : "Vertragslaufzeit", BuildLaufzeitText(req)));
+
+        var optionenBlocks = allBlocks.Where(b => b.Category == "optionen" && req.OptionaleKlauselKeys.Contains(b.Key)).OrderBy(b => b.SortOrder).ToList();
+        foreach (var b in optionenBlocks) sections.Add(new ContractSectionDto(b.Title, b.Content));
+
+        var categoryOrder = new[] { "webseiten", "design", "marketing", "wartung" };
+        var leistungsBlocks = allBlocks.Where(b => req.LeistungsBlockKeys.Contains(b.Key) && categoryOrder.Contains(b.Category))
+            .OrderBy(b => Array.IndexOf(categoryOrder, b.Category)).ThenBy(b => b.SortOrder).ToList();
+        foreach (var b in leistungsBlocks) sections.Add(new ContractSectionDto(b.Title, b.Content));
+
+        if (leistungsBlocks.Any(b => b.IsCreativeWork))
+            foreach (var b in kreativBlocks) sections.Add(new ContractSectionDto(b.Title, b.Content));
+
+        if (sonstigesBlock != null) sections.Add(new ContractSectionDto(sonstigesBlock.Title, sonstigesBlock.Content));
+
+        ContractTemplate? schnellstart = req.SchnellstartTemplateId != null
+            ? await _db.ContractTemplates.FindAsync(new object[] { req.SchnellstartTemplateId.Value }, ct)
+            : null;
+
+        var contractNumber = await _seq.NextNumberAsync("AgencyContract", DateTime.UtcNow.Year, "AV", 4, ct, includeYear: false);
+        var contract = new AgencyContract
+        {
+            ContractNumber = contractNumber,
+            CustomerId = customer.Id,
+            QuoteId = req.QuoteId,
+            SubscriptionId = req.SubscriptionId,
+            ContractTemplateId = schnellstart?.Id,
+            ContractTypeName = schnellstart?.Name ?? "Agenturvertrag",
+            Status = AgencyContractStatus.Draft,
+            SectionsJson = JsonSerializer.Serialize(sections),
+            TotalContractValue = req.VerguetungBetrag,
+            CustomerAddressSnapshot = JsonSerializer.Serialize(addressSnapshot),
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+        };
+        _db.AgencyContracts.Add(contract);
+        await _db.SaveChangesAsync(ct);
+        await _activity.LogAsync(customer.Id, "AgencyContract", contract.Id, "Created", $"Vertrag {contract.ContractNumber} ({contract.ContractTypeName}) per Assistent angelegt", ct: ct);
+        return (await GetByIdAsync(contract.Id, ct))!;
     }
 }
 

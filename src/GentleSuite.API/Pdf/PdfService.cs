@@ -644,6 +644,17 @@ public class PdfService : IPdfService
         var logo = await LoadLogoAsync(co.LogoPath);
         var contact = contract.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? contract.Customer.Contacts.FirstOrDefault();
         var loc = contract.Customer.Locations.FirstOrDefault(l => l.IsPrimary) ?? contract.Customer.Locations.FirstOrDefault();
+        var headerCustomer = contract.Customer;
+        if (!string.IsNullOrEmpty(contract.CustomerAddressSnapshot))
+        {
+            var snap = JsonSerializer.Deserialize<CustomerAddressSnapshotDto>(contract.CustomerAddressSnapshot);
+            if (snap != null)
+            {
+                headerCustomer = new Customer { CompanyName = snap.Name };
+                loc = new Location { Street = snap.Strasse ?? "", ZipCode = snap.Plz ?? "", City = snap.Ort ?? "", Country = snap.Land ?? "Deutschland" };
+                contact = string.IsNullOrEmpty(snap.Ansprechpartner) ? null : new Contact { FirstName = snap.Ansprechpartner, LastName = "" };
+            }
+        }
         var sections = JsonSerializer.Deserialize<List<ContractSectionDto>>(contract.SectionsJson) ?? new();
         List<(string Title, string Content)>? legal = null;
         if (!string.IsNullOrEmpty(contract.LegalTextBlocksSnapshot))
@@ -656,7 +667,7 @@ public class PdfService : IPdfService
         {
             p.Size(PageSizes.A4); p.MarginTop(30); p.MarginBottom(30); p.MarginHorizontal(45);
             p.DefaultTextStyle(x => x.FontSize(9.5f).FontColor("#101828"));
-            p.Header().Element(h => BuildDocHeader(h, co, logo, "AGENTURVERTRAG", $"Nr. {contract.ContractNumber}", contract.Customer, contact, loc, $"Vertragsart: {contract.ContractTypeName}", contract.TotalContractValue.HasValue ? $"Vertragswert: {contract.TotalContractValue:N2} €" : null));
+            p.Header().Element(h => BuildDocHeader(h, co, logo, "AGENTURVERTRAG", $"Nr. {contract.ContractNumber}", headerCustomer, contact, loc, $"Vertragsart: {contract.ContractTypeName}", contract.TotalContractValue.HasValue ? $"Vertragswert: {contract.TotalContractValue:N2} €" : null));
             p.Content().PaddingTop(16).Column(col =>
             {
                 foreach (var s in sections)

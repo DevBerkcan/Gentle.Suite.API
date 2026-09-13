@@ -85,6 +85,7 @@ builder.Services.AddScoped<ILegalTextService, LegalTextServiceImpl>();
 builder.Services.AddScoped<IPaymentTermService, PaymentTermServiceImpl>();
 builder.Services.AddScoped<IContractTemplateService, ContractTemplateServiceImpl>();
 builder.Services.AddScoped<IAgencyContractService, AgencyContractServiceImpl>();
+builder.Services.AddScoped<IContractClauseBlockService, ContractClauseBlockServiceImpl>();
 builder.Services.AddScoped<ITimeTrackingService, TimeTrackingServiceImpl>();
 builder.Services.AddScoped<IVatService, VatServiceImpl>();
 builder.Services.AddScoped<IEmailLogService, EmailLogServiceImpl>();
@@ -557,6 +558,30 @@ await db.Database.ExecuteSqlRawAsync("""
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_QuoteId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_QuoteId" ON "AgencyContracts" ("QuoteId");""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_SubscriptionId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_SubscriptionId" ON "AgencyContracts" ("SubscriptionId");""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_CustomerId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_CustomerId" ON "AgencyContracts" ("CustomerId");""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='AgencyContracts' AND COLUMN_NAME='CustomerAddressSnapshot') ALTER TABLE "AgencyContracts" ADD "CustomerAddressSnapshot" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='ContractTemplates' AND COLUMN_NAME='DefaultBlockKeysJson') ALTER TABLE "ContractTemplates" ADD "DefaultBlockKeysJson" NVARCHAR(MAX) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ContractClauseBlocks')
+    BEGIN
+        CREATE TABLE "ContractClauseBlocks" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "Key" NVARCHAR(64) NOT NULL,
+            "Category" NVARCHAR(32) NOT NULL,
+            "Title" NVARCHAR(200) NOT NULL,
+            "Content" NVARCHAR(MAX) NOT NULL DEFAULT '',
+            "IsActive" BIT NOT NULL DEFAULT 1,
+            "SortOrder" INT NOT NULL DEFAULT 0,
+            "IsCreativeWork" BIT NOT NULL DEFAULT 0,
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_ContractClauseBlocks" PRIMARY KEY ("Id")
+        );
+    END
+    """);
 
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }

@@ -576,14 +576,25 @@ public class ContractTemplatesController(IContractTemplateService svc) : Control
 public class AgencyContractsController(IAgencyContractService svc) : ControllerBase
 {
     [HttpGet("triage")] public async Task<ActionResult<List<ContractTriageItemDto>>> Triage() => Ok(await svc.GetTriageBoardAsync());
+    [HttpGet("party-preview")] public async Task<ActionResult<ContractPartyPreviewDto>> PartyPreview([FromQuery] Guid? quoteId, [FromQuery] Guid? subscriptionId) => Ok(await svc.GetPartyPreviewAsync(quoteId, subscriptionId));
     [HttpGet] public async Task<ActionResult<List<AgencyContractDto>>> Get() => Ok(await svc.GetAllAsync());
     [HttpGet("{id}")] public async Task<ActionResult<AgencyContractDto>> GetById(Guid id) { var r = await svc.GetByIdAsync(id); return r == null ? NotFound() : Ok(r); }
     [HttpGet("by-quote/{quoteId}")] public async Task<ActionResult<AgencyContractDto>> GetByQuote(Guid quoteId) { var r = await svc.GetByQuoteIdAsync(quoteId); return r == null ? NotFound() : Ok(r); }
     [HttpGet("by-subscription/{subscriptionId}")] public async Task<ActionResult<AgencyContractDto>> GetBySubscription(Guid subscriptionId) { var r = await svc.GetBySubscriptionIdAsync(subscriptionId); return r == null ? NotFound() : Ok(r); }
     [HttpPost] public async Task<ActionResult<AgencyContractDto>> Create(CreateAgencyContractRequest req) => Ok(await svc.CreateAsync(req));
+    [HttpPost("from-wizard")] public async Task<ActionResult<AgencyContractDto>> CreateFromWizard(GenerateContractRequest req) => Ok(await svc.CreateFromWizardAsync(req));
     [HttpPut("{id}/sections")] public async Task<ActionResult<AgencyContractDto>> UpdateSections(Guid id, UpdateAgencyContractSectionsRequest req) => Ok(await svc.UpdateSectionsAsync(id, req));
     [HttpPost("{id}/sign-and-send")] public async Task<ActionResult<AgencyContractDto>> SignAndSend(Guid id) => Ok(await svc.SignAndSendAsync(id));
     [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) => File(await svc.GeneratePdfAsync(id), "application/pdf", "Agenturvertrag.pdf");
+}
+
+[ApiController, Route("api/contractclauseblocks"), Authorize]
+public class ContractClauseBlocksController(IContractClauseBlockService svc) : ControllerBase
+{
+    [HttpGet] public async Task<ActionResult<List<ContractClauseBlockDto>>> Get() => Ok(await svc.GetAllAsync());
+    [HttpPost] public async Task<ActionResult<ContractClauseBlockDto>> Create(CreateContractClauseBlockRequest req) => Ok(await svc.CreateAsync(req));
+    [HttpPut("{id}")] public async Task<ActionResult<ContractClauseBlockDto>> Update(Guid id, UpdateContractClauseBlockRequest req) => Ok(await svc.UpdateAsync(id, req));
+    [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
 }
 
 [ApiController, Route("api/contract-approval"), AllowAnonymous]

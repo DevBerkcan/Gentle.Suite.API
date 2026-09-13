@@ -303,9 +303,14 @@ public record CreatePaymentTermOptionRequest(string Key, string Title, string Co
 
 // === Contract Templates ===
 public record ContractSectionDto(string Title, string Content);
-public record ContractTemplateDto(Guid Id, string Key, string Name, bool IsActive, int SortOrder, List<ContractSectionDto> Sections);
-public record CreateContractTemplateRequest(string Key, string Name, List<ContractSectionDto> Sections, int SortOrder = 0);
-public record UpdateContractTemplateRequest(string Name, bool IsActive, int SortOrder, List<ContractSectionDto> Sections);
+public record ContractTemplateDto(Guid Id, string Key, string Name, bool IsActive, int SortOrder, List<ContractSectionDto> Sections, List<string>? DefaultBlockKeys = null);
+public record CreateContractTemplateRequest(string Key, string Name, List<ContractSectionDto> Sections, int SortOrder = 0, List<string>? DefaultBlockKeys = null);
+public record UpdateContractTemplateRequest(string Name, bool IsActive, int SortOrder, List<ContractSectionDto> Sections, List<string>? DefaultBlockKeys = null);
+
+// === Contract Clause Blocks (Leistungsbausteine für den Vertrags-Assistenten) ===
+public record ContractClauseBlockDto(Guid Id, string Key, string Category, string Title, string Content, bool IsActive, int SortOrder, bool IsCreativeWork);
+public record CreateContractClauseBlockRequest(string Key, string Category, string Title, string Content, int SortOrder = 0, bool IsCreativeWork = false);
+public record UpdateContractClauseBlockRequest(string Category, string Title, string Content, bool IsActive, int SortOrder, bool IsCreativeWork);
 
 // === Agency Contracts ===
 public record AgencyContractDto(Guid Id, string ContractNumber, Guid CustomerId, string? CustomerName, Guid? QuoteId, string? QuoteNumber, Guid? SubscriptionId, string? SubscriptionTitle, Guid? ContractTemplateId, string ContractTypeName, AgencyContractStatus Status, List<ContractSectionDto> Sections, decimal? TotalContractValue, string? RepSignedByName, DateTimeOffset? RepSignedAt, DateTimeOffset? SentAt, string? CustomerSignedByName, string? CustomerSignedByEmail, DateTimeOffset? CustomerSignedAt, string? CustomerSignatureData, string? DeclineReason, DateTimeOffset CreatedAt, bool IsFinalized);
@@ -313,6 +318,26 @@ public record CreateAgencyContractRequest(Guid? QuoteId, Guid? SubscriptionId, G
 public record UpdateAgencyContractSectionsRequest(List<ContractSectionDto> Sections);
 public record ProcessAgencyContractApprovalRequest(bool Accepted, string? SignerName, string? SignerEmail, string? SignatureData, string? DeclineReason);
 public record ContractTriageItemDto(Guid Id, string Kind, Guid CustomerId, string CustomerName, string Title, string? Reference, DateTimeOffset SinceDate, Guid? AgencyContractId, AgencyContractStatus? ContractStatus);
+
+/// <summary>Auto-derived party data shown (read-only) at the top of the Vertrags-Assistent — pulled from
+/// Customer/Contact/CompanySettings, never re-typed by the user.</summary>
+public record ContractPartyPreviewDto(string AuftragnehmerName, string AuftragnehmerAdresse, string AuftraggeberName, string AuftraggeberAdresse, string? AuftraggeberAnsprechpartner, decimal SuggestedBetrag, string SuggestedBetragLabel);
+public record CustomerAddressSnapshotDto(string Name, string? Strasse, string? Plz, string? Ort, string? Land, string? Ansprechpartner);
+/// <summary>Answers to the Vertrags-Assistent's two real input steps (Rahmenbedingungen + Leistungen). All party/address
+/// data is auto-derived server-side from Quote/Subscription/Customer — never re-submitted by the client.</summary>
+public record GenerateContractRequest(
+    Guid? QuoteId,
+    Guid? SubscriptionId,
+    decimal VerguetungBetrag,
+    string? VerguetungAnmerkung,
+    int ZahlungsfristTage,
+    bool HatFesteLaufzeit,
+    int? LaufzeitMonate,
+    int? KuendigungsfristMonate,
+    List<string> OptionaleKlauselKeys,
+    List<string> LeistungsBlockKeys,
+    Guid? SchnellstartTemplateId
+);
 
 // === Activity ===
 public record ActivityLogDto(Guid Id, string EntityType, Guid EntityId, string Action, string? Description, string? UserName, DateTimeOffset CreatedAt);

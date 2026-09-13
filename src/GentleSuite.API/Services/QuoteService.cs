@@ -96,7 +96,7 @@ public class QuoteServiceImpl : IQuoteService
 
     public async Task<QuoteDetailDto> CreateAsync(CreateQuoteRequest req, CancellationToken ct)
     {
-        if (req.TemplateId.HasValue) return await CreateFromTemplateAsync(req.CustomerId, req.TemplateId.Value, ct);
+        if (req.TemplateId.HasValue) return await CreateFromTemplateAsync(req.CustomerId, req.TemplateId.Value, ct, req.IntroText, req.OutroText);
         if (!await _db.Customers.AnyAsync(c => c.Id == req.CustomerId, ct)) throw new ArgumentException("Kunde wurde nicht gefunden.");
         if (req.Lines != null && req.Lines.Count > 0) ValidateQuoteLines(req.Lines);
 
@@ -126,14 +126,15 @@ public class QuoteServiceImpl : IQuoteService
         return (await GetByIdAsync(quote.Id, ct))!;
     }
 
-    public async Task<QuoteDetailDto> CreateFromTemplateAsync(Guid customerId, Guid templateId, CancellationToken ct)
+    public async Task<QuoteDetailDto> CreateFromTemplateAsync(Guid customerId, Guid templateId, CancellationToken ct, string? introText = null, string? outroText = null)
     {
         if (!await _db.Customers.AnyAsync(c => c.Id == customerId, ct)) throw new ArgumentException("Kunde wurde nicht gefunden.");
         var tmpl = await _db.QuoteTemplates.Include(t => t.Lines.OrderBy(l => l.SortOrder)).FirstOrDefaultAsync(t => t.Id == templateId, ct) ?? throw new KeyNotFoundException("Template not found");
-        var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
+        var companyTaxMode = co?.DefaultTaxMode ?? TaxMode.Standard;
         var year = DateTime.UtcNow.Year;
         var quoteNumber = await _seq.NextNumberAsync("Quote", year, "AN", 4, ct, includeYear: false);
-        var quote = new Quote { QuoteNumber = quoteNumber, QuoteGroupId = Guid.NewGuid(), IsCurrentVersion = true, CustomerId = customerId, Subject = tmpl.Name, Notes = tmpl.Description, TaxRate = companyTaxMode == TaxMode.SmallBusiness ? 0 : 19m, TaxMode = companyTaxMode, Status = QuoteStatus.Draft };
+        var quote = new Quote { QuoteNumber = quoteNumber, QuoteGroupId = Guid.NewGuid(), IsCurrentVersion = true, CustomerId = customerId, Subject = tmpl.Name, Notes = tmpl.Description, IntroText = introText ?? co?.QuoteIntroTemplate, OutroText = outroText ?? co?.QuoteOutroTemplate, TaxRate = companyTaxMode == TaxMode.SmallBusiness ? 0 : 19m, TaxMode = companyTaxMode, Status = QuoteStatus.Draft };
         quote.QuoteGroupId = quote.Id;
         foreach (var tl in tmpl.Lines) quote.Lines.Add(new QuoteLine { ServiceCatalogItemId = tl.ServiceCatalogItemId, Title = tl.Title, Description = tl.Description, Quantity = tl.Quantity, UnitPrice = tl.UnitPrice, DiscountPercent = 0, LineType = tl.LineType, VatPercent = EffectiveVatPercent(companyTaxMode, 19), SortOrder = tl.SortOrder });
         var keys = new List<string>();

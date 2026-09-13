@@ -39,6 +39,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
     public DbSet<PaymentTermOption> PaymentTermOptions => Set<PaymentTermOption>();
     public DbSet<ContractTemplate> ContractTemplates => Set<ContractTemplate>();
     public DbSet<AgencyContract> AgencyContracts => Set<AgencyContract>();
+    public DbSet<ContractClauseBlock> ContractClauseBlocks => Set<ContractClauseBlock>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<InvoiceLine> InvoiceLines => Set<InvoiceLine>();
     public DbSet<InvoicePayment> InvoicePayments => Set<InvoicePayment>();
