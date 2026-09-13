@@ -413,8 +413,13 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
     private static void EnsureB2bContractEvidence(CustomerSubscription subscription)
     {
-        if (subscription.ContractQuoteId == null || string.IsNullOrWhiteSpace(subscription.ContractReference) ||
-            subscription.ContractAcceptedAt == null || !subscription.BusinessCustomerConfirmed ||
+        var hasQuoteEvidence = subscription.ContractQuoteId != null && !string.IsNullOrWhiteSpace(subscription.ContractReference) &&
+            subscription.ContractAcceptedAt != null;
+        // Manuell angelegte Ratenzahlungspläne (Zusage außerhalb des Systems) haben kein Angebot als Nachweis —
+        // hier ersetzt die Pflicht-Bestätigung beim Anlegen (PaymentPlanOptionKey "manual") den Vertragsnachweis.
+        var hasManualEvidence = subscription.PaymentPlanOptionKey == "manual" && subscription.BusinessCustomerConfirmedAt != null &&
+            !string.IsNullOrWhiteSpace(subscription.InstallmentSourceTitle);
+        if ((!hasQuoteEvidence && !hasManualEvidence) || !subscription.BusinessCustomerConfirmed ||
             subscription.AgreedMonthlyPrice is null or <= 0)
             throw new InvalidOperationException("Die Mollie-Zahlungseinrichtung ist ohne vollständigen B2B-Vertragsnachweis gesperrt.");
     }

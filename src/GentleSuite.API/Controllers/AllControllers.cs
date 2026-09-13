@@ -442,6 +442,7 @@ public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentSer
         var result = await mollie.SendMandateEmailAsync(id);
         return result.Sent ? Ok(result) : BadRequest(result);
     }
+    [HttpPost("manual-installment-plan")] public async Task<ActionResult<CustomerSubscriptionDto>> CreateManualInstallmentPlan(CreateManualInstallmentPlanRequest req) => Ok(await svc.CreateManualInstallmentPlanAsync(req));
     [HttpGet("{id}/invoices")] public async Task<ActionResult<List<SubscriptionInvoiceDto>>> GetInvoices(Guid id) => Ok(await svc.GetInvoicesAsync(id));
     [HttpPost("{id}/bill-now")]
     public async Task<ActionResult<CustomerSubscriptionDto>> BillNow(Guid id)

@@ -579,8 +579,8 @@ public class ProjectServiceImpl : IProjectService
 // === Subscription ===
 public class SubscriptionServiceImpl : ISubscriptionService
 {
-    private readonly AppDbContext _db; private readonly IMapper _m;
-    public SubscriptionServiceImpl(AppDbContext db, IMapper m) { _db = db; _m = m; }
+    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IInvoiceService _invoiceSvc; private readonly IMolliePaymentService _mollie; private readonly ILogger<SubscriptionServiceImpl> _logger;
+    public SubscriptionServiceImpl(AppDbContext db, IMapper m, IInvoiceService invoiceSvc, IMolliePaymentService mollie, ILogger<SubscriptionServiceImpl> logger) { _db = db; _m = m; _invoiceSvc = invoiceSvc; _mollie = mollie; _logger = logger; }
     public async Task<List<SubscriptionPlanDto>> GetPlansAsync(CancellationToken ct) => _m.Map<List<SubscriptionPlanDto>>(await _db.SubscriptionPlans.Include(p => p.IncludedServices).Include(p => p.WorkScopeRule).Include(p => p.SupportPolicy).ToListAsync(ct));
     public async Task<SubscriptionPlanDto> CreatePlanAsync(CreatePlanRequest req, CancellationToken ct) { var plan = new SubscriptionPlan { Name = req.Name, Description = req.Description, MonthlyPrice = req.MonthlyPrice, BillingCycle = req.BillingCycle, Category = req.Category, IsActive = true }; _db.SubscriptionPlans.Add(plan); await _db.SaveChangesAsync(ct); return _m.Map<SubscriptionPlanDto>(plan); }
     public async Task<SubscriptionPlanDto> UpdatePlanAsync(Guid id, UpdatePlanRequest req, CancellationToken ct) { var plan = await _db.SubscriptionPlans.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); plan.Name = req.Name; plan.Description = req.Description; plan.MonthlyPrice = req.MonthlyPrice; plan.BillingCycle = req.BillingCycle; plan.Category = req.Category; plan.IsActive = req.IsActive; await _db.SaveChangesAsync(ct); return _m.Map<SubscriptionPlanDto>(plan); }
@@ -849,6 +849,75 @@ public class SubscriptionServiceImpl : ISubscriptionService
         };
         _db.CustomerSubscriptions.Add(subscription);
         await _db.SaveChangesAsync(ct);
+        return await GetByIdAsync(subscription.Id, ct);
+    }
+
+    /// <summary>Manuell angelegter Ratenzahlungsplan ohne Angebot, für Zusagen die außerhalb des Systems
+    /// (Telefon/persönlich) getroffen wurden. Verschickt wie "Preisangebot überführen" automatisch die
+    /// Mollie-Mandats-E-Mail; die Anlage selbst ist die bewusste Admin-Freigabe.</summary>
+    public async Task<CustomerSubscriptionDto> CreateManualInstallmentPlanAsync(CreateManualInstallmentPlanRequest req, CancellationToken ct)
+    {
+        if (!req.BusinessCustomerConfirmed)
+            throw new InvalidOperationException("Die Bestätigung, dass der Kunde als Unternehmer handelt und die Ratenzahlung anderweitig vereinbart wurde, ist erforderlich.");
+        if (req.TotalAmount <= 0)
+            throw new InvalidOperationException("Der Gesamtbetrag muss größer als 0 sein.");
+        if (req.MonthlyAmount <= 0)
+            throw new InvalidOperationException("Die monatliche Rate muss größer als 0 sein.");
+        if (req.DownPaymentAmount is < 0)
+            throw new InvalidOperationException("Die Anzahlung darf nicht negativ sein.");
+        if (req.DownPaymentAmount >= req.TotalAmount)
+            throw new InvalidOperationException("Die Anzahlung muss kleiner als der Gesamtbetrag sein.");
+
+        var customer = await _db.Customers.FindAsync(new object[] { req.CustomerId }, ct)
+            ?? throw new ArgumentException("Der ausgewählte Kunde wurde nicht gefunden.");
+
+        var plan = await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Name == "Ratenzahlung (Systemtarif)", ct)
+            ?? throw new InvalidOperationException("Der Systemtarif für Ratenzahlungen wurde nicht gefunden.");
+
+        var downPayment = req.DownPaymentAmount.GetValueOrDefault(0);
+        var financedAmount = Math.Round(req.TotalAmount - downPayment, 2);
+        var months = (int)Math.Ceiling(financedAmount / req.MonthlyAmount);
+
+        Guid? downPaymentInvoiceId = null;
+        if (downPayment > 0)
+        {
+            var dpInvoice = await _invoiceSvc.CreateAsync(new CreateInvoiceRequest(
+                req.CustomerId, null, $"Anzahlung – {req.Title}", null, null, null, TaxMode.Standard, 14,
+                new List<CreateInvoiceLineRequest> { new("Anzahlung", $"Anzahlung zu {req.Title}", null, 1, downPayment, 19, 0, 0, 0) },
+                InvoiceType.Standard), ct);
+            downPaymentInvoiceId = dpInvoice.Id;
+        }
+
+        var start = DateTimeOffset.UtcNow;
+        var subscription = new CustomerSubscription
+        {
+            CustomerId = req.CustomerId,
+            PlanId = plan.Id,
+            Status = SubscriptionStatus.PendingConfirmation,
+            StartDate = start,
+            NextBillingDate = downPayment > 0 ? start.AddMonths(1) : start,
+            ContractDurationMonths = months,
+            ContractQuoteId = null,
+            QuoteLineId = null,
+            AgreedMonthlyPrice = req.MonthlyAmount,
+            ContractBillingCycle = BillingCycle.Monthly,
+            BusinessCustomerConfirmed = true,
+            BusinessCustomerConfirmedAt = DateTimeOffset.UtcNow,
+            IsInstallmentPlan = true,
+            TotalInstallmentAmount = financedAmount,
+            InstallmentSourceTitle = req.Title,
+            DownPaymentPercent = downPayment > 0 ? Math.Round(downPayment / req.TotalAmount * 100m, 2) : null,
+            DownPaymentInvoiceId = downPaymentInvoiceId,
+            // Das manuelle Anlegen selbst IST die Freigabe (Admin hat die Zahlungszusage bereits anderweitig erhalten).
+            BillingAuthorizedAt = DateTimeOffset.UtcNow,
+            PaymentPlanOptionKey = "manual"
+        };
+        _db.CustomerSubscriptions.Add(subscription);
+        await _db.SaveChangesAsync(ct);
+
+        try { await _mollie.SendMandateEmailAsync(subscription.Id, ct); }
+        catch (Exception mex) { _logger.LogError(mex, "Mandate email failed for manual installment plan {SubscriptionId}", subscription.Id); }
+
         return await GetByIdAsync(subscription.Id, ct);
     }
 
