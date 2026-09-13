@@ -242,6 +242,34 @@ public interface IPaymentTermService
 }
 public interface IEmailLogService { Task<PagedResult<EmailLogDto>> GetLogsAsync(PaginationParams p, Guid? customerId = null, CancellationToken ct = default); }
 
+public interface IContractTemplateService
+{
+    Task<List<ContractTemplateDto>> GetAllAsync(CancellationToken ct = default);
+    Task<ContractTemplateDto> CreateAsync(CreateContractTemplateRequest req, CancellationToken ct = default);
+    Task<ContractTemplateDto> UpdateAsync(Guid id, UpdateContractTemplateRequest req, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
+}
+
+public interface IAgencyContractService
+{
+    Task<List<ContractTriageItemDto>> GetTriageBoardAsync(CancellationToken ct = default);
+    Task<List<AgencyContractDto>> GetAllAsync(CancellationToken ct = default);
+    Task<AgencyContractDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<AgencyContractDto?> GetByQuoteIdAsync(Guid quoteId, CancellationToken ct = default);
+    Task<AgencyContractDto?> GetBySubscriptionIdAsync(Guid subscriptionId, CancellationToken ct = default);
+    Task<AgencyContractDto> CreateAsync(CreateAgencyContractRequest req, CancellationToken ct = default);
+    Task<AgencyContractDto> UpdateSectionsAsync(Guid id, UpdateAgencyContractSectionsRequest req, CancellationToken ct = default);
+    Task<AgencyContractDto> SignAndSendAsync(Guid id, CancellationToken ct = default);
+    Task<AgencyContractDto?> GetByApprovalTokenAsync(string token, CancellationToken ct = default);
+    Task ProcessApprovalAsync(string token, ProcessAgencyContractApprovalRequest req, string? ipAddress = null, CancellationToken ct = default);
+    Task<byte[]> GeneratePdfAsync(Guid id, CancellationToken ct = default);
+    Task<byte[]> GeneratePdfByTokenAsync(string token, CancellationToken ct = default);
+    /// <summary>True if a FullyExecuted AgencyContract exists for this quote (or the quote doesn't require one).</summary>
+    Task<bool> IsQuoteContractSatisfiedAsync(Guid quoteId, CancellationToken ct = default);
+    /// <summary>True if a FullyExecuted AgencyContract exists for this subscription (or it doesn't require one).</summary>
+    Task<bool> IsSubscriptionContractSatisfiedAsync(Guid subscriptionId, CancellationToken ct = default);
+}
+
 public interface IBankTransactionService
 {
     Task<PagedResult<BankTransactionDto>> GetTransactionsAsync(PaginationParams p, CancellationToken ct = default);
@@ -399,6 +427,7 @@ public interface IPdfService
 {
     Task<byte[]> GenerateQuotePdfAsync(Quote quote, CompanySettings company, CancellationToken ct = default);
     Task<byte[]> GenerateInvoicePdfAsync(Invoice invoice, CompanySettings company, CancellationToken ct = default);
+    Task<byte[]> GenerateAgencyContractPdfAsync(AgencyContract contract, CompanySettings company, CancellationToken ct = default);
 }
 
 public interface ICurrentUserService

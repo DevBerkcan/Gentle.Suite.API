@@ -37,6 +37,8 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
     public DbSet<QuoteTemplateLine> QuoteTemplateLines => Set<QuoteTemplateLine>();
     public DbSet<LegalTextBlock> LegalTextBlocks => Set<LegalTextBlock>();
     public DbSet<PaymentTermOption> PaymentTermOptions => Set<PaymentTermOption>();
+    public DbSet<ContractTemplate> ContractTemplates => Set<ContractTemplate>();
+    public DbSet<AgencyContract> AgencyContracts => Set<AgencyContract>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<InvoiceLine> InvoiceLines => Set<InvoiceLine>();
     public DbSet<InvoicePayment> InvoicePayments => Set<InvoicePayment>();
@@ -167,6 +169,10 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<CrmActivity>().HasOne(x => x.Ticket).WithMany().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.ClientSetNull);
         mb.Entity<CrmActivity>().HasOne(x => x.AssignedTo).WithMany().HasForeignKey(x => x.AssignedToTeamMemberId).OnDelete(DeleteBehavior.ClientSetNull);
         mb.Entity<CustomerDocument>().HasOne(x => x.Customer).WithMany(x => x.Documents).HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
+        mb.Entity<AgencyContract>().HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+        mb.Entity<AgencyContract>().HasOne(x => x.Quote).WithMany().HasForeignKey(x => x.QuoteId).OnDelete(DeleteBehavior.Restrict);
+        mb.Entity<AgencyContract>().HasOne(x => x.Subscription).WithMany().HasForeignKey(x => x.SubscriptionId).OnDelete(DeleteBehavior.Restrict);
+        mb.Entity<AgencyContract>().HasOne(x => x.ContractTemplate).WithMany().HasForeignKey(x => x.ContractTemplateId).OnDelete(DeleteBehavior.ClientSetNull);
 
         // Decimal precision
         foreach (var prop in mb.Model.GetEntityTypes().SelectMany(t => t.GetProperties()).Where(p => p.ClrType == typeof(decimal) || p.ClrType == typeof(decimal?)))

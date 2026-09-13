@@ -165,7 +165,8 @@ public class MappingProfile : Profile
                 s.DownPaymentPercent,
                 s.DownPaymentInvoiceId,
                 s.PaymentPlanOptionKey,
-                "review"
+                "review",
+                s.RequiresAgencyContract
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()

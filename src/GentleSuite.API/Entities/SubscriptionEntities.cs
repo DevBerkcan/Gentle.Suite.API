@@ -95,6 +95,12 @@ public class CustomerSubscription : BaseEntity
     public DateTimeOffset? MandateReminderSentAt { get; set; }
     /// <summary>How many mandate reminder emails have been sent so far (capped at 3).</summary>
     public int MandateReminderCount { get; set; }
+
+    /// <summary>Whether a fully-executed AgencyContract is required before this subscription's billing can be
+    /// authorized — applies to Serienrechnung and Ratenzahlung alike, regardless of origin (quote or manual).
+    /// Defaults true for new subscriptions; backfilled to false for all subscriptions existing before this
+    /// feature shipped, so no in-flight billing is retroactively blocked.</summary>
+    public bool RequiresAgencyContract { get; set; } = true;
 }
 
 public class WorkScopeRule : BaseEntity

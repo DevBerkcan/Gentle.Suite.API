@@ -24,8 +24,9 @@ public class QuoteServiceImpl : IQuoteService
     private readonly IMolliePaymentService _mollie;
     private readonly IFileStorageService _fs;
     private readonly ILogger<QuoteServiceImpl> _logger;
-    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService, ISubscriptionService subscriptionSvc, IMolliePaymentService mollie, IFileStorageService fs, ILogger<QuoteServiceImpl> logger)
-    { _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _subscriptionSvc = subscriptionSvc; _mollie = mollie; _fs = fs; _logger = logger; }
+    private readonly IAgencyContractService _agencyContracts;
+    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService, ISubscriptionService subscriptionSvc, IMolliePaymentService mollie, IFileStorageService fs, ILogger<QuoteServiceImpl> logger, IAgencyContractService agencyContracts)
+    { _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _subscriptionSvc = subscriptionSvc; _mollie = mollie; _fs = fs; _logger = logger; _agencyContracts = agencyContracts; }
 
     public async Task<PagedResult<QuoteListDto>> GetQuotesAsync(PaginationParams p, QuoteStatus? status, Guid? customerId, CancellationToken ct)
     {
@@ -450,6 +451,9 @@ public class QuoteServiceImpl : IQuoteService
             .Include(q => q.Lines)
             .FirstOrDefaultAsync(q => q.Id == quoteId, ct) ?? throw new KeyNotFoundException();
 
+        if (!await _agencyContracts.IsQuoteContractSatisfiedAsync(quoteId, ct))
+            throw new InvalidOperationException("Für dieses Angebot muss zuerst ein beidseitig unterschriebener Agenturvertrag vorliegen, bevor eine Rechnung erstellt werden kann.");
+
         // Serienrechnungs-Positionen gehören nicht in diese Rechnung — sie werden separat über die
         // normale Serienrechnungs-Logik ab dem nächsten Monat abgerechnet (AuthorizeSubscriptionBillingAsync
         // liest die zugehörigen Subscriptions direkt aus quote.Lines, unabhängig von inv.Lines, daher bleibt
@@ -545,6 +549,8 @@ public class QuoteServiceImpl : IQuoteService
             throw new InvalidOperationException("Für dieses Angebot wurde die gewählte Zahlungsart bereits überführt.");
         if (quote.SignatureStatus != SignatureStatus.Signed || string.IsNullOrEmpty(quote.ChosenPaymentPlanOptionKey))
             throw new InvalidOperationException("Der Kunde hat noch keine Zahlungsart des Preisangebots gewählt.");
+        if (!await _agencyContracts.IsQuoteContractSatisfiedAsync(quoteId, ct))
+            throw new InvalidOperationException("Für dieses Angebot muss zuerst ein beidseitig unterschriebener Agenturvertrag vorliegen, bevor eine Rechnung erstellt werden kann.");
         var cfg = string.IsNullOrEmpty(quote.PaymentPlanConfig) ? null : JsonSerializer.Deserialize<PaymentPlanConfigDto>(quote.PaymentPlanConfig);
         if (cfg == null) throw new InvalidOperationException("Für dieses Angebot ist keine Preisangebot-Konfiguration hinterlegt.");
 

@@ -136,6 +136,7 @@ public class QuoteDetailDto
     public string? SignedByEmail { get; set; }
     public DateTimeOffset? SignedAt { get; set; }
     public bool B2bAuthorityConfirmed { get; set; }
+    public bool RequiresAgencyContract { get; set; }
     public string? PrimaryContactEmail { get; set; }
     public List<QuoteLineDto> Lines { get; set; } = new();
     public List<string>? LegalTextBlockKeys { get; set; }
@@ -266,7 +267,7 @@ public record ConfirmBankRequest(string RequisitionId);
 public record SubscriptionPlanDto(Guid Id, string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category, bool IsActive, WorkScopeRuleDto? WorkScopeRule, SupportPolicyDto? SupportPolicy);
 public record WorkScopeRuleDto(string? FairUseDescription, List<string> IncludedItems, List<string> ExcludedItems, int? MaxHoursPerMonth);
 public record SupportPolicyDto(string? S0ResponseTarget, string? S1ResponseTarget, string? S2ResponseTarget, string? S3ResponseTarget);
-public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Guid CustomerId, string? CustomerName, SubscriptionStatus Status, DateTimeOffset StartDate, DateTimeOffset NextBillingDate, decimal MonthlyPrice, BillingCycle ContractBillingCycle, int? ContractDurationMonths, Guid? ContractQuoteId, Guid? QuoteLineId, string? ContractReference, int? ContractVersion, DateTimeOffset? ContractAcceptedAt, string? ContractAcceptedByName, string? ContractAcceptedByEmail, bool BusinessCustomerConfirmed, DateTimeOffset? BusinessCustomerConfirmedAt, DateTimeOffset? ConfirmedAt, string? MollieMandateStatus, DateTimeOffset? MandateEmailSentAt, string? MandateEmailRecipient, string? MandateEmailStatus, string? MandateEmailLastError, int MandateEmailAttemptCount, DateTimeOffset? BillingAuthorizedAt, bool IsInstallmentPlan, decimal? TotalInstallmentAmount, int InstallmentsCompleted, string? InstallmentSourceTitle, decimal PaidAmount = 0, decimal? InstallmentSurchargePercent = null, decimal? DownPaymentPercent = null, Guid? DownPaymentInvoiceId = null, string? PaymentPlanOptionKey = null, string BillingStage = "review");
+public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Guid CustomerId, string? CustomerName, SubscriptionStatus Status, DateTimeOffset StartDate, DateTimeOffset NextBillingDate, decimal MonthlyPrice, BillingCycle ContractBillingCycle, int? ContractDurationMonths, Guid? ContractQuoteId, Guid? QuoteLineId, string? ContractReference, int? ContractVersion, DateTimeOffset? ContractAcceptedAt, string? ContractAcceptedByName, string? ContractAcceptedByEmail, bool BusinessCustomerConfirmed, DateTimeOffset? BusinessCustomerConfirmedAt, DateTimeOffset? ConfirmedAt, string? MollieMandateStatus, DateTimeOffset? MandateEmailSentAt, string? MandateEmailRecipient, string? MandateEmailStatus, string? MandateEmailLastError, int MandateEmailAttemptCount, DateTimeOffset? BillingAuthorizedAt, bool IsInstallmentPlan, decimal? TotalInstallmentAmount, int InstallmentsCompleted, string? InstallmentSourceTitle, decimal PaidAmount = 0, decimal? InstallmentSurchargePercent = null, decimal? DownPaymentPercent = null, Guid? DownPaymentInvoiceId = null, string? PaymentPlanOptionKey = null, string BillingStage = "review", bool RequiresAgencyContract = true);
 public record BillingOccurrenceDto(Guid SubscriptionId, string CustomerName, string Title, bool IsInstallmentPlan, DateTimeOffset Date, decimal Amount, bool IsLastInstallment);
 public record BillingCalendarDto(List<BillingOccurrenceDto> Occurrences, decimal TotalNext30Days, decimal TotalNext90Days);
 public record CreateSubscriptionRequest(Guid CustomerId, Guid PlanId, Guid ContractQuoteId, bool BusinessCustomerConfirmed, DateTimeOffset? StartDate, int? ContractDurationMonths = null);
@@ -299,6 +300,19 @@ public record CreateLegalTextRequest(string Key, string Title, string Content, i
 // === Payment Terms ===
 public record PaymentTermOptionDto(Guid Id, string Key, string Title, string Content, int SortOrder);
 public record CreatePaymentTermOptionRequest(string Key, string Title, string Content, int SortOrder = 0);
+
+// === Contract Templates ===
+public record ContractSectionDto(string Title, string Content);
+public record ContractTemplateDto(Guid Id, string Key, string Name, bool IsActive, int SortOrder, List<ContractSectionDto> Sections);
+public record CreateContractTemplateRequest(string Key, string Name, List<ContractSectionDto> Sections, int SortOrder = 0);
+public record UpdateContractTemplateRequest(string Name, bool IsActive, int SortOrder, List<ContractSectionDto> Sections);
+
+// === Agency Contracts ===
+public record AgencyContractDto(Guid Id, string ContractNumber, Guid CustomerId, string? CustomerName, Guid? QuoteId, string? QuoteNumber, Guid? SubscriptionId, string? SubscriptionTitle, Guid? ContractTemplateId, string ContractTypeName, AgencyContractStatus Status, List<ContractSectionDto> Sections, decimal? TotalContractValue, string? RepSignedByName, DateTimeOffset? RepSignedAt, DateTimeOffset? SentAt, string? CustomerSignedByName, string? CustomerSignedByEmail, DateTimeOffset? CustomerSignedAt, string? CustomerSignatureData, string? DeclineReason, DateTimeOffset CreatedAt, bool IsFinalized);
+public record CreateAgencyContractRequest(Guid? QuoteId, Guid? SubscriptionId, Guid ContractTemplateId);
+public record UpdateAgencyContractSectionsRequest(List<ContractSectionDto> Sections);
+public record ProcessAgencyContractApprovalRequest(bool Accepted, string? SignerName, string? SignerEmail, string? SignatureData, string? DeclineReason);
+public record ContractTriageItemDto(Guid Id, string Kind, Guid CustomerId, string CustomerName, string Title, string? Reference, DateTimeOffset SinceDate, Guid? AgencyContractId, AgencyContractStatus? ContractStatus);
 
 // === Activity ===
 public record ActivityLogDto(Guid Id, string EntityType, Guid EntityId, string Action, string? Description, string? UserName, DateTimeOffset CreatedAt);

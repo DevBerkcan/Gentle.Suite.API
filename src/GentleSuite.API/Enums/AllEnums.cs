@@ -43,6 +43,7 @@ public enum NoteType { General, Credential, Technical, Financial, Internal }
 
 // === Signatures ===
 public enum SignatureStatus { Pending, Signed, Declined, Expired }
+public enum AgencyContractStatus { Draft, SentForSignature, FullyExecuted, Declined }
 
 // === Accounting ===
 public enum AccountType { Asset, Liability, Income, Expense, Equity }

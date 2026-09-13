@@ -84,6 +84,11 @@ public class Quote : GobdEntity
     public string? ChosenPaymentPlanOptionKey { get; set; }
     public DateTimeOffset? PaymentPlanTransferredAt { get; set; }
 
+    /// <summary>Whether a fully-executed AgencyContract is required before this quote can be converted to an
+    /// invoice. Defaults true for new quotes; backfilled to false for all quotes existing before this feature
+    /// shipped, so no in-flight quote is retroactively blocked.</summary>
+    public bool RequiresAgencyContract { get; set; } = true;
+
     public List<QuoteLine> Lines { get; set; } = new();
 
     public decimal SubtotalOneTime => Lines.Where(l => l.LineType == QuoteLineType.OneTime).Sum(l => l.Total);

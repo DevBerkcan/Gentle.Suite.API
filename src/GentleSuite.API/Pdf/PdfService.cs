@@ -499,7 +499,7 @@ public class PdfService : IPdfService
                     else
                         lc.Item().Text(co.CompanyName).FontSize(18).Bold().FontColor("#344054");
                 });
-                row.RelativeItem(2).AlignRight().Column(c => { c.Item().Text(docType).FontSize(22).Bold().FontColor("#344054"); c.Item().Text(docNumber).FontColor("#667085"); });
+                row.RelativeItem(2).AlignRight().Column(c => { c.Item().Text(docType).FontSize(docType.Length > 10 ? 16 : 22).Bold().FontColor("#344054"); c.Item().Text(docNumber).FontColor("#667085"); });
             });
             col.Item().PaddingTop(8).PaddingBottom(12).LineHorizontal(2).LineColor("#344054");
             col.Item().Row(row =>
@@ -636,6 +636,95 @@ public class PdfService : IPdfService
             });
             if (!string.IsNullOrEmpty(co.Iban)) fc.Item().AlignCenter().Text($"{co.BankName} · IBAN: {co.Iban} · BIC: {co.Bic}").FontSize(7).FontColor("#667085");
             if (!string.IsNullOrEmpty(co.RegisterCourt)) fc.Item().AlignCenter().Text($"{co.RegisterCourt} · {co.RegisterNumber} · GF: {co.ManagingDirector}").FontSize(7).FontColor("#667085");
+        });
+    }
+
+    public async Task<byte[]> GenerateAgencyContractPdfAsync(AgencyContract contract, CompanySettings co, CancellationToken ct = default)
+    {
+        var logo = await LoadLogoAsync(co.LogoPath);
+        var contact = contract.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? contract.Customer.Contacts.FirstOrDefault();
+        var loc = contract.Customer.Locations.FirstOrDefault(l => l.IsPrimary) ?? contract.Customer.Locations.FirstOrDefault();
+        var sections = JsonSerializer.Deserialize<List<ContractSectionDto>>(contract.SectionsJson) ?? new();
+        List<(string Title, string Content)>? legal = null;
+        if (!string.IsNullOrEmpty(contract.LegalTextBlocksSnapshot))
+        {
+            var snapshot = JsonSerializer.Deserialize<List<LegalTextSnapshotItem>>(contract.LegalTextBlocksSnapshot);
+            if (snapshot?.Any() == true) legal = snapshot.Select(s => (s.Title, string.IsNullOrEmpty(s.AttachmentFileName) ? s.Content : $"Dieses Dokument liegt als Anhang bei ({s.AttachmentFileName}).")).ToList();
+        }
+
+        return Document.Create(c => c.Page(p =>
+        {
+            p.Size(PageSizes.A4); p.MarginTop(30); p.MarginBottom(30); p.MarginHorizontal(45);
+            p.DefaultTextStyle(x => x.FontSize(9.5f).FontColor("#101828"));
+            p.Header().Element(h => BuildDocHeader(h, co, logo, "AGENTURVERTRAG", $"Nr. {contract.ContractNumber}", contract.Customer, contact, loc, $"Vertragsart: {contract.ContractTypeName}", contract.TotalContractValue.HasValue ? $"Vertragswert: {contract.TotalContractValue:N2} €" : null));
+            p.Content().PaddingTop(16).Column(col =>
+            {
+                foreach (var s in sections)
+                {
+                    col.Item().PaddingTop(14).Text(s.Title).Bold().FontSize(10).FontColor("#344054");
+                    col.Item().PaddingTop(4).Text(s.Content).FontSize(9);
+                }
+                if (legal?.Any() == true) foreach (var b in legal) { col.Item().PaddingTop(12).Text(b.Title).Bold().FontSize(9).FontColor("#344054"); col.Item().PaddingTop(3).Text(b.Content).FontSize(7.5f).FontColor("#667085"); }
+                BuildBilateralSignatureArea(col, co, contract);
+            });
+            p.Footer().Element(f => BuildDocFooter(f, co));
+        })).GeneratePdf();
+    }
+
+    /// <summary>Unlike BuildSignatureArea (Angebot: only the customer signs), the Agenturvertrag is actively
+    /// countersigned by our side too — a one-click confirmation by the logged-in employee, not a drawn image.</summary>
+    private static void BuildBilateralSignatureArea(ColumnDescriptor col, CompanySettings co, AgencyContract contract)
+    {
+        col.Item().PaddingTop(30).Row(row =>
+        {
+            row.RelativeItem().Column(c =>
+            {
+                c.Item().PaddingTop(4).Text("Auftragnehmer").FontSize(8).FontColor("#667085");
+                c.Item().PaddingTop(6).Text(co.CompanyName).FontSize(9).Bold().FontColor("#344054");
+                if (!string.IsNullOrEmpty(contract.RepSignedByName))
+                {
+                    c.Item().PaddingTop(2).Text($"✓ {contract.RepSignedByName}").FontSize(9).Bold().FontColor("#027A48");
+                    c.Item().Text($"Bestätigt am {contract.RepSignedAt:dd.MM.yyyy} um {contract.RepSignedAt:HH:mm} Uhr").FontSize(8).FontColor("#667085");
+                }
+                else
+                {
+                    c.Item().Height(30);
+                    c.Item().LineHorizontal(0.5f).LineColor("#EAECF0");
+                    c.Item().PaddingTop(4).Text("Noch nicht bestätigt").FontSize(8).FontColor("#667085");
+                }
+            });
+
+            row.ConstantItem(40);
+
+            row.RelativeItem().Column(c =>
+            {
+                if (!string.IsNullOrEmpty(contract.CustomerSignatureData))
+                {
+                    try
+                    {
+                        var base64 = contract.CustomerSignatureData.Contains(",") ? contract.CustomerSignatureData.Split(',')[1] : contract.CustomerSignatureData;
+                        var imgBytes = Convert.FromBase64String(base64);
+                        c.Item().MaxHeight(60).MaxWidth(200).Image(imgBytes, ImageScaling.FitArea);
+                    }
+                    catch { }
+
+                    c.Item().LineHorizontal(0.5f).LineColor("#EAECF0");
+                    c.Item().PaddingTop(4).Text("Auftraggeber").FontSize(8).FontColor("#667085");
+                    var displayName = !string.IsNullOrEmpty(contract.Customer.CompanyName) ? contract.Customer.CompanyName : contract.CustomerSignedByName ?? "";
+                    c.Item().PaddingTop(2).Text($"✓ {displayName}").FontSize(9).Bold().FontColor("#027A48");
+                    if (!string.IsNullOrEmpty(contract.CustomerSignedByName) && contract.CustomerSignedByName != displayName)
+                        c.Item().Text(contract.CustomerSignedByName).FontSize(8).FontColor("#344054");
+                    if (!string.IsNullOrEmpty(contract.CustomerSignedByEmail))
+                        c.Item().Text(contract.CustomerSignedByEmail).FontSize(8).FontColor("#667085");
+                    c.Item().Text($"Unterzeichnet am {contract.CustomerSignedAt:dd.MM.yyyy} um {contract.CustomerSignedAt:HH:mm} Uhr").FontSize(8).FontColor("#667085");
+                }
+                else
+                {
+                    c.Item().Height(60);
+                    c.Item().LineHorizontal(0.5f).LineColor("#EAECF0");
+                    c.Item().PaddingTop(4).Text("Auftraggeber (Unterschrift)").FontSize(8).FontColor("#667085");
+                }
+            });
         });
     }
 }

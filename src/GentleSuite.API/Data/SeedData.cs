@@ -26,6 +26,148 @@ public static class SeedData
         await SeedDemoData(db);
         await SeedPriceListTemplates(db);
         await SeedInstallmentSystemPlan(db);
+        await SeedContractTemplates(db);
+    }
+
+    /// <summary>Seeds the 3 starter Vertragsarten so der "Verträge"-Bereich nicht leer ist.
+    /// Struktur/Inhalt an einem real genutzten Agenturvertrag ("Websiteanlauf") orientiert — unser
+    /// eigenes Branding (Header/Footer/Farben) kommt weiterhin ausschließlich aus PdfService, hier
+    /// geht es nur um den Vertragstext/die Klauseln. Admin sollte die Texte trotzdem fachlich prüfen.</summary>
+    static async Task SeedContractTemplates(AppDbContext db)
+    {
+        if (await db.ContractTemplates.AnyAsync()) return;
+
+        var geltungsbereich = new { Title = "Geltungsbereich und Gegenstand", Content = """
+            Der vorliegende Vertrag gilt für alle Leistungen, die zwischen Anbieter und Kunde vereinbart werden. Der Gegenstand des Vertrags sind die im Abschnitt „Spezifizierte Leistungen" genannten Leistungen des Anbieters. Abweichende Vereinbarungen bedürfen der Schriftform.
+            """ };
+
+        var vertragsschlussKurz = new { Title = "Vertragsschluss", Content = """
+            Angebote des Anbieters sind freibleibend. Ein Vertrag kommt erst mit Übermittlung des beidseitig online unterschriebenen Dokumentes zustande.
+            """ };
+
+        var vertragsschlussLang = new { Title = "Vertragsschluss", Content = """
+            Angebote des Anbieters sind freibleibend. Ein Vertrag kommt erst mit Übermittlung des beidseitig online unterschriebenen Dokumentes zustande.
+
+            Sofern das Angebot des Anbieters Entwürfe, Muster oder gestalterische Vorschläge enthält, jedoch kein Vertrag zustande kommt, hat der Kunde keinen Anspruch auf Herausgabe der Entwürfe, Muster, gestalterischen Vorschläge oder ggf. der dazugehörigen Quellcodes, Kopien etc. Der Kunde hat in diesem Fall sämtliche Kopien zu löschen, zu vernichten und/oder an den Anbieter herauszugeben.
+            """ };
+
+        var mitwirkung = new { Title = "Mitwirkungspflichten des Kunden", Content = """
+            Der Kunde stellt dem Anbieter alle für die Durchführung des Auftrags notwendigen Informationen und Materialien rechtzeitig zur Verfügung.
+
+            Der Kunde benennt einen Ansprechpartner, der für alle Fragen im Zusammenhang mit diesem Vertrag zuständig ist. Der Anbieter wird dem Kunden ebenfalls einen solchen Ansprechpartner benennen.
+
+            Sofern für einzelne Leistungen der Abschluss eines Vertrages über Auftragsverarbeitung (AV-Vertrag) nach Art. 28 DSGVO erforderlich ist, verpflichten sich beide Vertragsparteien, einen solchen Vertrag vor Beginn der Erbringung der betreffenden Leistungen abzuschließen. Der AV-Vertrag ist grundsätzlich vom Anbieter zu stellen.
+
+            Der Kunde ist verpflichtet, die von ihm zum Zwecke der Auftragserfüllung zur Verfügung zu stellenden Informationen, Daten, Werke (Texte, Bilder, Layouts, Grafiken etc.) und Zugänge vollständig, rechtzeitig und korrekt mitzuteilen. Leistet der Kunde notwendige Mit- bzw. Zuarbeit verspätet, haftet der Anbieter nicht für dadurch entstehende Verzögerungen.
+            """ };
+
+        var abnahme = new { Title = "Abnahme", Content = """
+            Der Anbieter legt dem Kunden nach Fertigstellung die erbrachten Leistungen zur Abnahme vor. Abnahmeverweigerungen haben schriftlich und unter Angabe von Gründen zu erfolgen.
+
+            Bleibt eine Rückmeldung des Kunden innerhalb von zwei Wochen aus, gilt die Leistung als abgenommen.
+            """ };
+
+        var verguetung = new { Title = "Vergütung", Content = """
+            Die Vergütung für die Leistungen des Anbieters richtet sich nach dem zugrundeliegenden Angebot bzw. der vereinbarten Zahlungsweise.
+
+            Nebenkosten (z. B. Reisekosten) werden gesondert in Rechnung gestellt. Rechnungen sind, sofern nicht anders vereinbart, innerhalb von 14 Tagen nach Erhalt ohne Abzug zahlbar.
+            """ };
+
+        var laufzeitProjekt = new { Title = "Vertragslaufzeit", Content = """
+            Der Vertrag beginnt mit der Unterzeichnung und endet nach Erbringung der vereinbarten Leistungen, sofern nicht anders vereinbart.
+            """ };
+
+        var laufzeitDauer = new { Title = "Vertragslaufzeit und Kündigung", Content = """
+            Der Vertrag beginnt mit der Unterzeichnung und läuft auf unbestimmte Zeit. Er kann von beiden Seiten mit einer Frist von 3 Monaten zum Quartalsende gekündigt werden.
+            """ };
+
+        var maengel = new { Title = "Mängelgewährleistung", Content = """
+            Ein unwesentlicher Mangel begründet keine Mängelansprüche. Die Wahl der Art der Nacherfüllung liegt beim Anbieter. Die Verjährungsfrist für Mängel und sonstige Ansprüche beträgt ein (1) Jahr; diese Verjährungsverkürzung gilt nicht für Ansprüche, die aus Vorsatz, grober Fahrlässigkeit oder aus der Verletzung von Leib, Leben oder Gesundheit durch den Anbieter resultieren. Im Übrigen bleibt die gesetzliche Mängelgewährleistung unberührt.
+
+            Mängel sind vom Kunden unverzüglich nach Feststellung schriftlich anzuzeigen.
+            """ };
+
+        var haftung = new { Title = "Haftung und Freistellung", Content = """
+            Die Haftung des Anbieters für sämtliche Schäden wird wie folgt beschränkt: Bei einer leicht fahrlässigen Verletzung einer wesentlichen Vertragspflicht („Kardinalpflicht") haftet der Anbieter jeweils der Höhe nach begrenzt auf den bei Vertragsschluss vorhersehbaren, vertragstypischen Schaden. Diese Haftungsbeschränkung gilt nicht bei grober Fahrlässigkeit oder vorsätzlichem Handeln sowie im Falle zwingender gesetzlicher Haftung, insbesondere bei Übernahme einer Garantie oder bei schuldhafter Verletzung des Lebens, des Körpers oder der Gesundheit.
+
+            Der Kunde stellt den Anbieter von jeglichen Ansprüchen Dritter frei, die gegen den Anbieter aufgrund von Verstößen des Kunden gegen diesen Vertrag oder gegen geltendes Recht geltend gemacht werden.
+            """ };
+
+        var rechte = new { Title = "Rechteeinräumung/Eigenwerbung", Content = """
+            Nach vollständiger Bezahlung des Auftrags durch den Kunden räumt der Anbieter dem Kunden an den entsprechenden Arbeitsergebnissen ein einfaches Nutzungsrecht ein. Weitergehende Rechte können zusätzlich vereinbart werden.
+
+            Sofern nichts Abweichendes vereinbart wurde, erlaubt der Kunde dem Anbieter, das Projekt zum Zwecke der Eigenwerbung (Referenzen/Portfolio) in angemessener Weise öffentlich darzustellen.
+            """ };
+
+        var vertraulichkeit = new { Title = "Vertraulichkeit", Content = """
+            Beide Parteien verpflichten sich, alle im Rahmen der Zusammenarbeit erlangten Kenntnisse vertraulich zu behandeln. Der Anbieter verpflichtet sich, die Geheimhaltungspflicht sämtlichen Angestellten und/oder Dritten, welche Zugang zu den betreffenden Geschäftsvorgängen haben, aufzuerlegen.
+
+            Die Geheimhaltungspflicht gilt zeitlich unbegrenzt über die Dauer dieses Vertrages hinaus.
+            """ };
+
+        var sonstiges = new { Title = "Sonstiges", Content = """
+            Änderungen oder Ergänzungen dieses Vertrags bedürfen der Schriftform. Dies gilt auch für das Schriftformerfordernis selbst.
+
+            Sollten Teile dieses Vertrags unwirksam sein oder werden, bleibt die Wirksamkeit des Vertrags im Übrigen unberührt.
+
+            Der Vertrag unterliegt dem materiellen Recht der Bundesrepublik Deutschland unter Ausschluss des UN-Kaufrechts. Sofern der Kunde Kaufmann, juristische Person des öffentlichen Rechts oder öffentlich-rechtliches Sondervermögen ist, oder keinen allgemeinen Gerichtsstand in Deutschland hat, vereinbaren die Parteien den Sitz des Anbieters als Gerichtsstand für sämtliche Streitigkeiten aus diesem Vertragsverhältnis.
+            """ };
+
+        // Wartungsvertrag: Leistungsbeschreibung aus den bereits bestehenden, real genutzten
+        // Rechtstexten übernommen (LegalTextBlock-Keys "unlimited-care-fairuse"/"sla-levels"),
+        // damit hier keine neue, ungeprüfte Formulierung entsteht.
+        var wartungLeistung = new { Title = "Leistungsumfang (Wartung & Pflege)", Content = """
+            Der Vertrag beinhaltet die technische Wartung und Pflege der Website im Rahmen einer Fair-Use-Regelung.
+
+            Inkludiert: Sicherheitsupdates, Plugin-Updates, CMS-Updates, Performance-Monitoring, Backup-Management, SSL-Zertifikat, kleine Textänderungen, Bildaustausch, Anpassungen bestehender Inhalte, Fehleranalyse und -behebung.
+
+            Nicht inkludiert: Neuentwicklung von Features/Seiten, Redesign, SEO-Maßnahmen, Content-Erstellung, Drittanbieter-Lizenzen, Hosting-Kosten, Marketing-Leistungen.
+
+            Fair-Use: Die inkludierten Leistungen gelten im Rahmen einer fairen Nutzung. Bei überdurchschnittlich hohem Änderungsaufwand behält sich der Anbieter vor, zusätzliche Leistungen separat anzubieten.
+            """ };
+        var wartungSla = new { Title = "Service Level Agreement (SLA)", Content = """
+            S0 - Kritisch: Website nicht erreichbar / Sicherheitsvorfall. Reaktionszeit: 4 Stunden (Geschäftszeiten).
+            S1 - Hoch: Wesentliche Funktion eingeschränkt. Reaktionszeit: 8 Stunden.
+            S2 - Mittel: Nicht-kritische Fehler. Reaktionszeit: 24 Stunden.
+            S3 - Niedrig: Optimierungen, Wünsche. Reaktionszeit: 48 Stunden.
+
+            Geschäftszeiten: Mo-Fr 09:00-18:00 Uhr. Notfälle (S0) auch außerhalb nach Vereinbarung.
+            """ };
+
+        var seoLeistung = new { Title = "Spezifizierte Leistungen: SEO-Marketing", Content = """
+            Der Anbieter und der Kunde haben Dienstleistungen im Bereich des SEO-Marketings vereinbart. Der Anbieter schuldet in diesem Rahmen als Leistungserbringung ausschließlich die Durchführung von Maßnahmen, die nach eigener Erfahrung des Anbieters das Suchmaschinen-Ranking positiv beeinflussen können oder die vom Kunden ausdrücklich verlangt werden. Ein bestimmtes Ergebnis (z. B. ein bestimmtes Ranking in der Google-Trefferliste) wird im Rahmen der SEO-Dienstleistungen nicht geschuldet.
+            """ };
+
+        var webErstellung = new { Title = "Spezifizierte Leistungen: Erstellung von Webseiten", Content = """
+            Gegenstand des Vertrags zur Erstellung von Webseiten ist die Entwicklung neuer Webseiten unter Beachtung der Vorgaben des Kunden. Der Vertrag zur Erstellung von Webseiten ist ein Werkvertrag im Sinne von §§ 631 ff. BGB.
+
+            Die erstellten Webseiten sind für Mobilgeräte optimiert sowie für alle gängigen Browser in ihrer jeweils aktuellen Fassung (jeweils die letzten zwei Versionen).
+
+            Nach Fertigstellung der Webseite wird der Anbieter den Kunden zur Abnahme der Webseite auffordern.
+            """ };
+
+        var webImpressum = new { Title = "Spezifizierte Leistungen: Impressum und Datenschutzerklärung", Content = """
+            Der Anbieter erstellt die Datenschutzerklärung und/oder das Impressum für die Webseite des Kunden mithilfe von Generatoren. Der Anbieter schuldet hierbei lediglich die Erstellung der Texte mit den Generatoren; für die rechtliche und inhaltliche Überprüfung ist der Kunde selbst verantwortlich. Dem Anbieter ist es von Rechts wegen nicht erlaubt, Rechtsberatungsleistungen gegenüber dem Kunden zu erbringen.
+
+            Der Kunde ist verpflichtet, dem Anbieter sämtliche notwendigen Informationen rechtzeitig, korrekt und vollständig mitzuteilen, und Änderungen selbstständig und unverzüglich zu melden.
+            """ };
+
+        var webLogo = new { Title = "Spezifizierte Leistungen: Logogestaltung und -Konzeption", Content = """
+            Der Anbieter übernimmt für den Kunden dessen Logogestaltung und -Konzeption auf Basis einer Anfrage des Kunden mit einer möglichst genauen Beschreibung des gewünschten Logos.
+
+            Dem Kunden steht das Recht auf Korrekturschleife(n) zu. Nach Durchführung dieser Korrekturschleife(n) werden weitere Anpassungswünsche nicht mehr berücksichtigt; weitere Änderungen kann der Anbieter gegen ein zusätzlich zu vereinbarendes Entgelt erstellen.
+            """ };
+
+        var wartungsvertragSections = JsonSerializer.Serialize(new[] { geltungsbereich, vertragsschlussKurz, wartungLeistung, wartungSla, mitwirkung, verguetung, laufzeitDauer, haftung, vertraulichkeit, sonstiges });
+        var seoVertragSections = JsonSerializer.Serialize(new[] { geltungsbereich, vertragsschlussKurz, seoLeistung, mitwirkung, verguetung, laufzeitDauer, haftung, rechte, vertraulichkeit, sonstiges });
+        var webdesignVertragSections = JsonSerializer.Serialize(new[] { geltungsbereich, vertragsschlussLang, webErstellung, webImpressum, webLogo, mitwirkung, abnahme, verguetung, laufzeitProjekt, maengel, haftung, rechte, vertraulichkeit, sonstiges });
+
+        db.ContractTemplates.AddRange(
+            new ContractTemplate { Key = "wartungsvertrag", Name = "Wartungsvertrag", SortOrder = 1, SectionsJson = wartungsvertragSections },
+            new ContractTemplate { Key = "seo-vertrag", Name = "SEO-Vertrag", SortOrder = 2, SectionsJson = seoVertragSections },
+            new ContractTemplate { Key = "webdesign-vertrag", Name = "Webdesign-Vertrag", SortOrder = 3, SectionsJson = webdesignVertragSections }
+        );
+        await db.SaveChangesAsync();
     }
 
     /// <summary>
@@ -495,6 +637,34 @@ END;
             var mandateReminderTemplate = await db.EmailTemplates.FirstAsync(x => x.Key == "subscription-mandate-reminder");
             mandateReminderTemplate.Subject = mandateReminderSubject;
             mandateReminderTemplate.Body = mandateReminderBody;
+        }
+        const string agencyContractSubject = "Bitte unterschreiben: {{ ContractTypeName }} {{ ContractNumber }}";
+        const string agencyContractBody = """
+                <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
+                  <div style='max-width:620px;margin:0 auto'>
+                    <div style='padding:0 8px 20px;font-size:22px;font-weight:700;color:#344054'>GentleSuite</div>
+                    <div style='height:5px;background:linear-gradient(90deg,#344054,#10b981);border-radius:12px 12px 0 0'></div>
+                    <div style='background:#ffffff;border:1px solid #eaecf0;border-top:0;border-radius:0 0 12px 12px;padding:36px 32px'>
+                      <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                      <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Ihr {{ ContractTypeName }} ist bereit zur Unterschrift</h1>
+                      <p style='line-height:1.65;color:#475467'>anbei erhalten Sie den Vertrag <strong>{{ ContractNumber }}</strong> zur Durchsicht und Unterschrift. Unsere Seite hat bereits unterschrieben — es fehlt nur noch Ihre Unterschrift, um den Vertrag abzuschließen.</p>
+                      <div style='text-align:center;margin:30px 0'>
+                        <a href='{{ SigningUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Vertrag ansehen und unterschreiben</a>
+                      </div>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie Rückfragen zum Vertragsinhalt haben, antworten Sie einfach auf diese E-Mail.</p>
+                      <hr style='border:0;border-top:1px solid #eaecf0;margin:28px 0'/>
+                      <p style='font-size:13px;line-height:1.6;color:#475467;margin:0'>Mit freundlichen Grüßen<br/><strong>Gentle Group</strong><br/>Girardetstraße 17 · 42109 Wuppertal<br/><a href='mailto:office@gentlegroup.de' style='color:#344054'>office@gentlegroup.de</a></p>
+                    </div>
+                  </div>
+                </div>
+                """;
+        if (!existing.Contains("agency-contract-signature"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "agency-contract-signature", Subject = agencyContractSubject, Body = agencyContractBody });
+        else
+        {
+            var agencyContractTemplate = await db.EmailTemplates.FirstAsync(x => x.Key == "agency-contract-signature");
+            agencyContractTemplate.Subject = agencyContractSubject;
+            agencyContractTemplate.Body = agencyContractBody;
         }
         await db.SaveChangesAsync();
     }

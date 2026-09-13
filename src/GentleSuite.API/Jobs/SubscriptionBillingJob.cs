@@ -18,11 +18,13 @@ public class SubscriptionBillingJob
     private readonly IMolliePaymentService _mollie;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SubscriptionBillingJob> _logger;
+    private readonly IAgencyContractService _agencyContracts;
 
-    public SubscriptionBillingJob(AppDbContext db, INumberSequenceService seq, IEmailService email, IPdfService pdf, IMolliePaymentService mollie, IConfiguration configuration, ILogger<SubscriptionBillingJob> logger)
+    public SubscriptionBillingJob(AppDbContext db, INumberSequenceService seq, IEmailService email, IPdfService pdf, IMolliePaymentService mollie, IConfiguration configuration, ILogger<SubscriptionBillingJob> logger, IAgencyContractService agencyContracts)
     {
         _db = db;
         _seq = seq;
+        _agencyContracts = agencyContracts;
         _email = email;
         _pdf = pdf;
         _mollie = mollie;
@@ -93,6 +95,8 @@ public class SubscriptionBillingJob
             throw new InvalidOperationException("Das SEPA-Mandat wurde noch nicht bestätigt. Die Rechnung kann erst danach versendet werden.");
         if (sub.Status is SubscriptionStatus.Cancelled or SubscriptionStatus.Completed or SubscriptionStatus.Expired)
             throw new InvalidOperationException("Für dieses Abonnement kann keine weitere Rechnung mehr gestellt werden.");
+        if (!await _agencyContracts.IsSubscriptionContractSatisfiedAsync(sub.Id))
+            throw new InvalidOperationException("Für dieses Abonnement muss zuerst ein beidseitig unterschriebener Agenturvertrag vorliegen, bevor eine Rechnung erstellt werden kann.");
 
         sub.BillingAuthorizedAt ??= DateTimeOffset.UtcNow;
         if (sub.Status == SubscriptionStatus.PendingConfirmation) sub.Status = SubscriptionStatus.Active;

@@ -83,6 +83,8 @@ builder.Services.AddScoped<IActivityLogService, ActivityLogServiceImpl>();
 builder.Services.AddScoped<ICompanySettingsService, CompanySettingsServiceImpl>();
 builder.Services.AddScoped<ILegalTextService, LegalTextServiceImpl>();
 builder.Services.AddScoped<IPaymentTermService, PaymentTermServiceImpl>();
+builder.Services.AddScoped<IContractTemplateService, ContractTemplateServiceImpl>();
+builder.Services.AddScoped<IAgencyContractService, AgencyContractServiceImpl>();
 builder.Services.AddScoped<ITimeTrackingService, TimeTrackingServiceImpl>();
 builder.Services.AddScoped<IVatService, VatServiceImpl>();
 builder.Services.AddScoped<IEmailLogService, EmailLogServiceImpl>();
@@ -470,6 +472,91 @@ await db.Database.ExecuteSqlRawAsync("""
     // Mandats-Erinnerungsmail (separat von MandateEmailSentAt/-Status/-AttemptCount der Erst-Mail)
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateReminderSentAt') ALTER TABLE "CustomerSubscriptions" ADD "MandateReminderSentAt" DATETIMEOFFSET(7) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateReminderCount') ALTER TABLE "CustomerSubscriptions" ADD "MandateReminderCount" INT NOT NULL DEFAULT 0;""");
+
+    // Agenturvertrag: neue Vertragspflicht gilt nur für ab jetzt neu entstehende Angebote/Abos.
+    // Spalte zunächst NULLable anlegen (SQL Server löst Spaltennamen im selben Batch schon beim Parsen auf,
+    // ein direktes "ADD ...; UPDATE ..." in einem einzigen ExecuteSqlRawAsync-Aufruf schlägt daher fehl) —
+    // Bestandszeilen werden in einem separaten Aufruf auf 0 zurückgesetzt, neue Zeilen schreibt EF ab hier
+    // immer explizit (C#-Default true), sodass am Ende nie NULL übrig bleibt.
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='RequiresAgencyContract') ALTER TABLE "Quotes" ADD "RequiresAgencyContract" BIT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""UPDATE "Quotes" SET "RequiresAgencyContract" = 0 WHERE "RequiresAgencyContract" IS NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Quotes" ALTER COLUMN "RequiresAgencyContract" BIT NOT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='RequiresAgencyContract') ALTER TABLE "CustomerSubscriptions" ADD "RequiresAgencyContract" BIT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""UPDATE "CustomerSubscriptions" SET "RequiresAgencyContract" = 0 WHERE "RequiresAgencyContract" IS NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "CustomerSubscriptions" ALTER COLUMN "RequiresAgencyContract" BIT NOT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ContractTemplates')
+    BEGIN
+        CREATE TABLE "ContractTemplates" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "Key" NVARCHAR(64) NOT NULL,
+            "Name" NVARCHAR(200) NOT NULL,
+            "IsActive" BIT NOT NULL DEFAULT 1,
+            "SortOrder" INT NOT NULL DEFAULT 0,
+            "SectionsJson" NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_ContractTemplates" PRIMARY KEY ("Id")
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='AgencyContracts')
+    BEGIN
+        CREATE TABLE "AgencyContracts" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "ContractNumber" NVARCHAR(64) NOT NULL,
+            "CustomerId" UNIQUEIDENTIFIER NOT NULL,
+            "QuoteId" UNIQUEIDENTIFIER NULL,
+            "SubscriptionId" UNIQUEIDENTIFIER NULL,
+            "ContractTemplateId" UNIQUEIDENTIFIER NULL,
+            "ContractTypeName" NVARCHAR(200) NOT NULL DEFAULT '',
+            "Status" INT NOT NULL DEFAULT 0,
+            "SectionsJson" NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+            "LegalTextBlocks" NVARCHAR(MAX) NULL,
+            "LegalTextBlocksSnapshot" NVARCHAR(MAX) NULL,
+            "TotalContractValue" DECIMAL(18,2) NULL,
+            "RepSignedByName" NVARCHAR(256) NULL,
+            "RepSignedByUserId" UNIQUEIDENTIFIER NULL,
+            "RepSignedAt" DATETIMEOFFSET(7) NULL,
+            "ApprovalToken" NVARCHAR(200) NULL,
+            "ApprovalTokenHash" NVARCHAR(200) NULL,
+            "ApprovalTokenExpiry" DATETIMEOFFSET(7) NULL,
+            "SentAt" DATETIMEOFFSET(7) NULL,
+            "CustomerSignedByName" NVARCHAR(256) NULL,
+            "CustomerSignedByEmail" NVARCHAR(320) NULL,
+            "CustomerSignatureData" NVARCHAR(MAX) NULL,
+            "CustomerSignedAt" DATETIMEOFFSET(7) NULL,
+            "CustomerSignedIpAddress" NVARCHAR(64) NULL,
+            "DeclineReason" NVARCHAR(MAX) NULL,
+            "DocumentHash" NVARCHAR(MAX) NULL,
+            "PreviousDocumentHash" NVARCHAR(MAX) NULL,
+            "IsFinalized" BIT NOT NULL DEFAULT 0,
+            "FinalizedAt" DATETIMEOFFSET(7) NULL,
+            "IsArchived" BIT NOT NULL DEFAULT 0,
+            "ArchivedAt" DATETIMEOFFSET(7) NULL,
+            "RetentionUntil" DATETIMEOFFSET(7) NULL,
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_AgencyContracts" PRIMARY KEY ("Id"),
+            CONSTRAINT "FK_AgencyContracts_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id"),
+            CONSTRAINT "FK_AgencyContracts_Quotes_QuoteId" FOREIGN KEY ("QuoteId") REFERENCES "Quotes" ("Id"),
+            CONSTRAINT "FK_AgencyContracts_CustomerSubscriptions_SubscriptionId" FOREIGN KEY ("SubscriptionId") REFERENCES "CustomerSubscriptions" ("Id"),
+            CONSTRAINT "FK_AgencyContracts_ContractTemplates_ContractTemplateId" FOREIGN KEY ("ContractTemplateId") REFERENCES "ContractTemplates" ("Id")
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_QuoteId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_QuoteId" ON "AgencyContracts" ("QuoteId");""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_SubscriptionId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_SubscriptionId" ON "AgencyContracts" ("SubscriptionId");""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_CustomerId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_CustomerId" ON "AgencyContracts" ("CustomerId");""");
 
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }

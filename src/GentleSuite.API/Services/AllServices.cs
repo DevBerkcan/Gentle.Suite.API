@@ -7,7 +7,9 @@ using GentleSuite.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using System.IO.Compression;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace GentleSuite.Infrastructure.Services;
 
@@ -1183,6 +1185,312 @@ public class PaymentTermServiceImpl : IPaymentTermService
     public async Task DeleteAsync(Guid id, CancellationToken ct) { var l = await _db.PaymentTermOptions.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); _db.PaymentTermOptions.Remove(l); await _db.SaveChangesAsync(ct); }
 }
 public class EmailLogServiceImpl : IEmailLogService { private readonly AppDbContext _db; private readonly IMapper _m; public EmailLogServiceImpl(AppDbContext db, IMapper m) { _db = db; _m = m; } public async Task<PagedResult<EmailLogDto>> GetLogsAsync(PaginationParams p, Guid? cid, CancellationToken ct) { var q = _db.EmailLogs.AsQueryable(); if (cid.HasValue) q = q.Where(e => e.CustomerId == cid.Value); var total = await q.CountAsync(ct); var items = await q.OrderByDescending(e => e.CreatedAt).Skip((p.Page-1)*p.PageSize).Take(p.PageSize).ToListAsync(ct); return new PagedResult<EmailLogDto>(_m.Map<List<EmailLogDto>>(items), total, p.Page, p.PageSize); } }
+
+// === Contract Templates ===
+public class ContractTemplateServiceImpl : IContractTemplateService
+{
+    private readonly AppDbContext _db;
+    public ContractTemplateServiceImpl(AppDbContext db) { _db = db; }
+
+    private static ContractTemplateDto ToDto(ContractTemplate t) => new(
+        t.Id, t.Key, t.Name, t.IsActive, t.SortOrder,
+        JsonSerializer.Deserialize<List<ContractSectionDto>>(t.SectionsJson) ?? new());
+
+    public async Task<List<ContractTemplateDto>> GetAllAsync(CancellationToken ct) =>
+        (await _db.ContractTemplates.OrderBy(t => t.SortOrder).ToListAsync(ct)).Select(ToDto).ToList();
+
+    public async Task<ContractTemplateDto> CreateAsync(CreateContractTemplateRequest req, CancellationToken ct)
+    {
+        var t = new ContractTemplate { Key = req.Key, Name = req.Name, SortOrder = req.SortOrder, IsActive = true, SectionsJson = JsonSerializer.Serialize(req.Sections) };
+        _db.ContractTemplates.Add(t);
+        await _db.SaveChangesAsync(ct);
+        return ToDto(t);
+    }
+
+    public async Task<ContractTemplateDto> UpdateAsync(Guid id, UpdateContractTemplateRequest req, CancellationToken ct)
+    {
+        var t = await _db.ContractTemplates.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        t.Name = req.Name; t.IsActive = req.IsActive; t.SortOrder = req.SortOrder; t.SectionsJson = JsonSerializer.Serialize(req.Sections);
+        await _db.SaveChangesAsync(ct);
+        return ToDto(t);
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct)
+    {
+        var t = await _db.ContractTemplates.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        _db.ContractTemplates.Remove(t);
+        await _db.SaveChangesAsync(ct);
+    }
+}
+
+// === Agency Contracts ===
+public class AgencyContractServiceImpl : IAgencyContractService
+{
+    private readonly AppDbContext _db;
+    private readonly IEmailService _email;
+    private readonly IActivityLogService _activity;
+    private readonly INumberSequenceService _seq;
+    private readonly ICurrentUserService _cu;
+    private readonly IPdfService _pdf;
+    private readonly IConfiguration _config;
+    private readonly ILogger<AgencyContractServiceImpl> _logger;
+    private string FrontendBaseUrl => _config["FrontendBaseUrl"] ?? "http://localhost:3000";
+
+    public AgencyContractServiceImpl(AppDbContext db, IEmailService email, IActivityLogService activity, INumberSequenceService seq, ICurrentUserService cu, IPdfService pdf, IConfiguration config, ILogger<AgencyContractServiceImpl> logger)
+    { _db = db; _email = email; _activity = activity; _seq = seq; _cu = cu; _pdf = pdf; _config = config; _logger = logger; }
+
+    private IQueryable<AgencyContract> QueryWithIncludes() => _db.AgencyContracts
+        .Include(c => c.Customer).ThenInclude(cu => cu.Contacts)
+        .Include(c => c.Customer).ThenInclude(cu => cu.Locations)
+        .Include(c => c.Quote)
+        .Include(c => c.Subscription).ThenInclude(s => s!.Plan);
+
+    private static AgencyContractDto ToDto(AgencyContract c) => new(
+        c.Id, c.ContractNumber, c.CustomerId, c.Customer?.CompanyName,
+        c.QuoteId, c.Quote?.QuoteNumber, c.SubscriptionId,
+        c.Subscription == null ? null : (c.Subscription.IsInstallmentPlan ? c.Subscription.InstallmentSourceTitle : c.Subscription.Plan?.Name),
+        c.ContractTemplateId, c.ContractTypeName, c.Status,
+        JsonSerializer.Deserialize<List<ContractSectionDto>>(c.SectionsJson) ?? new(),
+        c.TotalContractValue, c.RepSignedByName, c.RepSignedAt, c.SentAt,
+        c.CustomerSignedByName, c.CustomerSignedByEmail, c.CustomerSignedAt, c.CustomerSignatureData, c.DeclineReason,
+        c.CreatedAt, c.IsFinalized);
+
+    private static string HashToken(string token)
+    {
+        using var sha = SHA256.Create();
+        return Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(token)));
+    }
+
+    public async Task<List<ContractTriageItemDto>> GetTriageBoardAsync(CancellationToken ct)
+    {
+        var items = new List<ContractTriageItemDto>();
+
+        var quotes = await _db.Quotes.Include(q => q.Customer)
+            .Where(q => q.IsCurrentVersion && q.Status == QuoteStatus.Accepted && q.SignatureStatus == SignatureStatus.Signed && q.RequiresAgencyContract)
+            .ToListAsync(ct);
+        var quoteIds = quotes.Select(q => q.Id).ToList();
+        var quoteContracts = await _db.AgencyContracts.Where(c => c.QuoteId != null && quoteIds.Contains(c.QuoteId.Value)).ToListAsync(ct);
+        foreach (var q in quotes)
+        {
+            var existing = quoteContracts.Where(c => c.QuoteId == q.Id).OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+            if (existing?.Status == AgencyContractStatus.FullyExecuted) continue;
+            items.Add(new ContractTriageItemDto(q.Id, "quote", q.CustomerId, q.Customer.CompanyName, q.Subject ?? q.QuoteNumber, q.QuoteNumber, q.SignedAt ?? q.RespondedAt ?? q.CreatedAt, existing?.Id, existing?.Status));
+        }
+
+        var subs = await _db.CustomerSubscriptions.Include(s => s.Customer).Include(s => s.Plan)
+            .Where(s => s.RequiresAgencyContract && (s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.PendingConfirmation))
+            .ToListAsync(ct);
+        var subIds = subs.Select(s => s.Id).ToList();
+        var subContracts = await _db.AgencyContracts.Where(c => c.SubscriptionId != null && subIds.Contains(c.SubscriptionId.Value)).ToListAsync(ct);
+        foreach (var s in subs)
+        {
+            var existing = subContracts.Where(c => c.SubscriptionId == s.Id).OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+            if (existing?.Status == AgencyContractStatus.FullyExecuted) continue;
+            var kind = s.IsInstallmentPlan ? "installment" : "subscription";
+            var title = s.IsInstallmentPlan ? (s.InstallmentSourceTitle ?? s.Plan.Name) : s.Plan.Name;
+            items.Add(new ContractTriageItemDto(s.Id, kind, s.CustomerId, s.Customer.CompanyName, title, s.ContractReference, s.StartDate, existing?.Id, existing?.Status));
+        }
+
+        return items.OrderBy(i => i.SinceDate).ToList();
+    }
+
+    public async Task<List<AgencyContractDto>> GetAllAsync(CancellationToken ct) =>
+        (await QueryWithIncludes().OrderByDescending(c => c.CreatedAt).ToListAsync(ct)).Select(ToDto).ToList();
+
+    public async Task<AgencyContractDto?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        var c = await QueryWithIncludes().FirstOrDefaultAsync(x => x.Id == id, ct);
+        return c == null ? null : ToDto(c);
+    }
+
+    public async Task<AgencyContractDto?> GetByQuoteIdAsync(Guid quoteId, CancellationToken ct)
+    {
+        var c = await QueryWithIncludes().Where(x => x.QuoteId == quoteId).OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
+        return c == null ? null : ToDto(c);
+    }
+
+    public async Task<AgencyContractDto?> GetBySubscriptionIdAsync(Guid subscriptionId, CancellationToken ct)
+    {
+        var c = await QueryWithIncludes().Where(x => x.SubscriptionId == subscriptionId).OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(ct);
+        return c == null ? null : ToDto(c);
+    }
+
+    public async Task<AgencyContractDto> CreateAsync(CreateAgencyContractRequest req, CancellationToken ct)
+    {
+        if (req.QuoteId == null && req.SubscriptionId == null)
+            throw new InvalidOperationException("Ein Vertrag muss entweder einem Angebot oder einer Serienrechnung/Ratenzahlung zugeordnet sein.");
+
+        Guid customerId; decimal? totalValue;
+        if (req.QuoteId != null)
+        {
+            var quote = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == req.QuoteId, ct) ?? throw new KeyNotFoundException("Angebot nicht gefunden.");
+            customerId = quote.CustomerId;
+            totalValue = quote.GrandTotal;
+        }
+        else
+        {
+            var sub = await _db.CustomerSubscriptions.Include(s => s.Plan).FirstOrDefaultAsync(s => s.Id == req.SubscriptionId, ct) ?? throw new KeyNotFoundException("Abonnement nicht gefunden.");
+            customerId = sub.CustomerId;
+            totalValue = sub.IsInstallmentPlan ? sub.TotalInstallmentAmount : (sub.AgreedMonthlyPrice ?? sub.Plan.MonthlyPrice);
+        }
+
+        var template = await _db.ContractTemplates.FindAsync(new object[] { req.ContractTemplateId }, ct) ?? throw new KeyNotFoundException("Vertragsvorlage nicht gefunden.");
+        var contractNumber = await _seq.NextNumberAsync("AgencyContract", DateTime.UtcNow.Year, "AV", 4, ct, includeYear: false);
+
+        var contract = new AgencyContract
+        {
+            ContractNumber = contractNumber,
+            CustomerId = customerId,
+            QuoteId = req.QuoteId,
+            SubscriptionId = req.SubscriptionId,
+            ContractTemplateId = template.Id,
+            ContractTypeName = template.Name,
+            Status = AgencyContractStatus.Draft,
+            SectionsJson = template.SectionsJson,
+            TotalContractValue = totalValue,
+            RetentionUntil = DateTimeOffset.UtcNow.AddYears(10)
+        };
+        _db.AgencyContracts.Add(contract);
+        await _db.SaveChangesAsync(ct);
+        await _activity.LogAsync(customerId, "AgencyContract", contract.Id, "Created", $"Vertrag {contract.ContractNumber} ({template.Name}) angelegt", ct: ct);
+        return (await GetByIdAsync(contract.Id, ct))!;
+    }
+
+    public async Task<AgencyContractDto> UpdateSectionsAsync(Guid id, UpdateAgencyContractSectionsRequest req, CancellationToken ct)
+    {
+        var c = await _db.AgencyContracts.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        if (c.Status != AgencyContractStatus.Draft) throw new InvalidOperationException("Nur Verträge im Entwurf können bearbeitet werden.");
+        c.SectionsJson = JsonSerializer.Serialize(req.Sections);
+        await _db.SaveChangesAsync(ct);
+        return (await GetByIdAsync(id, ct))!;
+    }
+
+    public async Task<AgencyContractDto> SignAndSendAsync(Guid id, CancellationToken ct)
+    {
+        var c = await _db.AgencyContracts.Include(x => x.Customer).ThenInclude(cu => cu.Contacts).FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException();
+        if (c.Status != AgencyContractStatus.Draft) throw new InvalidOperationException("Dieser Vertrag wurde bereits versendet oder abgeschlossen.");
+        var contact = c.Customer.Contacts.FirstOrDefault(x => x.IsPrimary) ?? c.Customer.Contacts.FirstOrDefault();
+        if (contact == null || string.IsNullOrWhiteSpace(contact.Email))
+            throw new InvalidOperationException("Für diesen Kunden ist keine E-Mail-Adresse hinterlegt.");
+
+        Guid.TryParse(_cu.UserId, out var repUserId);
+        c.RepSignedByName = _cu.UserName ?? "Unbekannt";
+        c.RepSignedByUserId = repUserId == Guid.Empty ? null : repUserId;
+        c.RepSignedAt = DateTimeOffset.UtcNow;
+
+        var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).Replace("+", "").Replace("/", "").Replace("=", "");
+        c.ApprovalToken = token;
+        c.ApprovalTokenHash = HashToken(token);
+        c.ApprovalTokenExpiry = DateTimeOffset.UtcNow.AddDays(30);
+
+        var chosenKeys = string.IsNullOrEmpty(c.LegalTextBlocks) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(c.LegalTextBlocks) ?? new();
+        var autoAttachKeys = await _db.LegalTextBlocks.Where(b => b.IsActive && b.AutoAttachToQuotes).Select(b => b.Key).ToListAsync(ct);
+        var allKeys = chosenKeys.Union(autoAttachKeys).ToList();
+        if (allKeys.Count > 0)
+        {
+            var blocks = await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
+            c.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks.Select(b => new { b.Key, b.Title, b.Content, b.AttachmentFileName }));
+        }
+
+        c.Status = AgencyContractStatus.SentForSignature;
+        c.SentAt = DateTimeOffset.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        var signingUrl = $"{FrontendBaseUrl}/agency-contract/{token}";
+        try
+        {
+            await _email.SendTemplatedEmailAsync(contact.Email, "agency-contract-signature", new Dictionary<string, object>
+            {
+                ["ContactName"] = contact.FirstName,
+                ["ContractNumber"] = c.ContractNumber,
+                ["ContractTypeName"] = c.ContractTypeName,
+                ["SigningUrl"] = signingUrl
+            }, c.CustomerId, ct: ct);
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Agency contract signature email failed for {ContractId}", id); }
+
+        await _activity.LogAsync(c.CustomerId, "AgencyContract", c.Id, "SentForSignature", $"Vertrag {c.ContractNumber} unterschrieben (intern) und an Kunden gesendet", ct: ct);
+        return (await GetByIdAsync(id, ct))!;
+    }
+
+    public async Task<AgencyContractDto?> GetByApprovalTokenAsync(string token, CancellationToken ct)
+    {
+        var tokenHash = HashToken(token);
+        var c = await QueryWithIncludes().FirstOrDefaultAsync(x => x.ApprovalTokenHash == tokenHash, ct);
+        if (c == null || c.ApprovalTokenExpiry <= DateTimeOffset.UtcNow) return null;
+        return ToDto(c);
+    }
+
+    public async Task ProcessApprovalAsync(string token, ProcessAgencyContractApprovalRequest req, string? ipAddress, CancellationToken ct)
+    {
+        var tokenHash = HashToken(token);
+        var c = await _db.AgencyContracts.FirstOrDefaultAsync(x => x.ApprovalTokenHash == tokenHash, ct) ?? throw new KeyNotFoundException();
+        if (c.ApprovalTokenExpiry <= DateTimeOffset.UtcNow) throw new InvalidOperationException("Der Link ist abgelaufen.");
+        if (c.Status != AgencyContractStatus.SentForSignature) throw new InvalidOperationException("Über diesen Vertrag wurde bereits entschieden.");
+
+        if (req.Accepted)
+        {
+            if (string.IsNullOrWhiteSpace(req.SignerName) || string.IsNullOrWhiteSpace(req.SignerEmail) || string.IsNullOrWhiteSpace(req.SignatureData))
+                throw new InvalidOperationException("Name, E-Mail und Unterschrift sind erforderlich.");
+            c.CustomerSignedByName = req.SignerName;
+            c.CustomerSignedByEmail = req.SignerEmail;
+            c.CustomerSignatureData = req.SignatureData;
+            c.CustomerSignedAt = DateTimeOffset.UtcNow;
+            c.CustomerSignedIpAddress = ipAddress;
+            c.Status = AgencyContractStatus.FullyExecuted;
+            c.IsFinalized = true;
+            c.FinalizedAt = DateTimeOffset.UtcNow;
+
+            var lastHash = await _db.AgencyContracts.Where(x => x.IsFinalized && x.Id != c.Id).OrderByDescending(x => x.FinalizedAt).Select(x => x.DocumentHash).FirstOrDefaultAsync(ct);
+            var content = $"{c.ContractNumber}|{c.TotalContractValue}|{c.CustomerSignedAt:O}|{lastHash ?? "GENESIS"}";
+            using var sha = SHA256.Create();
+            c.DocumentHash = Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(content)));
+            c.PreviousDocumentHash = lastHash;
+
+            await _activity.LogAsync(c.CustomerId, "AgencyContract", c.Id, "FullyExecuted", $"Vertrag {c.ContractNumber} beidseitig unterschrieben", ct: ct);
+        }
+        else
+        {
+            c.Status = AgencyContractStatus.Declined;
+            c.DeclineReason = req.DeclineReason;
+            await _activity.LogAsync(c.CustomerId, "AgencyContract", c.Id, "Declined", $"Vertrag {c.ContractNumber} abgelehnt: {req.DeclineReason}", ct: ct);
+        }
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task<byte[]> GeneratePdfAsync(Guid id, CancellationToken ct)
+    {
+        var c = await QueryWithIncludes().FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException();
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "Gentle Group" };
+        return await _pdf.GenerateAgencyContractPdfAsync(c, co, ct);
+    }
+
+    public async Task<byte[]> GeneratePdfByTokenAsync(string token, CancellationToken ct)
+    {
+        var tokenHash = HashToken(token);
+        var c = await QueryWithIncludes().FirstOrDefaultAsync(x => x.ApprovalTokenHash == tokenHash, ct) ?? throw new KeyNotFoundException();
+        var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "Gentle Group" };
+        return await _pdf.GenerateAgencyContractPdfAsync(c, co, ct);
+    }
+
+    public async Task<bool> IsQuoteContractSatisfiedAsync(Guid quoteId, CancellationToken ct)
+    {
+        var quote = await _db.Quotes.Where(q => q.Id == quoteId).Select(q => new { q.RequiresAgencyContract }).FirstOrDefaultAsync(ct);
+        if (quote == null || !quote.RequiresAgencyContract) return true;
+        return await _db.AgencyContracts.AnyAsync(c => c.QuoteId == quoteId && c.Status == AgencyContractStatus.FullyExecuted, ct);
+    }
+
+    public async Task<bool> IsSubscriptionContractSatisfiedAsync(Guid subscriptionId, CancellationToken ct)
+    {
+        var sub = await _db.CustomerSubscriptions.Where(s => s.Id == subscriptionId).Select(s => new { s.RequiresAgencyContract, s.ContractQuoteId }).FirstOrDefaultAsync(ct);
+        if (sub == null || !sub.RequiresAgencyContract) return true;
+        var hasDirect = await _db.AgencyContracts.AnyAsync(c => c.SubscriptionId == subscriptionId && c.Status == AgencyContractStatus.FullyExecuted, ct);
+        if (hasDirect) return true;
+        if (sub.ContractQuoteId != null)
+            return await _db.AgencyContracts.AnyAsync(c => c.QuoteId == sub.ContractQuoteId && c.Status == AgencyContractStatus.FullyExecuted, ct);
+        return false;
+    }
+}
 
 // === Journal ===
 public class JournalServiceImpl : IJournalService

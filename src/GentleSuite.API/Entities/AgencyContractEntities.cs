@@ -1,0 +1,59 @@
+using GentleSuite.Domain.Enums;
+
+namespace GentleSuite.Domain.Entities;
+
+/// <summary>Admin-managed template of default clause sections for a contract type
+/// (Wartungsvertrag, SEO-Vertrag, Webdesign-Vertrag, ...). Analogous to LegalTextBlock,
+/// but a template groups multiple named sections instead of one text block.</summary>
+public class ContractTemplate : BaseEntity
+{
+    public string Key { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+    /// <summary>[{Title, Content}] default clauses, copied into a new AgencyContract's SectionsJson at creation.</summary>
+    public string SectionsJson { get; set; } = "[]";
+}
+
+/// <summary>GoBD-relevant, bilaterally-signed agency contract concluded after a Quote is accepted, or
+/// directly for a Serienrechnung/Ratenzahlung (with or without an originating Quote). At least one of
+/// QuoteId/SubscriptionId is set. Its own hash chain, independent of Quotes/Invoices.</summary>
+public class AgencyContract : GobdEntity
+{
+    public string ContractNumber { get; set; } = string.Empty;
+    public Guid CustomerId { get; set; }
+    public Customer Customer { get; set; } = null!;
+    public Guid? QuoteId { get; set; }
+    public Quote? Quote { get; set; }
+    public Guid? SubscriptionId { get; set; }
+    public CustomerSubscription? Subscription { get; set; }
+    public Guid? ContractTemplateId { get; set; }
+    public ContractTemplate? ContractTemplate { get; set; }
+    /// <summary>Snapshot of the template's name at creation time (e.g. "Wartungsvertrag").</summary>
+    public string ContractTypeName { get; set; } = string.Empty;
+    public AgencyContractStatus Status { get; set; } = AgencyContractStatus.Draft;
+    /// <summary>[{Title, Content}] editable clause sections, seeded from the chosen ContractTemplate.</summary>
+    public string SectionsJson { get; set; } = "[]";
+    public string? LegalTextBlocks { get; set; }
+    public string? LegalTextBlocksSnapshot { get; set; }
+    public decimal? TotalContractValue { get; set; }
+
+    // Auftragnehmer (agency) side — one-click confirmation by the logged-in employee.
+    public string? RepSignedByName { get; set; }
+    public Guid? RepSignedByUserId { get; set; }
+    public DateTimeOffset? RepSignedAt { get; set; }
+
+    // Public token link for the customer's signature.
+    public string? ApprovalToken { get; set; }
+    public string? ApprovalTokenHash { get; set; }
+    public DateTimeOffset? ApprovalTokenExpiry { get; set; }
+    public DateTimeOffset? SentAt { get; set; }
+
+    // Auftraggeber (customer) side — drawn signature, same mechanism as Quote.
+    public string? CustomerSignedByName { get; set; }
+    public string? CustomerSignedByEmail { get; set; }
+    public string? CustomerSignatureData { get; set; }
+    public DateTimeOffset? CustomerSignedAt { get; set; }
+    public string? CustomerSignedIpAddress { get; set; }
+    public string? DeclineReason { get; set; }
+}
