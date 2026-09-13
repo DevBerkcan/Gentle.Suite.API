@@ -602,7 +602,7 @@ public class SubscriptionServiceImpl : ISubscriptionService
         var subs = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
         var dtos = _m.Map<List<CustomerSubscriptionDto>>(subs);
         var paid = await GetPaidAmountsAsync(subs.Select(s => s.Id), ct);
-        return dtos.Select(d => d with { PaidAmount = paid.GetValueOrDefault(d.Id) }).ToList();
+        return dtos.Zip(subs, (d, s) => d with { PaidAmount = paid.GetValueOrDefault(d.Id), BillingStage = DashboardAmounts.Stage(s) }).ToList();
     }
 
     public async Task<CustomerSubscriptionDto> GetByIdAsync(Guid sid, CancellationToken ct)
@@ -610,7 +610,7 @@ public class SubscriptionServiceImpl : ISubscriptionService
         var sub = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).FirstOrDefaultAsync(s => s.Id == sid, ct) ?? throw new KeyNotFoundException();
         var dto = _m.Map<CustomerSubscriptionDto>(sub);
         var paid = await GetPaidAmountsAsync(new[] { sid }, ct);
-        return dto with { PaidAmount = paid.GetValueOrDefault(sid) };
+        return dto with { PaidAmount = paid.GetValueOrDefault(sid), BillingStage = DashboardAmounts.Stage(sub) };
     }
 
     public async Task<List<CustomerSubscriptionDto>> GetCustomerSubscriptionsAsync(Guid cid, CancellationToken ct)
@@ -618,7 +618,62 @@ public class SubscriptionServiceImpl : ISubscriptionService
         var subs = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).Where(s => s.CustomerId == cid).OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
         var dtos = _m.Map<List<CustomerSubscriptionDto>>(subs);
         var paid = await GetPaidAmountsAsync(subs.Select(s => s.Id), ct);
-        return dtos.Select(d => d with { PaidAmount = paid.GetValueOrDefault(d.Id) }).ToList();
+        return dtos.Zip(subs, (d, s) => d with { PaidAmount = paid.GetValueOrDefault(d.Id), BillingStage = DashboardAmounts.Stage(s) }).ToList();
+    }
+
+    /// <summary>Read-only forward projection of upcoming charges across all billing-ready subscriptions
+    /// (Serienrechnung + Ratenzahlung), for the cross-customer billing calendar. Mirrors the cycle/rounding
+    /// math in SubscriptionBillingJob.BillSubscriptionAsync exactly, but never mutates anything.</summary>
+    public async Task<BillingCalendarDto> GetBillingCalendarAsync(int days, CancellationToken ct)
+    {
+        var subs = await _db.CustomerSubscriptions
+            .Include(s => s.Plan).Include(s => s.Customer)
+            .Where(s => s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.PendingConfirmation)
+            .ToListAsync(ct);
+
+        var horizon = DateTimeOffset.UtcNow.Date.AddDays(days);
+        var occurrences = new List<BillingOccurrenceDto>();
+
+        foreach (var s in subs)
+        {
+            if (DashboardAmounts.Stage(s) != "ready") continue;
+            var title = s.IsInstallmentPlan ? (s.InstallmentSourceTitle ?? s.Plan.Name) : s.Plan.Name;
+            var customerName = s.Customer.CompanyName;
+
+            if (s.IsInstallmentPlan)
+            {
+                var total = s.TotalInstallmentAmount ?? 0m;
+                var count = s.ContractDurationMonths ?? 1;
+                var baseAmount = s.AgreedMonthlyPrice ?? Math.Floor(total / count * 100m) / 100m;
+                var date = s.NextBillingDate;
+                for (var installmentIndex = s.InstallmentsCompleted; installmentIndex < count && date <= horizon; installmentIndex++)
+                {
+                    var isLast = installmentIndex >= count - 1;
+                    var amount = isLast ? total - baseAmount * (count - 1) : baseAmount;
+                    occurrences.Add(new BillingOccurrenceDto(s.Id, customerName, title, true, date, amount, isLast));
+                    date = date.AddMonths(1);
+                }
+            }
+            else
+            {
+                var amount = s.AgreedMonthlyPrice ?? s.Plan.MonthlyPrice;
+                var date = s.NextBillingDate;
+                var stepMonths = s.ContractBillingCycle switch { BillingCycle.Quarterly => 3, BillingCycle.Yearly => 12, _ => 1 };
+                while (date <= horizon)
+                {
+                    occurrences.Add(new BillingOccurrenceDto(s.Id, customerName, title, false, date, amount, false));
+                    date = date.AddMonths(stepMonths);
+                }
+            }
+        }
+
+        occurrences = occurrences.OrderBy(o => o.Date).ToList();
+        var in30 = DateTimeOffset.UtcNow.Date.AddDays(30);
+        var in90 = DateTimeOffset.UtcNow.Date.AddDays(90);
+        return new BillingCalendarDto(
+            occurrences,
+            occurrences.Where(o => o.Date <= in30).Sum(o => o.Amount),
+            occurrences.Where(o => o.Date <= in90).Sum(o => o.Amount));
     }
     public async Task<List<EligibleSubscriptionQuoteDto>> GetEligibleQuotesAsync(Guid customerId, CancellationToken ct) => await _db.Quotes
         .AsNoTracking()

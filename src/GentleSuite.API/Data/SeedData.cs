@@ -457,6 +457,45 @@ END;
             mandateTemplate.Subject = mandateSubject;
             mandateTemplate.Body = mandateBody;
         }
+        const string mandateReminderSubject = "Erinnerung: Zahlungsart für {{ PlanName }} noch nicht eingerichtet";
+        const string mandateReminderBody = """
+                <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
+                  <div style='max-width:620px;margin:0 auto'>
+                    <div style='padding:0 8px 20px;font-size:22px;font-weight:700;color:#344054'>GentleSuite</div>
+                    <div style='height:5px;background:linear-gradient(90deg,#344054,#10b981);border-radius:12px 12px 0 0'></div>
+                    <div style='background:#ffffff;border:1px solid #eaecf0;border-top:0;border-radius:0 0 12px 12px;padding:36px 32px'>
+                      <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                      <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Ihre Zahlungsart ist noch nicht eingerichtet</h1>
+                      <p style='line-height:1.65;color:#475467'>vor {{ DaysWaiting }} Tagen haben wir Ihnen eine E-Mail zur Einrichtung der Zahlungsart für <strong>{{ PlanName }}</strong> über <strong>{{ MonthlyPrice }} EUR monatlich</strong> geschickt. Diese ist noch nicht abgeschlossen.</p>
+                      <div style='background:#fffaeb;border:1px solid #fec84b;border-radius:10px;padding:16px 18px;margin:20px 0;color:#93370d;font-size:14px;line-height:1.6'>
+                        <strong>Ohne abgeschlossenes SEPA-Mandat</strong> können wir die vereinbarte Leistung nicht wie vertraglich vorgesehen abrechnen. Es dauert unter einer Minute, die Einrichtung abzuschließen:
+                      </div>
+                      <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                        <div style='margin-bottom:8px'><strong>So geht's:</strong></div>
+                        <div style='margin-bottom:6px'>1. Klicken Sie unten auf "Zahlungsart jetzt einrichten".</div>
+                        <div style='margin-bottom:6px'>2. Bestätigen Sie Ihre SEPA-Lastschrift bei Mollie, unserem Zahlungsdienstleister.</div>
+                        <div>3. Fertig — es wird dabei noch nichts abgebucht, außer einer 0,01 EUR Autorisierungszahlung.</div>
+                      </div>
+                      <div style='text-align:center;margin:30px 0'>
+                        <a href='{{ CheckoutUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Zahlungsart jetzt einrichten</a>
+                      </div>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Vertragsgrundlage: Angebot {{ ContractReference }}. Dies ist Erinnerung Nr. {{ ReminderNumber }} zu dieser Einrichtung.</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Falls es technische Probleme gibt oder Sie Rückfragen haben, antworten Sie einfach auf diese E-Mail — wir helfen gerne weiter.</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Informationen zur Verarbeitung Ihrer Daten durch Gentle Group und den Zahlungsdienstleister Mollie finden Sie in unserer <a href='https://www.gentlegroup.de/datenschutzerklaerung' style='color:#344054'>Datenschutzerklärung</a>.</p>
+                      <hr style='border:0;border-top:1px solid #eaecf0;margin:28px 0'/>
+                      <p style='font-size:13px;line-height:1.6;color:#475467;margin:0'>Mit freundlichen Grüßen<br/><strong>Gentle Group</strong><br/>Girardetstraße 17 · 42109 Wuppertal<br/><a href='mailto:office@gentlegroup.de' style='color:#344054'>office@gentlegroup.de</a></p>
+                    </div>
+                  </div>
+                </div>
+                """;
+        if (!existing.Contains("subscription-mandate-reminder"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "subscription-mandate-reminder", Subject = mandateReminderSubject, Body = mandateReminderBody });
+        else
+        {
+            var mandateReminderTemplate = await db.EmailTemplates.FirstAsync(x => x.Key == "subscription-mandate-reminder");
+            mandateReminderTemplate.Subject = mandateReminderSubject;
+            mandateReminderTemplate.Body = mandateReminderBody;
+        }
         await db.SaveChangesAsync();
     }
 

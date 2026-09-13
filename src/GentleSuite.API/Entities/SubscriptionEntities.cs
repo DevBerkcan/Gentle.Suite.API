@@ -88,6 +88,13 @@ public class CustomerSubscription : BaseEntity
     public Invoice? DownPaymentInvoice { get; set; }
     /// <summary>"hybrid" | "monthly12" | "monthly24" — which Preisangebot option this plan came from.</summary>
     public string? PaymentPlanOptionKey { get; set; }
+
+    // Mandats-Erinnerung: separat von MandateEmailSentAt/-Status/-AttemptCount getrackt, damit die
+    // "Mandats-E-Mail"-Spalte weiterhin nur die erste Einrichtungs-Mail beschreibt.
+    /// <summary>When the most recent mandate reminder email was successfully sent.</summary>
+    public DateTimeOffset? MandateReminderSentAt { get; set; }
+    /// <summary>How many mandate reminder emails have been sent so far (capped at 3).</summary>
+    public int MandateReminderCount { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity

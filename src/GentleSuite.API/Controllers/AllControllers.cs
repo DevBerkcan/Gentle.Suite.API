@@ -443,6 +443,7 @@ public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentSer
         return result.Sent ? Ok(result) : BadRequest(result);
     }
     [HttpPost("manual-installment-plan")] public async Task<ActionResult<CustomerSubscriptionDto>> CreateManualInstallmentPlan(CreateManualInstallmentPlanRequest req) => Ok(await svc.CreateManualInstallmentPlanAsync(req));
+    [HttpGet("billing-calendar")] public async Task<ActionResult<BillingCalendarDto>> BillingCalendar([FromQuery] int days = 90) => Ok(await svc.GetBillingCalendarAsync(days));
     [HttpGet("{id}/invoices")] public async Task<ActionResult<List<SubscriptionInvoiceDto>>> GetInvoices(Guid id) => Ok(await svc.GetInvoicesAsync(id));
     [HttpPost("{id}/bill-now")]
     public async Task<ActionResult<CustomerSubscriptionDto>> BillNow(Guid id)

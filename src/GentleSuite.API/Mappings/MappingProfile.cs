@@ -164,7 +164,8 @@ public class MappingProfile : Profile
                 s.InstallmentSurchargePercent,
                 s.DownPaymentPercent,
                 s.DownPaymentInvoiceId,
-                s.PaymentPlanOptionKey
+                s.PaymentPlanOptionKey,
+                "review"
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()

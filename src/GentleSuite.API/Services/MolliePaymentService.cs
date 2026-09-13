@@ -175,6 +175,66 @@ public sealed class MolliePaymentService : IMolliePaymentService
         return new MandateEmailResultDto(false, subscription.MandateEmailRecipient, subscription.MandateEmailSentAt, "Failed", subscription.MandateEmailLastError);
     }
 
+    /// <summary>Nudges a customer who hasn't completed the SEPA mandate yet, days after the initial
+    /// setup email (`SendMandateEmailAsync`). Tracked separately via MandateReminderSentAt/-Count so the
+    /// "Mandats-E-Mail" column keeps describing only the first email. Called by ReminderJobs on a cron.</summary>
+    public async Task<MandateEmailResultDto> SendMandateReminderEmailAsync(Guid subscriptionId, CancellationToken ct)
+    {
+        var subscription = await _db.CustomerSubscriptions
+            .Include(s => s.Plan)
+            .Include(s => s.Customer).ThenInclude(c => c.Contacts)
+            .FirstOrDefaultAsync(s => s.Id == subscriptionId, ct)
+            ?? throw new KeyNotFoundException("Abonnement wurde nicht gefunden.");
+
+        var contact = subscription.Customer.Contacts.FirstOrDefault(c => c.IsPrimary)
+            ?? subscription.Customer.Contacts.FirstOrDefault();
+        var recipient = contact?.Email?.Trim();
+
+        if (string.IsNullOrWhiteSpace(recipient))
+            throw new InvalidOperationException("Beim Kunden ist keine E-Mail-Adresse hinterlegt.");
+        if (string.Equals(subscription.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Für dieses Abonnement besteht bereits ein gültiges Mollie-Mandat.");
+
+        EnsureB2bContractEvidence(subscription);
+        var checkout = await StartMandateCheckoutAsync(subscriptionId, ct);
+        var startedAt = DateTimeOffset.UtcNow;
+        var contactName = string.Join(" ", new[] { contact!.FirstName, contact.LastName }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+        if (string.IsNullOrWhiteSpace(contactName)) contactName = subscription.Customer.CompanyName;
+        var daysWaiting = subscription.MandateEmailSentAt != null
+            ? Math.Max(1, (int)Math.Round((DateTimeOffset.UtcNow - subscription.MandateEmailSentAt.Value).TotalDays))
+            : 2;
+
+        await _email.SendTemplatedEmailAsync(
+            recipient,
+            "subscription-mandate-reminder",
+            new Dictionary<string, object>
+            {
+                ["ContactName"] = contactName,
+                ["CustomerName"] = subscription.Customer.CompanyName,
+                ["PlanName"] = subscription.InstallmentSourceTitle ?? subscription.Plan.Name,
+                ["MonthlyPrice"] = (subscription.AgreedMonthlyPrice ?? subscription.Plan.MonthlyPrice).ToString("0.00", CultureInfo.GetCultureInfo("de-DE")),
+                ["ContractReference"] = subscription.ContractReference ?? "-",
+                ["DaysWaiting"] = daysWaiting,
+                ["ReminderNumber"] = subscription.MandateReminderCount + 1,
+                ["CheckoutUrl"] = checkout.CheckoutUrl
+            },
+            subscription.CustomerId,
+            ct: ct);
+
+        var emailLog = await _db.EmailLogs
+            .Where(e => e.TemplateKey == "subscription-mandate-reminder" && e.CustomerId == subscription.CustomerId && e.To == recipient && e.CreatedAt >= startedAt.AddMinutes(-1))
+            .OrderByDescending(e => e.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (emailLog?.Status != EmailStatus.Sent)
+            throw new InvalidOperationException(emailLog?.Error ?? "Die Erinnerungs-E-Mail konnte nicht versendet werden.");
+
+        subscription.MandateReminderSentAt = emailLog.SentAt ?? DateTimeOffset.UtcNow;
+        subscription.MandateReminderCount++;
+        await _db.SaveChangesAsync(ct);
+        return new MandateEmailResultDto(true, recipient, subscription.MandateReminderSentAt, "Sent", null);
+    }
+
     public async Task CollectInvoiceAsync(Guid invoiceId, CancellationToken ct)
     {
         var invoice = await _db.Invoices

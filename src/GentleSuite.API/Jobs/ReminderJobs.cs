@@ -8,8 +8,8 @@ namespace GentleSuite.Infrastructure.Jobs;
 
 public class ReminderJobs
 {
-    private readonly AppDbContext _db; private readonly IEmailService _email; private readonly ILogger<ReminderJobs> _log; private readonly string _frontendBaseUrl; private readonly INumberSequenceService _seq;
-    public ReminderJobs(AppDbContext db, IEmailService email, ILogger<ReminderJobs> log, IConfiguration config, INumberSequenceService seq) { _db = db; _email = email; _log = log; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; }
+    private readonly AppDbContext _db; private readonly IEmailService _email; private readonly ILogger<ReminderJobs> _log; private readonly string _frontendBaseUrl; private readonly INumberSequenceService _seq; private readonly IMolliePaymentService _mollie;
+    public ReminderJobs(AppDbContext db, IEmailService email, ILogger<ReminderJobs> log, IConfiguration config, INumberSequenceService seq, IMolliePaymentService mollie) { _db = db; _email = email; _log = log; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _mollie = mollie; }
 
     public async Task CheckOverdueInvoicesAsync()
     {
@@ -75,6 +75,33 @@ public class ReminderJobs
                 _log.LogInformation("Sent {Level} reminder for invoice {Nr}", targetLevel, inv.InvoiceNumber);
             }
             catch (Exception ex) { _log.LogError(ex, "Reminder email failed for invoice {Nr}", inv.InvoiceNumber); }
+        }
+    }
+
+    /// <summary>Nudges customers who haven't completed their SEPA mandate ~2 days after the setup email,
+    /// then again every ~2 days up to 3 reminders total. Beyond that the case goes quiet automatically —
+    /// it stays visible via DashboardAmounts.Stage == "mandate" for manual follow-up.</summary>
+    public async Task SendMandateRemindersAsync()
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-2);
+        var candidates = await _db.CustomerSubscriptions
+            .Include(s => s.Plan)
+            .Include(s => s.Customer).ThenInclude(c => c.Contacts)
+            .Where(s => s.MandateEmailStatus == "Sent" && s.MandateEmailSentAt != null && s.MandateReminderCount < 3)
+            .ToListAsync();
+
+        foreach (var sub in candidates)
+        {
+            if (GentleSuite.Infrastructure.Services.DashboardAmounts.Stage(sub) != "mandate") continue;
+            var lastTouch = sub.MandateReminderSentAt ?? sub.MandateEmailSentAt!.Value;
+            if (lastTouch > cutoff) continue;
+
+            try
+            {
+                await _mollie.SendMandateReminderEmailAsync(sub.Id);
+                _log.LogInformation("Sent mandate reminder #{Count} for subscription {SubId}", sub.MandateReminderCount, sub.Id);
+            }
+            catch (Exception ex) { _log.LogError(ex, "Mandate reminder failed for subscription {SubId}", sub.Id); }
         }
     }
 

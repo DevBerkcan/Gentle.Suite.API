@@ -467,6 +467,10 @@ await db.Database.ExecuteSqlRawAsync("""
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='DownPaymentInvoiceId') ALTER TABLE "CustomerSubscriptions" ADD "DownPaymentInvoiceId" UNIQUEIDENTIFIER NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='PaymentPlanOptionKey') ALTER TABLE "CustomerSubscriptions" ADD "PaymentPlanOptionKey" NVARCHAR(32) NULL;""");
 
+    // Mandats-Erinnerungsmail (separat von MandateEmailSentAt/-Status/-AttemptCount der Erst-Mail)
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateReminderSentAt') ALTER TABLE "CustomerSubscriptions" ADD "MandateReminderSentAt" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateReminderCount') ALTER TABLE "CustomerSubscriptions" ADD "MandateReminderCount" INT NOT NULL DEFAULT 0;""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)
@@ -530,6 +534,7 @@ RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAs
 RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6));
 RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOverdueInvoicesAsync(), Cron.Daily(7));
 RecurringJob.AddOrUpdate<ReminderJobs>("send-overdue-reminders", j => j.SendOverdueRemindersAsync(), Cron.Daily(8));
+RecurringJob.AddOrUpdate<ReminderJobs>("send-mandate-reminders", j => j.SendMandateRemindersAsync(), Cron.Daily(9));
 
 app.Run();
 

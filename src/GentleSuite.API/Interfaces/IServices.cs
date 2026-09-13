@@ -171,12 +171,14 @@ public interface ISubscriptionService
     Task<CustomerSubscriptionDto> CreateInstallmentPlanFromQuoteAsync(Guid customerId, Guid quoteId, int months, CancellationToken ct = default);
     Task<CustomerSubscriptionDto> CreateSurchargedInstallmentPlanAsync(Guid customerId, Guid quoteId, int months, decimal financedAmount, decimal? informationalSurchargePercent, decimal? downPaymentPercent, Guid? downPaymentInvoiceId, string paymentPlanOptionKey, CancellationToken ct = default);
     Task<CustomerSubscriptionDto> CreateManualInstallmentPlanAsync(CreateManualInstallmentPlanRequest req, CancellationToken ct = default);
+    Task<BillingCalendarDto> GetBillingCalendarAsync(int days, CancellationToken ct = default);
 }
 
 public interface IMolliePaymentService
 {
     Task<MollieMandateCheckoutDto> StartMandateCheckoutAsync(Guid subscriptionId, CancellationToken ct = default);
     Task<MandateEmailResultDto> SendMandateEmailAsync(Guid subscriptionId, CancellationToken ct = default);
+    Task<MandateEmailResultDto> SendMandateReminderEmailAsync(Guid subscriptionId, CancellationToken ct = default);
     Task HandlePaymentWebhookAsync(string paymentId, CancellationToken ct = default);
     Task CollectInvoiceAsync(Guid invoiceId, CancellationToken ct = default);
 }
