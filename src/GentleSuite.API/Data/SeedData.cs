@@ -620,78 +620,339 @@ END;
         db.OnboardingWorkflowTemplates.AddRange(t, seo, branding, social, app); await db.SaveChangesAsync();
     }
 
+    /// <summary>Nur relevant fuer eine komplett frische, leere Datenbank — der eigentliche Aktualisierungsweg
+    /// fuer eine bereits laufende Umgebung ist SeedMissingEmailTemplates weiter unten, die bei jedem Start
+    /// laeuft. Beide halten die gleichen Inhalte, damit ein frisches Setup direkt im aktuellen Design startet.</summary>
     static async Task SeedEmailTemplates(AppDbContext db)
     {
         if (await db.EmailTemplates.AnyAsync()) return;
         db.EmailTemplates.AddRange(
-            new EmailTemplate{Key="welcome",Subject="Willkommen bei {{ CompanyName }} – Ihre naechsten Schritte",Body="<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto'><h2 style='color:#1a1a1a'>Herzlich willkommen, {{ ContactName }}!</h2><p>Vielen Dank, dass sich <b>{{ CustomerName }}</b> fuer eine Zusammenarbeit mit <b>{{ CompanyName }}</b> entschieden hat. Wir freuen uns sehr darauf, gemeinsam Ihr Projekt umzusetzen.</p><h3 style='color:#333;margin-top:24px'>So geht es weiter:</h3><ol style='line-height:1.8'><li><b>Onboarding:</b> Ihr persoenlicher Projektablauf wurde bereits angelegt. Wir werden Sie Schritt fuer Schritt durch den Prozess fuehren.</li><li><b>Kick-off:</b> In Kuerze erhalten Sie eine Einladung zu unserem gemeinsamen Kick-off-Gespraech.</li><li><b>Zugaenge:</b> Bitte halten Sie relevante Zugangsdaten (Domain, Hosting, Analytics etc.) bereit.</li></ol><p style='margin-top:24px'>Bei Fragen stehen wir Ihnen jederzeit gerne zur Verfuegung:</p><table style='margin:12px 0;font-size:14px'><tr><td style='padding:4px 12px 4px 0;color:#666'>E-Mail:</td><td>{{ CompanyEmail }}</td></tr><tr><td style='padding:4px 12px 4px 0;color:#666'>Telefon:</td><td>{{ CompanyPhone }}</td></tr></table><p style='margin-top:24px'>Wir freuen uns auf eine erfolgreiche Zusammenarbeit!</p><p>Mit freundlichen Gruessen<br/><b>{{ CompanyName }}</b></p></div>"},
-            new EmailTemplate{Key="quote-sent",Subject="Angebot {{ QuoteNumber }}",Body="<h1>Ihr Angebot</h1><p>Hallo {{ ContactName }},</p><p>Ihr Angebot <b>{{ QuoteNumber }}</b> ueber <b>{{ Total }} EUR</b> ist bereit.</p><p><a href='{{ ApprovalLink }}'>Angebot ansehen & bestaetigen</a></p><p>Gueltig bis: {{ ExpiresAt }}</p>"},
-            new EmailTemplate{Key="invoice-sent",Subject="Rechnung {{ InvoiceNumber }}",Body="<h1>Ihre Rechnung</h1><p>Hallo {{ ContactName }},</p><p>anbei Ihre Rechnung <b>{{ InvoiceNumber }}</b> ueber <b>{{ GrossTotal }} EUR</b>.</p><p>Faellig bis: {{ DueDate }}</p>"},
-            new EmailTemplate{Key="invoice-reminder-1",Subject="Zahlungserinnerung: {{ InvoiceNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>die Rechnung {{ InvoiceNumber }} ueber {{ GrossTotal }} EUR ist seit dem {{ DueDate }} faellig. Bitte ueberweisen Sie den Betrag.</p>"},
-            new EmailTemplate{Key="invoice-reminder-2",Subject="2. Mahnung: {{ InvoiceNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>trotz unserer Erinnerung ist die Rechnung {{ InvoiceNumber }} noch offen. Bitte begleichen Sie {{ GrossTotal }} EUR umgehend.</p>"},
-            new EmailTemplate{Key="invoice-reminder-3",Subject="Letzte Mahnung: {{ InvoiceNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>dies ist unsere letzte Mahnung fuer Rechnung {{ InvoiceNumber }}. Bei Nichtzahlung behalten wir uns weitere Schritte vor.</p>"},
-            new EmailTemplate{Key="payment-received",Subject="Zahlungseingang bestaetigt – Rechnung {{ InvoiceNumber }}",Body="<h1>Zahlung erhalten</h1><p>Hallo {{ ContactName }},</p><p>wir bestaetigen den Eingang Ihrer Zahlung ueber <b>{{ GrossTotal }} EUR</b> fuer Rechnung <b>{{ InvoiceNumber }}</b> am {{ PaidAt }}.</p><p>Vielen Dank!</p>"},
-            new EmailTemplate{Key="invoice-cancellation",Subject="Stornorechnung {{ StornoInvoiceNumber }} zu Rechnung {{ OriginalInvoiceNumber }}",Body="<h1>Stornorechnung</h1><p>Hallo {{ ContactName }},</p><p>anbei erhalten Sie die Stornorechnung <b>{{ StornoInvoiceNumber }}</b> vom {{ StornoInvoiceDate }} zu Rechnung <b>{{ OriginalInvoiceNumber }}</b> vom {{ OriginalInvoiceDate }} ueber <b>{{ StornoAmount }}</b>.</p>"},
-            new EmailTemplate{Key="quote-reminder",Subject="Erinnerung: Angebot {{ QuoteNumber }}",Body="<p>Hallo {{ ContactName }},</p><p>Ihr Angebot {{ QuoteNumber }} wartet auf Ihre Rueckmeldung.</p><p><a href='{{ ApprovalLink }}'>Jetzt ansehen</a></p>"}
+            new EmailTemplate{Key="welcome",Subject="Willkommen bei {{ CompanyName }} – Ihre nächsten Schritte",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Herzlich willkommen!</h1>
+                <p style='line-height:1.65;color:#475467'>vielen Dank, dass sich <strong>{{ CustomerName }}</strong> für eine Zusammenarbeit mit <strong>{{ CompanyName }}</strong> entschieden hat. Wir freuen uns sehr darauf, gemeinsam Ihr Projekt umzusetzen.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>So geht es weiter:</strong></div>
+                  <div style='margin-bottom:6px'>1. <strong>Onboarding:</strong> Ihr persönlicher Projektablauf wurde bereits angelegt.</div>
+                  <div style='margin-bottom:6px'>2. <strong>Kick-off:</strong> In Kürze erhalten Sie eine Einladung zu unserem gemeinsamen Kick-off-Gespräch.</div>
+                  <div>3. <strong>Zugänge:</strong> Bitte halten Sie relevante Zugangsdaten (Domain, Hosting, Analytics etc.) bereit.</div>
+                </div>
+                <p style='line-height:1.65;color:#475467'>Bei Fragen stehen wir Ihnen jederzeit gerne zur Verfügung: {{ CompanyEmail }} · {{ CompanyPhone }}</p>
+                <p style='line-height:1.65;color:#475467'>Wir freuen uns auf eine erfolgreiche Zusammenarbeit!</p>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="quote-sent",Subject="Ihr Angebot {{ QuoteNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Ihr Angebot {{ QuoteNumber }}</h1>
+                <p style='line-height:1.65;color:#475467'>anbei erhalten Sie Ihr Angebot <strong>{{ QuoteNumber }}</strong> über <strong>{{ Total }} EUR</strong>.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Angebotsnummer:</strong> {{ QuoteNumber }}</div>
+                  <div style='margin-bottom:8px'><strong>Gesamtbetrag:</strong> {{ Total }} EUR</div>
+                  <div><strong>Gültig bis:</strong> {{ ExpiresAt }}</div>
+                </div>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ ApprovalLink }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Angebot ansehen und bestätigen</a>
+                </div>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="invoice-sent",Subject="Ihre Rechnung {{ InvoiceNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Ihre Rechnung {{ InvoiceNumber }}</h1>
+                <p style='line-height:1.65;color:#475467'>anbei erhalten Sie Ihre Rechnung <strong>{{ InvoiceNumber }}</strong> vom {{ InvoiceDate }}.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Netto:</strong> {{ NetTotal }} EUR</div>
+                  <div style='margin-bottom:8px'><strong>MwSt.:</strong> {{ VatAmount }} EUR</div>
+                  <div style='margin-bottom:8px'><strong>Gesamtbetrag:</strong> {{ GrossTotal }} EUR</div>
+                  <div><strong>Fällig bis:</strong> {{ DueDate }}</div>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Die Rechnung finden Sie als PDF im Anhang dieser E-Mail.</p>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="invoice-reminder-1",Subject="Zahlungserinnerung: Rechnung {{ InvoiceNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlungserinnerung</h1>
+                <p style='line-height:1.65;color:#475467'>die Rechnung <strong>{{ InvoiceNumber }}</strong> über <strong>{{ GrossTotal }} EUR</strong> ist seit dem {{ DueDate }} fällig. Bitte überweisen Sie den Betrag zeitnah.</p>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie die Zahlung bereits veranlasst haben, betrachten Sie diese E-Mail bitte als gegenstandslos.</p>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="invoice-reminder-2",Subject="2. Mahnung: Rechnung {{ InvoiceNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zweite Zahlungserinnerung</h1>
+                <p style='line-height:1.65;color:#475467'>trotz unserer ersten Erinnerung ist die Rechnung <strong>{{ InvoiceNumber }}</strong> weiterhin offen.</p>
+                <div style='background:#fffaeb;border:1px solid #fec84b;border-radius:10px;padding:16px 18px;margin:20px 0;color:#93370d;font-size:14px;line-height:1.6'>
+                  <strong>Bitte begleichen Sie {{ GrossTotal }} EUR umgehend</strong>, um weitere Mahnschritte zu vermeiden.
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie die Zahlung bereits veranlasst haben, betrachten Sie diese E-Mail bitte als gegenstandslos.</p>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="invoice-reminder-3",Subject="Letzte Mahnung: Rechnung {{ InvoiceNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Letzte Mahnung</h1>
+                <p style='line-height:1.65;color:#475467'>trotz mehrfacher Erinnerung ist die Rechnung <strong>{{ InvoiceNumber }}</strong> über <strong>{{ GrossTotal }} EUR</strong> weiterhin offen (fällig seit {{ DueDate }}).</p>
+                <div style='background:#fef3f2;border:1px solid #fda29b;border-radius:10px;padding:16px 18px;margin:20px 0;color:#b42318;font-size:14px;line-height:1.6'>
+                  <strong>Dies ist unsere letzte Mahnung.</strong> Bei weiterhin ausbleibender Zahlung behalten wir uns weitere Schritte vor.
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie die Zahlung bereits veranlasst haben, betrachten Sie diese E-Mail bitte als gegenstandslos.</p>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="payment-received",Subject="Zahlungseingang bestätigt – Rechnung {{ InvoiceNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlung erhalten – vielen Dank!</h1>
+                <div style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:16px 18px;margin:20px 0;color:#065f46;font-size:14px;line-height:1.6'>
+                  Wir bestätigen den Eingang Ihrer Zahlung über <strong>{{ GrossTotal }} EUR</strong> für Rechnung <strong>{{ InvoiceNumber }}</strong> am {{ PaidAt }}.
+                </div>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="invoice-cancellation",Subject="Stornorechnung {{ StornoInvoiceNumber }} zu Rechnung {{ OriginalInvoiceNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Stornorechnung {{ StornoInvoiceNumber }}</h1>
+                <p style='line-height:1.65;color:#475467'>anbei erhalten Sie die Stornorechnung zu Ihrer Rechnung <strong>{{ OriginalInvoiceNumber }}</strong> vom {{ OriginalInvoiceDate }}.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Ursprüngliche Rechnung:</strong> {{ OriginalInvoiceNumber }} vom {{ OriginalInvoiceDate }}</div>
+                  <div style='margin-bottom:8px'><strong>Stornorechnung:</strong> {{ StornoInvoiceNumber }} vom {{ StornoInvoiceDate }}</div>
+                  <div><strong>Stornierter Betrag:</strong> {{ StornoAmount }}</div>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Die Stornorechnung finden Sie als PDF im Anhang dieser E-Mail.</p>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="quote-reminder",Subject="Erinnerung: Angebot {{ QuoteNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Ihr Angebot wartet noch auf Rückmeldung</h1>
+                <p style='line-height:1.65;color:#475467'>Ihr Angebot <strong>{{ QuoteNumber }}</strong> wartet noch auf Ihre Rückmeldung.</p>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ ApprovalLink }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Jetzt ansehen</a>
+                </div>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="invoice-recurring",Subject="Neue Rechnung: {{ PlanName }} – {{ InvoiceNumber }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Neue Rechnung für {{ PlanName }}</h1>
+                <p style='line-height:1.65;color:#475467'>im Rahmen Ihrer Serienrechnung <strong>{{ PlanName }}</strong> wurde die Rechnung <strong>{{ InvoiceNumber }}</strong> erstellt.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Tarif:</strong> {{ PlanName }}</div>
+                  <div style='margin-bottom:8px'><strong>Rechnungsnummer:</strong> {{ InvoiceNumber }}</div>
+                  <div style='margin-bottom:8px'><strong>Betrag:</strong> {{ Amount }} EUR</div>
+                  <div><strong>Fällig bis:</strong> {{ DueDate }}</div>
+                </div>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="customer-intake",Subject="Willkommen bei {{ CompanyName }} – Bitte vervollständigen Sie Ihre Angaben",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo,</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Vervollständigen Sie Ihre Angaben</h1>
+                <p style='line-height:1.65;color:#475467'>für ein erfolgreiches Onboarding bei <strong>{{ CompanyName }}</strong> benötigen wir noch einige wichtige Informationen von Ihnen. Der gesamte Vorgang dauert nur wenige Minuten.</p>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ IntakeUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Angaben jetzt nachtragen</a>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Der Link ist personalisiert und nur für Sie bestimmt. Bitte leiten Sie ihn nicht weiter.</p>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="password-reset",Subject="Passwort zurücksetzen – GentleSuite",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ FullName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Passwort zurücksetzen</h1>
+                <p style='line-height:1.65;color:#475467'>Sie haben eine Anfrage zum Zurücksetzen Ihres Passworts gestellt. Klicken Sie auf den folgenden Button, um ein neues Passwort festzulegen:</p>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ ResetUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Passwort zurücksetzen</a>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Dieser Link ist 24 Stunden gültig. Falls Sie keine Anfrage gestellt haben, können Sie diese E-Mail ignorieren.</p>
+                """ + EmailFooter)}
         );
         await db.SaveChangesAsync();
     }
 
+    /// <summary>Shared GentleSuite branding shell (GentleSuite-Wordmark, Slate-zu-Emerald-Verlaufsbalken, weisse
+    /// Karte) fuer alle transaktionalen E-Mails — gleiches Muster wie mandateBody/agencyContractBody, damit jede
+    /// Vorlage im System optisch identisch aussieht. `inner` ist der karteninterne Inhalt (Ueberschrift, Text,
+    /// optionale Info-Box, optionaler CTA-Button), `footer` typischerweise der Standard-Fusszeilen-Baustein.</summary>
+    static string EmailShell(string inner) => """
+        <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
+          <div style='max-width:620px;margin:0 auto'>
+            <div style='padding:0 8px 20px;font-size:22px;font-weight:700;color:#344054'>GentleSuite</div>
+            <div style='height:5px;background:linear-gradient(90deg,#344054,#10b981);border-radius:12px 12px 0 0'></div>
+            <div style='background:#ffffff;border:1px solid #eaecf0;border-top:0;border-radius:0 0 12px 12px;padding:36px 32px'>
+        """ + inner + """
+            </div>
+          </div>
+        </div>
+        """;
+
+    const string EmailFooter = """
+        <hr style='border:0;border-top:1px solid #eaecf0;margin:28px 0'/>
+        <p style='font-size:13px;line-height:1.6;color:#475467;margin:0'>Mit freundlichen Grüßen<br/><strong>Gentle Group</strong><br/>Girardetstraße 17 · 42109 Wuppertal<br/><a href='mailto:office@gentlegroup.de' style='color:#344054'>office@gentlegroup.de</a></p>
+        """;
+
     static async Task SeedMissingEmailTemplates(AppDbContext db)
     {
         var existing = await db.EmailTemplates.Select(t => t.Key).ToListAsync();
-        const string intakeSubject = "Willkommen bei Gentlegroup – Bitte vervollständigen Sie Ihre Angaben";
-        const string intakeBody = "<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px 24px;background:#f9fafb;border-radius:12px'><div style='background:#ffffff;border-radius:8px;padding:32px;border:1px solid #e5e7eb'><h2 style='color:#1a1a1a;margin-top:0'>Willkommen bei Gentlegroup!</h2><p style='color:#374151;line-height:1.6'>für ein erfolgreiches Onboarding benötigen wir noch einige wichtige Informationen von Ihnen.</p><p style='color:#374151;line-height:1.6'>Der gesamte Vorgang dauert nur wenige Minuten:</p><div style='text-align:center;margin:32px 0'><a href='{{ IntakeUrl }}' style='background:#0f172a;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;display:inline-block'>Hier alle restlichen Infos nachtragen</a></div><p style='color:#6b7280;font-size:13px;line-height:1.6'>Der Link ist personalisiert und nur für Sie bestimmt. Bitte leiten Sie ihn nicht weiter.</p><hr style='border:none;border-top:1px solid #e5e7eb;margin:24px 0'/><p style='color:#374151;font-size:14px;margin:0'>Mit freundlichen Grüßen<br/><b>Berkcan Ünal</b><br/>Gentlegroup – Digital Agency<br/><a href='mailto:office@gentlegroup.de' style='color:#0f172a'>office@gentlegroup.de</a> | <a href='https://www.gentlegroup.de' style='color:#0f172a'>www.gentlegroup.de</a></p></div></div>";
-        if (!existing.Contains("customer-intake"))
-            db.EmailTemplates.Add(new EmailTemplate{Key="customer-intake",Subject=intakeSubject,Body=intakeBody});
-        else
+
+        async Task UpsertAsync(string key, string subject, string body)
         {
-            var t = await db.EmailTemplates.FirstAsync(x => x.Key == "customer-intake");
-            t.Subject = intakeSubject;
-            t.Body = intakeBody;
+            if (!existing.Contains(key))
+                db.EmailTemplates.Add(new EmailTemplate { Key = key, Subject = subject, Body = body });
+            else
+            {
+                var t = await db.EmailTemplates.FirstAsync(x => x.Key == key);
+                t.Subject = subject;
+                t.Body = body;
+            }
         }
-        if (!existing.Contains("invoice-reminder"))
-            db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-reminder", Subject = "Zahlungserinnerung – Rechnung {{ InvoiceNumber }}", Body = "<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px 24px'><div style='background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e7eb'><h2 style='color:#1a1a1a;margin-top:0'>Zahlungserinnerung</h2><p style='color:#374151'>Hallo {{ ContactName }},</p><p style='color:#374151'>wir möchten Sie freundlich daran erinnern, dass folgende Rechnung noch offen ist:</p><table style='width:100%;border-collapse:collapse;margin:16px 0'><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Rechnungsnummer</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ InvoiceNumber }}</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Betrag</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ Amount }} EUR</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Fälligkeitsdatum</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ DueDate }}</td></tr><tr><td style='padding:8px;border:1px solid #e5e7eb;font-weight:bold'>Überfällig seit</td><td style='padding:8px;border:1px solid #e5e7eb'>{{ DaysOverdue }} Tagen</td></tr></table><p style='color:#374151'>Bitte überweisen Sie den ausstehenden Betrag schnellstmöglich auf unser Konto.</p><p style='color:#374151'>Falls Sie die Zahlung bereits veranlasst haben, bitten wir Sie, diese E-Mail zu ignorieren.</p><hr style='border:none;border-top:1px solid #e5e7eb;margin:24px 0'/><p style='color:#374151;font-size:14px;margin:0'>Mit freundlichen Grüßen<br/><b>Berkcan Ünal</b><br/>Gentlegroup – Digital Agency<br/><a href='mailto:office@gentlegroup.de' style='color:#0f172a'>office@gentlegroup.de</a></p></div></div>" });
-        const string invoiceSentSubject = "Rechnung {{ InvoiceNumber }}";
-        const string invoiceSentBody = "<h1>Ihre Rechnung</h1><p>Hallo {{ ContactName }},</p><p>anbei Ihre Rechnung <b>{{ InvoiceNumber }}</b> ueber <b>{{ GrossTotal }} EUR</b>.</p><p>Faellig bis: {{ DueDate }}</p>";
-        if (!existing.Contains("invoice-sent"))
-            db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-sent", Subject = invoiceSentSubject, Body = invoiceSentBody });
-        else
-        {
-            var t = await db.EmailTemplates.FirstAsync(x => x.Key == "invoice-sent");
-            t.Subject = invoiceSentSubject;
-            t.Body = invoiceSentBody;
-        }
-        const string reminder1Subject = "Zahlungserinnerung: {{ InvoiceNumber }}";
-        const string reminder1Body = "<p>Hallo {{ ContactName }},</p><p>die Rechnung {{ InvoiceNumber }} ueber {{ GrossTotal }} EUR ist seit dem {{ DueDate }} faellig. Bitte ueberweisen Sie den Betrag.</p>";
-        if (!existing.Contains("invoice-reminder-1"))
-            db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-reminder-1", Subject = reminder1Subject, Body = reminder1Body });
-        else
-        {
-            var t = await db.EmailTemplates.FirstAsync(x => x.Key == "invoice-reminder-1");
-            t.Subject = reminder1Subject;
-            t.Body = reminder1Body;
-        }
-        const string reminder2Subject = "2. Mahnung: {{ InvoiceNumber }}";
-        const string reminder2Body = "<p>Hallo {{ ContactName }},</p><p>trotz unserer Erinnerung ist die Rechnung {{ InvoiceNumber }} noch offen. Bitte begleichen Sie {{ GrossTotal }} EUR umgehend.</p>";
-        if (!existing.Contains("invoice-reminder-2"))
-            db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-reminder-2", Subject = reminder2Subject, Body = reminder2Body });
-        else
-        {
-            var t = await db.EmailTemplates.FirstAsync(x => x.Key == "invoice-reminder-2");
-            t.Subject = reminder2Subject;
-            t.Body = reminder2Body;
-        }
-        const string paymentReceivedSubject = "Zahlungseingang bestaetigt – Rechnung {{ InvoiceNumber }}";
-        const string paymentReceivedBody = "<h1>Zahlung erhalten</h1><p>Hallo {{ ContactName }},</p><p>wir bestaetigen den Eingang Ihrer Zahlung ueber <b>{{ GrossTotal }} EUR</b> fuer Rechnung <b>{{ InvoiceNumber }}</b> am {{ PaidAt }}.</p><p>Vielen Dank!</p>";
-        if (!existing.Contains("payment-received"))
-            db.EmailTemplates.Add(new EmailTemplate { Key = "payment-received", Subject = paymentReceivedSubject, Body = paymentReceivedBody });
-        const string invoiceCancellationSubject = "Stornorechnung {{ StornoInvoiceNumber }} zu Rechnung {{ OriginalInvoiceNumber }}";
-        const string invoiceCancellationBody = "<h1>Stornorechnung</h1><p>Hallo {{ ContactName }},</p><p>anbei erhalten Sie die Stornorechnung <b>{{ StornoInvoiceNumber }}</b> vom {{ StornoInvoiceDate }} zu Rechnung <b>{{ OriginalInvoiceNumber }}</b> vom {{ OriginalInvoiceDate }} ueber <b>{{ StornoAmount }}</b>.</p>";
-        if (!existing.Contains("invoice-cancellation"))
-            db.EmailTemplates.Add(new EmailTemplate { Key = "invoice-cancellation", Subject = invoiceCancellationSubject, Body = invoiceCancellationBody });
-        if (!existing.Contains("password-reset"))
-            db.EmailTemplates.Add(new EmailTemplate { Key = "password-reset", Subject = "Passwort zurücksetzen – GentleSuite", Body = "<div style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px 24px'><div style='background:#fff;border-radius:8px;padding:32px;border:1px solid #e5e7eb'><h2 style='color:#1a1a1a;margin-top:0'>Passwort zurücksetzen</h2><p style='color:#374151'>Hallo {{ FullName }},</p><p style='color:#374151'>Sie haben eine Anfrage zum Zurücksetzen Ihres Passworts gestellt. Klicken Sie auf den folgenden Button, um ein neues Passwort festzulegen:</p><div style='text-align:center;margin:32px 0'><a href='{{ ResetUrl }}' style='background:#0f172a;color:#ffffff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;display:inline-block'>Passwort zurücksetzen</a></div><p style='color:#6b7280;font-size:13px'>Dieser Link ist 24 Stunden gültig. Falls Sie keine Anfrage gestellt haben, können Sie diese E-Mail ignorieren.</p><hr style='border:none;border-top:1px solid #e5e7eb;margin:24px 0'/><p style='color:#374151;font-size:14px;margin:0'>Mit freundlichen Grüßen<br/><b>Berkcan Ünal</b><br/>Gentlegroup – Digital Agency<br/><a href='mailto:office@gentlegroup.de' style='color:#0f172a'>office@gentlegroup.de</a></p></div></div>" });
+
+        await UpsertAsync("customer-intake",
+            "Willkommen bei {{ CompanyName }} – Bitte vervollständigen Sie Ihre Angaben",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo,</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Vervollständigen Sie Ihre Angaben</h1>
+                <p style='line-height:1.65;color:#475467'>für ein erfolgreiches Onboarding bei <strong>{{ CompanyName }}</strong> benötigen wir noch einige wichtige Informationen von Ihnen. Der gesamte Vorgang dauert nur wenige Minuten.</p>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ IntakeUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Angaben jetzt nachtragen</a>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Der Link ist personalisiert und nur für Sie bestimmt. Bitte leiten Sie ihn nicht weiter.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("invoice-reminder",
+            "Zahlungserinnerung – Rechnung {{ InvoiceNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlungserinnerung</h1>
+                <p style='line-height:1.65;color:#475467'>wir möchten Sie freundlich daran erinnern, dass folgende Rechnung noch offen ist:</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Rechnungsnummer:</strong> {{ InvoiceNumber }}</div>
+                  <div style='margin-bottom:8px'><strong>Betrag:</strong> {{ Amount }} EUR</div>
+                  <div style='margin-bottom:8px'><strong>Fälligkeitsdatum:</strong> {{ DueDate }}</div>
+                  <div><strong>Überfällig seit:</strong> {{ DaysOverdue }} Tagen</div>
+                </div>
+                <p style='line-height:1.65;color:#475467'>Bitte überweisen Sie den ausstehenden Betrag schnellstmöglich auf unser Konto.</p>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie die Zahlung bereits veranlasst haben, betrachten Sie diese E-Mail bitte als gegenstandslos.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("invoice-sent",
+            "Ihre Rechnung {{ InvoiceNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Ihre Rechnung {{ InvoiceNumber }}</h1>
+                <p style='line-height:1.65;color:#475467'>anbei erhalten Sie Ihre Rechnung <strong>{{ InvoiceNumber }}</strong> vom {{ InvoiceDate }}.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Netto:</strong> {{ NetTotal }} EUR</div>
+                  <div style='margin-bottom:8px'><strong>MwSt.:</strong> {{ VatAmount }} EUR</div>
+                  <div style='margin-bottom:8px'><strong>Gesamtbetrag:</strong> {{ GrossTotal }} EUR</div>
+                  <div><strong>Fällig bis:</strong> {{ DueDate }}</div>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Die Rechnung finden Sie als PDF im Anhang dieser E-Mail.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("invoice-reminder-1",
+            "Zahlungserinnerung: Rechnung {{ InvoiceNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlungserinnerung</h1>
+                <p style='line-height:1.65;color:#475467'>die Rechnung <strong>{{ InvoiceNumber }}</strong> über <strong>{{ GrossTotal }} EUR</strong> ist seit dem {{ DueDate }} fällig. Bitte überweisen Sie den Betrag zeitnah.</p>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie die Zahlung bereits veranlasst haben, betrachten Sie diese E-Mail bitte als gegenstandslos.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("invoice-reminder-2",
+            "2. Mahnung: Rechnung {{ InvoiceNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zweite Zahlungserinnerung</h1>
+                <p style='line-height:1.65;color:#475467'>trotz unserer ersten Erinnerung ist die Rechnung <strong>{{ InvoiceNumber }}</strong> weiterhin offen.</p>
+                <div style='background:#fffaeb;border:1px solid #fec84b;border-radius:10px;padding:16px 18px;margin:20px 0;color:#93370d;font-size:14px;line-height:1.6'>
+                  <strong>Bitte begleichen Sie {{ GrossTotal }} EUR umgehend</strong>, um weitere Mahnschritte zu vermeiden.
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie die Zahlung bereits veranlasst haben, betrachten Sie diese E-Mail bitte als gegenstandslos.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("invoice-reminder-3",
+            "Letzte Mahnung: Rechnung {{ InvoiceNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Letzte Mahnung</h1>
+                <p style='line-height:1.65;color:#475467'>trotz mehrfacher Erinnerung ist die Rechnung <strong>{{ InvoiceNumber }}</strong> über <strong>{{ GrossTotal }} EUR</strong> weiterhin offen (fällig seit {{ DueDate }}).</p>
+                <div style='background:#fef3f2;border:1px solid #fda29b;border-radius:10px;padding:16px 18px;margin:20px 0;color:#b42318;font-size:14px;line-height:1.6'>
+                  <strong>Dies ist unsere letzte Mahnung.</strong> Bei weiterhin ausbleibender Zahlung behalten wir uns weitere Schritte vor.
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie die Zahlung bereits veranlasst haben, betrachten Sie diese E-Mail bitte als gegenstandslos.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("payment-received",
+            "Zahlungseingang bestätigt – Rechnung {{ InvoiceNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlung erhalten – vielen Dank!</h1>
+                <div style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:16px 18px;margin:20px 0;color:#065f46;font-size:14px;line-height:1.6'>
+                  Wir bestätigen den Eingang Ihrer Zahlung über <strong>{{ GrossTotal }} EUR</strong> für Rechnung <strong>{{ InvoiceNumber }}</strong> am {{ PaidAt }}.
+                </div>
+                """ + EmailFooter));
+
+        await UpsertAsync("invoice-cancellation",
+            "Stornorechnung {{ StornoInvoiceNumber }} zu Rechnung {{ OriginalInvoiceNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Stornorechnung {{ StornoInvoiceNumber }}</h1>
+                <p style='line-height:1.65;color:#475467'>anbei erhalten Sie die Stornorechnung zu Ihrer Rechnung <strong>{{ OriginalInvoiceNumber }}</strong> vom {{ OriginalInvoiceDate }}.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Ursprüngliche Rechnung:</strong> {{ OriginalInvoiceNumber }} vom {{ OriginalInvoiceDate }}</div>
+                  <div style='margin-bottom:8px'><strong>Stornorechnung:</strong> {{ StornoInvoiceNumber }} vom {{ StornoInvoiceDate }}</div>
+                  <div><strong>Stornierter Betrag:</strong> {{ StornoAmount }}</div>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Die Stornorechnung finden Sie als PDF im Anhang dieser E-Mail.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("password-reset",
+            "Passwort zurücksetzen – GentleSuite",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ FullName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Passwort zurücksetzen</h1>
+                <p style='line-height:1.65;color:#475467'>Sie haben eine Anfrage zum Zurücksetzen Ihres Passworts gestellt. Klicken Sie auf den folgenden Button, um ein neues Passwort festzulegen:</p>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ ResetUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Passwort zurücksetzen</a>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Dieser Link ist 24 Stunden gültig. Falls Sie keine Anfrage gestellt haben, können Sie diese E-Mail ignorieren.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("quote-sent",
+            "Ihr Angebot {{ QuoteNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Ihr Angebot {{ QuoteNumber }}</h1>
+                <p style='line-height:1.65;color:#475467'>anbei erhalten Sie Ihr Angebot <strong>{{ QuoteNumber }}</strong> über <strong>{{ Total }} EUR</strong>.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Angebotsnummer:</strong> {{ QuoteNumber }}</div>
+                  <div style='margin-bottom:8px'><strong>Gesamtbetrag:</strong> {{ Total }} EUR</div>
+                  <div><strong>Gültig bis:</strong> {{ ExpiresAt }}</div>
+                </div>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ ApprovalLink }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Angebot ansehen und bestätigen</a>
+                </div>
+                """ + EmailFooter));
+
+        await UpsertAsync("quote-reminder",
+            "Erinnerung: Angebot {{ QuoteNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Ihr Angebot wartet noch auf Rückmeldung</h1>
+                <p style='line-height:1.65;color:#475467'>Ihr Angebot <strong>{{ QuoteNumber }}</strong> wartet noch auf Ihre Rückmeldung.</p>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ ApprovalLink }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Jetzt ansehen</a>
+                </div>
+                """ + EmailFooter));
+
+        await UpsertAsync("welcome",
+            "Willkommen bei {{ CompanyName }} – Ihre nächsten Schritte",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Herzlich willkommen!</h1>
+                <p style='line-height:1.65;color:#475467'>vielen Dank, dass sich <strong>{{ CustomerName }}</strong> für eine Zusammenarbeit mit <strong>{{ CompanyName }}</strong> entschieden hat. Wir freuen uns sehr darauf, gemeinsam Ihr Projekt umzusetzen.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>So geht es weiter:</strong></div>
+                  <div style='margin-bottom:6px'>1. <strong>Onboarding:</strong> Ihr persönlicher Projektablauf wurde bereits angelegt.</div>
+                  <div style='margin-bottom:6px'>2. <strong>Kick-off:</strong> In Kürze erhalten Sie eine Einladung zu unserem gemeinsamen Kick-off-Gespräch.</div>
+                  <div>3. <strong>Zugänge:</strong> Bitte halten Sie relevante Zugangsdaten (Domain, Hosting, Analytics etc.) bereit.</div>
+                </div>
+                <p style='line-height:1.65;color:#475467'>Bei Fragen stehen wir Ihnen jederzeit gerne zur Verfügung: {{ CompanyEmail }} · {{ CompanyPhone }}</p>
+                <p style='line-height:1.65;color:#475467'>Wir freuen uns auf eine erfolgreiche Zusammenarbeit!</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("invoice-recurring",
+            "Neue Rechnung: {{ PlanName }} – {{ InvoiceNumber }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Neue Rechnung für {{ PlanName }}</h1>
+                <p style='line-height:1.65;color:#475467'>im Rahmen Ihrer Serienrechnung <strong>{{ PlanName }}</strong> wurde die Rechnung <strong>{{ InvoiceNumber }}</strong> erstellt.</p>
+                <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
+                  <div style='margin-bottom:8px'><strong>Tarif:</strong> {{ PlanName }}</div>
+                  <div style='margin-bottom:8px'><strong>Rechnungsnummer:</strong> {{ InvoiceNumber }}</div>
+                  <div style='margin-bottom:8px'><strong>Betrag:</strong> {{ Amount }} EUR</div>
+                  <div><strong>Fällig bis:</strong> {{ DueDate }}</div>
+                </div>
+                """ + EmailFooter));
         const string mandateSubject = "Zahlungsart für {{ PlanName }} sicher einrichten – {{ ContractReference }}";
         const string mandateBody = """
                 <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
