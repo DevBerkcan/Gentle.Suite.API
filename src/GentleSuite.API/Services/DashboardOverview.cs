@@ -18,7 +18,7 @@ public static class DashboardAmounts
         if (s.Status == SubscriptionStatus.Completed) return "completed";
         if (s.Status is SubscriptionStatus.Cancelled or SubscriptionStatus.Expired) return "closed";
         if (s.Status == SubscriptionStatus.Paused) return "paused";
-        if (s.ContractQuoteId == null || !s.BusinessCustomerConfirmed || s.AgreedMonthlyPrice is not > 0) return "review";
+        if (!s.BusinessCustomerConfirmed || s.AgreedMonthlyPrice is not > 0) return "review";
         if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase)) return "mandate";
         if (s.BillingAuthorizedAt == null || s.Status == SubscriptionStatus.PendingConfirmation) return "authorization";
         return "ready";

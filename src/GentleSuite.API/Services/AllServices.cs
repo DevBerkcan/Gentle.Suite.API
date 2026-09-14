@@ -693,7 +693,7 @@ public class SubscriptionServiceImpl : ISubscriptionService
             q.SignedAt!.Value, q.SignedByName, q.SignedByEmail))
         .ToListAsync(ct);
 
-    private async Task<CustomerSubscription> BuildSubscriptionAsync(Guid customerId, Guid planId, Quote quote, Guid? quoteLineId, decimal agreedMonthlyPrice, int? contractDurationMonths, DateTimeOffset? startDate, CancellationToken ct)
+    private async Task<CustomerSubscription> BuildSubscriptionAsync(Guid customerId, Guid planId, Quote? quote, Guid? quoteLineId, decimal agreedMonthlyPrice, int? contractDurationMonths, DateTimeOffset? startDate, CancellationToken ct)
     {
         var customerExists = await _db.Customers.AnyAsync(c => c.Id == customerId, ct);
         if (!customerExists) throw new ArgumentException("Der Kunde wurde nicht gefunden.");
@@ -703,18 +703,21 @@ public class SubscriptionServiceImpl : ISubscriptionService
         if (plan.BillingCycle != BillingCycle.Monthly)
             throw new InvalidOperationException("Dieser rechtssichere Ablauf ist derzeit ausschließlich für monatliche B2B-Serienrechnungen freigegeben.");
 
-        if (quote.CustomerId != customerId)
-            throw new InvalidOperationException("Das Vertragsangebot gehört nicht zum ausgewählten Kunden.");
-        if (!quote.IsCurrentVersion || quote.Status is not (QuoteStatus.Accepted or QuoteStatus.Ordered) ||
-            quote.SignatureStatus != SignatureStatus.Signed || quote.SignedAt == null || !quote.B2bAuthorityConfirmed)
-            throw new InvalidOperationException("Für die Serienrechnung ist ein aktuell angenommenes B2B-Angebot mit Unterschrift und Vertretungsbestätigung erforderlich.");
+        if (quote != null)
+        {
+            if (quote.CustomerId != customerId)
+                throw new InvalidOperationException("Das Vertragsangebot gehört nicht zum ausgewählten Kunden.");
+            if (!quote.IsCurrentVersion || quote.Status is not (QuoteStatus.Accepted or QuoteStatus.Ordered) ||
+                quote.SignatureStatus != SignatureStatus.Signed || quote.SignedAt == null || !quote.B2bAuthorityConfirmed)
+                throw new InvalidOperationException("Für die Serienrechnung ist ein aktuell angenommenes B2B-Angebot mit Unterschrift und Vertretungsbestätigung erforderlich.");
+        }
 
         if (agreedMonthlyPrice <= 0)
-            throw new InvalidOperationException("Das Vertragsangebot enthält keinen monatlichen Leistungsbetrag.");
+            throw new InvalidOperationException(quote != null ? "Das Vertragsangebot enthält keinen monatlichen Leistungsbetrag." : "Der gewählte Tarif hat keinen positiven monatlichen Preis.");
 
         var alreadyExists = quoteLineId.HasValue
             ? await _db.CustomerSubscriptions.AnyAsync(s => s.QuoteLineId == quoteLineId.Value, ct)
-            : await _db.CustomerSubscriptions.AnyAsync(s => s.ContractQuoteId == quote.Id && s.QuoteLineId == null, ct);
+            : quote != null && await _db.CustomerSubscriptions.AnyAsync(s => s.ContractQuoteId == quote.Id && s.QuoteLineId == null, ct);
         if (alreadyExists)
             throw new InvalidOperationException("Für dieses Vertragsangebot wurde bereits eine Serienrechnung angelegt.");
 
@@ -732,14 +735,14 @@ public class SubscriptionServiceImpl : ISubscriptionService
             StartDate = start,
             NextBillingDate = start.AddMonths(1),
             ContractDurationMonths = contractDurationMonths,
-            ContractQuoteId = quote.Id,
+            ContractQuoteId = quote?.Id,
             QuoteLineId = quoteLineId,
-            ContractReference = quote.QuoteNumber,
-            ContractVersion = quote.Version,
-            ContractAcceptedAt = quote.SignedAt,
-            ContractAcceptedByName = quote.SignedByName,
-            ContractAcceptedByEmail = quote.SignedByEmail,
-            ContractAcceptedIpAddress = quote.SignedIpAddress,
+            ContractReference = quote?.QuoteNumber,
+            ContractVersion = quote?.Version,
+            ContractAcceptedAt = quote?.SignedAt,
+            ContractAcceptedByName = quote?.SignedByName,
+            ContractAcceptedByEmail = quote?.SignedByEmail,
+            ContractAcceptedIpAddress = quote?.SignedIpAddress,
             AgreedMonthlyPrice = agreedMonthlyPrice,
             ContractBillingCycle = BillingCycle.Monthly,
             BusinessCustomerConfirmed = true,
@@ -755,11 +758,24 @@ public class SubscriptionServiceImpl : ISubscriptionService
         if (!req.BusinessCustomerConfirmed)
             throw new InvalidOperationException("Bitte bestätigen Sie, dass der Vertrag ausschließlich mit einem Unternehmer (B2B) geschlossen wurde.");
 
-        var quote = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == req.ContractQuoteId, ct)
-            ?? throw new ArgumentException("Das ausgewählte Vertragsangebot wurde nicht gefunden.");
-        var agreedMonthlyPrice = quote.Lines
-            .Where(l => l.LineType == QuoteLineType.RecurringMonthly)
-            .Sum(l => l.Total);
+        Quote? quote = null;
+        decimal agreedMonthlyPrice;
+        if (req.ContractQuoteId.HasValue)
+        {
+            quote = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == req.ContractQuoteId.Value, ct)
+                ?? throw new ArgumentException("Das ausgewählte Vertragsangebot wurde nicht gefunden.");
+            agreedMonthlyPrice = quote.Lines
+                .Where(l => l.LineType == QuoteLineType.RecurringMonthly)
+                .Sum(l => l.Total);
+        }
+        else
+        {
+            // Kein Angebot als Vertragsgrundlage angegeben — der Monatspreis kommt dann vom gewählten Tarif,
+            // die Serienrechnung läuft ohne Vertragsnachweis (siehe "Legacy: kein Vertragsnachweis" in der Übersicht).
+            var plan = await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Id == req.PlanId, ct)
+                ?? throw new ArgumentException("Der Tarif wurde nicht gefunden.");
+            agreedMonthlyPrice = plan.MonthlyPrice;
+        }
 
         var subscription = await BuildSubscriptionAsync(req.CustomerId, req.PlanId, quote, null, agreedMonthlyPrice, req.ContractDurationMonths, req.StartDate, ct);
         return await GetByIdAsync(subscription.Id, ct);
@@ -777,8 +793,8 @@ public class SubscriptionServiceImpl : ISubscriptionService
         var subscription = await BuildSubscriptionAsync(customerId, line.SubscriptionPlanId.Value, quote, quoteLineId, line.Total, null, null, ct);
         return await GetByIdAsync(subscription.Id, ct);
     }
-    public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || s.ContractQuoteId == null || !s.BusinessCustomerConfirmed)) throw new InvalidOperationException("Das Abonnement kann erst mit B2B-Vertragsnachweis und gültigem Mollie-Mandat aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
-    public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || s.ContractQuoteId == null || !s.BusinessCustomerConfirmed) throw new InvalidOperationException("Das Abonnement kann erst mit B2B-Vertragsnachweis und gültigem Mollie-Mandat aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
+    public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || !s.BusinessCustomerConfirmed)) throw new InvalidOperationException("Das Abonnement kann erst mit bestätigter B2B-Vertragsgrundlage und gültigem Mollie-Mandat aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
+    public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || !s.BusinessCustomerConfirmed) throw new InvalidOperationException("Das Abonnement kann erst mit bestätigter B2B-Vertragsgrundlage und gültigem Mollie-Mandat aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
     public async Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid sid, CancellationToken ct) => await _db.Invoices.Where(i => i.SubscriptionId == sid).OrderByDescending(i => i.InvoiceDate).Select(i => new SubscriptionInvoiceDto(i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate)).ToListAsync(ct);
 
     // === Ratenzahlung (installment plans) ===

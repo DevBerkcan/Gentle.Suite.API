@@ -330,7 +330,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
                     subscription.MollieMandateId = RequiredString(mandate, "id");
                     subscription.MollieMandateStatus = RequiredString(mandate, "status");
                     if (subscription.Status == SubscriptionStatus.PendingConfirmation &&
-                        subscription.ContractQuoteId != null && subscription.BusinessCustomerConfirmed)
+                        subscription.BusinessCustomerConfirmed)
                     {
                         subscription.Status = SubscriptionStatus.Active;
                         subscription.ConfirmedAt = DateTimeOffset.UtcNow;
@@ -479,7 +479,11 @@ public sealed class MolliePaymentService : IMolliePaymentService
         // hier ersetzt die Pflicht-Bestätigung beim Anlegen (PaymentPlanOptionKey "manual") den Vertragsnachweis.
         var hasManualEvidence = subscription.PaymentPlanOptionKey == "manual" && subscription.BusinessCustomerConfirmedAt != null &&
             !string.IsNullOrWhiteSpace(subscription.InstallmentSourceTitle);
-        if ((!hasQuoteEvidence && !hasManualEvidence) || !subscription.BusinessCustomerConfirmed ||
+        // Normale Serienrechnungen ohne verknüpftes Angebot (das Angebot ist beim Anlegen optional) — die
+        // Pflicht-B2B-Bestätigung beim Anlegen ersetzt hier den Vertragsnachweis, analog zu "manual" oben.
+        var hasNoQuoteEvidence = subscription.ContractQuoteId == null && !subscription.IsInstallmentPlan &&
+            subscription.PaymentPlanOptionKey != "manual" && subscription.BusinessCustomerConfirmedAt != null;
+        if ((!hasQuoteEvidence && !hasManualEvidence && !hasNoQuoteEvidence) || !subscription.BusinessCustomerConfirmed ||
             subscription.AgreedMonthlyPrice is null or <= 0)
             throw new InvalidOperationException("Die Mollie-Zahlungseinrichtung ist ohne vollständigen B2B-Vertragsnachweis gesperrt.");
     }

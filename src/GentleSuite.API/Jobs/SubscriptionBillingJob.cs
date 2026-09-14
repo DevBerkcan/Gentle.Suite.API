@@ -60,7 +60,6 @@ public class SubscriptionBillingJob
             .Where(s =>
                 s.Status == SubscriptionStatus.Active &&
                 s.MollieMandateStatus == "valid" &&
-                s.ContractQuoteId != null &&
                 s.BusinessCustomerConfirmed &&
                 s.AgreedMonthlyPrice > 0 &&
                 s.BillingAuthorizedAt != null &&
