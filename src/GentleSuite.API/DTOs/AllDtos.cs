@@ -278,6 +278,10 @@ public record SubscriptionInvoiceDto(Guid Id, string InvoiceNumber, DateTimeOffs
 public record UpdateSubscriptionStatusRequest(SubscriptionStatus Status, string? Reason = null);
 public record MollieMandateCheckoutDto(string CheckoutUrl, string PaymentId, string Status);
 public record MandateEmailResultDto(bool Sent, string? Recipient, DateTimeOffset? SentAt, string Status, string? Error);
+/// <summary>Status shown on the public mandate-result page after a customer returns from Mollie's checkout.
+/// "valid": a usable recurring mandate now exists. "pending": Mollie/the bank is still processing.
+/// "failed": the payment/mandate did not go through (FailureMessage has the reason where Mollie provides one).</summary>
+public record MollieMandateStatusDto(string Status, string? FailureMessage);
 public record CreatePlanRequest(string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category);
 public record UpdatePlanRequest(string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category, bool IsActive);
 

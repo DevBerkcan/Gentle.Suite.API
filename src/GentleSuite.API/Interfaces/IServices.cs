@@ -181,6 +181,10 @@ public interface IMolliePaymentService
     Task<MandateEmailResultDto> SendMandateReminderEmailAsync(Guid subscriptionId, CancellationToken ct = default);
     Task HandlePaymentWebhookAsync(string paymentId, CancellationToken ct = default);
     Task CollectInvoiceAsync(Guid invoiceId, CancellationToken ct = default);
+    /// <summary>Live status check for the public mandate-result page — fetches the current payment/mandate
+    /// state from Mollie directly (not just the cached DB value) so the customer sees an honest result even
+    /// if a webhook was delayed or missed.</summary>
+    Task<MollieMandateStatusDto> GetMandateStatusAsync(Guid subscriptionId, CancellationToken ct = default);
 }
 
 public interface ITimeTrackingService

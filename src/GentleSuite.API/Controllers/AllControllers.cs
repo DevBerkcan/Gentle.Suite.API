@@ -462,6 +462,9 @@ public class MollieWebhookController(IMolliePaymentService mollie) : ControllerB
         await mollie.HandlePaymentWebhookAsync(id);
         return Ok();
     }
+
+    [HttpGet("mandate-status/{subscriptionId}")]
+    public async Task<ActionResult<MollieMandateStatusDto>> MandateStatus(Guid subscriptionId) => Ok(await mollie.GetMandateStatusAsync(subscriptionId));
 }
 
 [ApiController, Route("api/[controller]"), Authorize]

@@ -85,7 +85,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
             customerId = subscription.MollieCustomerId,
             sequenceType = "first",
             description = $"Zahlungseinrichtung {subscription.ContractReference} - {subscription.Plan.Name}",
-            redirectUrl = $"{frontendBaseUrl}/payment/mandate-result",
+            redirectUrl = $"{frontendBaseUrl}/payment/mandate-result?sub={subscription.Id}",
             webhookUrl = $"{publicBaseUrl}/api/mollie/webhook",
             metadata = new { kind = "mandate", subscriptionId = subscription.Id }
         }, $"mandate-{subscription.Id:N}-{mandateAttempt}", ct);
@@ -304,6 +304,35 @@ public sealed class MolliePaymentService : IMolliePaymentService
             throw new ArgumentException("Ungültige Mollie-Zahlungs-ID.");
         var payment = await GetAsync($"payments/{Uri.EscapeDataString(paymentId)}", ct);
         await ApplyPaymentStatusAsync(payment, ct);
+    }
+
+    public async Task<MollieMandateStatusDto> GetMandateStatusAsync(Guid subscriptionId, CancellationToken ct)
+    {
+        var subscription = await _db.CustomerSubscriptions.FirstOrDefaultAsync(s => s.Id == subscriptionId, ct)
+            ?? throw new KeyNotFoundException("Abonnement wurde nicht gefunden.");
+
+        if (string.Equals(subscription.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase))
+            return new MollieMandateStatusDto("valid", null);
+
+        if (string.IsNullOrWhiteSpace(subscription.MollieFirstPaymentId))
+            return new MollieMandateStatusDto("pending", null);
+
+        // Fetch the live status from Mollie rather than only the cached DB value — a webhook can be
+        // delayed or missed, and this page is exactly where an out-of-date "pending" would mislead the customer.
+        var payment = await GetAsync($"payments/{Uri.EscapeDataString(subscription.MollieFirstPaymentId)}", ct);
+        await ApplyPaymentStatusAsync(payment, ct);
+
+        if (string.Equals(subscription.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase))
+            return new MollieMandateStatusDto("valid", null);
+
+        var status = RequiredString(payment, "status");
+        var failureMessage = payment["details"]?["failureMessage"]?.GetValue<string>();
+        return status switch
+        {
+            "open" or "pending" or "authorized" => new MollieMandateStatusDto("pending", null),
+            "paid" => new MollieMandateStatusDto("failed", "Die Zahlung wurde verarbeitet, aber es konnte kein gültiges Lastschrift-/Kartenmandat eingerichtet werden."),
+            _ => new MollieMandateStatusDto("failed", failureMessage),
+        };
     }
 
     private async Task ApplyPaymentStatusAsync(JsonNode payment, CancellationToken ct)
