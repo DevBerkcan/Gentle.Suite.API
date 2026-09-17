@@ -272,7 +272,7 @@ public record BillingOccurrenceDto(Guid SubscriptionId, string CustomerName, str
 public record BillingCalendarDto(List<BillingOccurrenceDto> Occurrences, decimal TotalNext30Days, decimal TotalNext90Days);
 public record CreateSubscriptionRequest(Guid CustomerId, Guid PlanId, Guid? ContractQuoteId, bool BusinessCustomerConfirmed, DateTimeOffset? StartDate, int? ContractDurationMonths = null);
 public record CreateInstallmentPlanRequest(Guid CustomerId, Guid QuoteId, int Months);
-public record CreateManualInstallmentPlanRequest(Guid CustomerId, string Title, decimal TotalAmount, decimal? DownPaymentAmount, decimal MonthlyAmount, bool BusinessCustomerConfirmed);
+public record CreateManualInstallmentPlanRequest(Guid CustomerId, string Title, decimal TotalAmount, decimal? DownPaymentAmount, decimal MonthlyAmount, bool BusinessCustomerConfirmed, DateTimeOffset? FirstInstallmentDate = null);
 public record EligibleSubscriptionQuoteDto(Guid Id, string QuoteNumber, int Version, string? Subject, decimal MonthlyPrice, DateTimeOffset AcceptedAt, string? SignedByName, string? SignedByEmail);
 public record SubscriptionInvoiceDto(Guid Id, string InvoiceNumber, DateTimeOffset InvoiceDate, DateTimeOffset? BillingPeriodStart, DateTimeOffset? BillingPeriodEnd, decimal GrossTotal, InvoiceStatus Status, string? PaymentCollectionStatus, DateTimeOffset? PaymentCollectionDueDate);
 public record UpdateSubscriptionStatusRequest(SubscriptionStatus Status, string? Reason = null);

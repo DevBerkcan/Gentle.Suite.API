@@ -962,13 +962,16 @@ public class SubscriptionServiceImpl : ISubscriptionService
         }
 
         var start = DateTimeOffset.UtcNow;
+        // Eine explizit gesetzte erste Rate hat Vorrang vor der "+1 Monat bei Anzahlung"-Automatik —
+        // ohne Angabe bleibt das bisherige Verhalten (sofort fällig, bzw. +1 Monat bei Anzahlung) unverändert.
+        var nextBillingDate = req.FirstInstallmentDate ?? (downPayment > 0 ? start.AddMonths(1) : start);
         var subscription = new CustomerSubscription
         {
             CustomerId = req.CustomerId,
             PlanId = plan.Id,
             Status = SubscriptionStatus.PendingConfirmation,
             StartDate = start,
-            NextBillingDate = downPayment > 0 ? start.AddMonths(1) : start,
+            NextBillingDate = nextBillingDate,
             ContractDurationMonths = months,
             ContractQuoteId = null,
             QuoteLineId = null,
