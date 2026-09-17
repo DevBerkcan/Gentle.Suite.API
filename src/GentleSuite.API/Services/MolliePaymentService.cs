@@ -345,10 +345,15 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         if (kind == "mandate" && Guid.TryParse(MetadataString(metadata, "subscriptionId"), out var subscriptionId))
         {
-            var subscription = await _db.CustomerSubscriptions.FirstOrDefaultAsync(s => s.Id == subscriptionId, ct);
+            var subscription = await _db.CustomerSubscriptions
+                .Include(s => s.Plan)
+                .Include(s => s.Customer).ThenInclude(c => c.Contacts)
+                .FirstOrDefaultAsync(s => s.Id == subscriptionId, ct);
             if (subscription == null || subscription.MollieFirstPaymentId != paymentId) return;
+            var previousStatus = subscription.MollieFirstPaymentStatus;
             subscription.MollieFirstPaymentStatus = status;
 
+            var becameValid = false;
             if (status == "paid" && !string.IsNullOrWhiteSpace(subscription.MollieCustomerId))
             {
                 var mandates = await GetAsync($"customers/{subscription.MollieCustomerId}/mandates", ct);
@@ -358,6 +363,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 {
                     subscription.MollieMandateId = RequiredString(mandate, "id");
                     subscription.MollieMandateStatus = RequiredString(mandate, "status");
+                    becameValid = true;
                     if (subscription.Status == SubscriptionStatus.PendingConfirmation &&
                         subscription.BusinessCustomerConfirmed)
                     {
@@ -367,6 +373,21 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 }
             }
             await _db.SaveChangesAsync(ct);
+
+            // Proaktive Rückmeldung an den Kunden, sobald sich das Ergebnis dieses Zahlungsversuchs erstmals
+            // klärt — unabhängig davon, ob der Kunde die Bestätigungsseite im Browser noch offen hat. Der
+            // previousStatus-Vergleich verhindert doppelte Mails bei wiederholten Webhook-Aufrufen mit
+            // unverändertem Status.
+            if (previousStatus != status)
+            {
+                if (becameValid)
+                    await NotifyMandateOutcomeAsync(subscription, true, null, ct);
+                else if (status is "failed" or "canceled" or "expired")
+                {
+                    var failureMessage = payment["details"]?["failureMessage"]?.GetValue<string>();
+                    await NotifyMandateOutcomeAsync(subscription, false, failureMessage, ct);
+                }
+            }
             return;
         }
 
@@ -490,6 +511,47 @@ public sealed class MolliePaymentService : IMolliePaymentService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Payment-received email failed for invoice {InvoiceId}", invoice.Id);
+        }
+    }
+
+    /// <summary>Proactively tells the customer whether the mandate setup they just attempted worked or not,
+    /// so they don't have to rely on still having the browser tab open — the static confirmation page alone
+    /// left customers believing a declined payment had succeeded. On failure, immediately generates a fresh
+    /// checkout link (reusing StartMandateCheckoutAsync's existing retry/attempt handling) so the customer
+    /// can try again right from the email.</summary>
+    private async Task NotifyMandateOutcomeAsync(CustomerSubscription subscription, bool succeeded, string? failureMessage, CancellationToken ct)
+    {
+        var contact = subscription.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? subscription.Customer.Contacts.FirstOrDefault();
+        if (contact == null || string.IsNullOrWhiteSpace(contact.Email)) return;
+        var contactName = string.Join(" ", new[] { contact.FirstName, contact.LastName }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+        if (string.IsNullOrWhiteSpace(contactName)) contactName = subscription.Customer.CompanyName;
+
+        try
+        {
+            if (succeeded)
+            {
+                await _email.SendTemplatedEmailAsync(contact.Email, "subscription-mandate-confirmed", new Dictionary<string, object>
+                {
+                    ["ContactName"] = contactName,
+                    ["PlanName"] = subscription.Plan.Name,
+                    ["MonthlyPrice"] = (subscription.AgreedMonthlyPrice ?? subscription.Plan.MonthlyPrice).ToString("0.00", CultureInfo.GetCultureInfo("de-DE")),
+                }, subscription.CustomerId, ct: ct);
+            }
+            else
+            {
+                var checkout = await StartMandateCheckoutAsync(subscription.Id, ct);
+                await _email.SendTemplatedEmailAsync(contact.Email, "subscription-mandate-failed", new Dictionary<string, object>
+                {
+                    ["ContactName"] = contactName,
+                    ["PlanName"] = subscription.Plan.Name,
+                    ["FailureReason"] = string.IsNullOrWhiteSpace(failureMessage) ? "Die Zahlung wurde nicht angenommen." : failureMessage,
+                    ["CheckoutUrl"] = checkout.CheckoutUrl,
+                }, subscription.CustomerId, ct: ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Mandate outcome email failed for subscription {SubscriptionId}", subscription.Id);
         }
     }
 

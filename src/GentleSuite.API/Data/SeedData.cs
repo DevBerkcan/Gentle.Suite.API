@@ -726,6 +726,27 @@ END;
                   <div><strong>Fällig bis:</strong> {{ DueDate }}</div>
                 </div>
                 """ + EmailFooter)},
+            new EmailTemplate{Key="subscription-mandate-confirmed",Subject="Zahlungseinrichtung bestätigt – {{ PlanName }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlungseinrichtung erfolgreich bestätigt</h1>
+                <div style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:16px 18px;margin:20px 0;color:#065f46;font-size:14px;line-height:1.6'>
+                  Ihre Zahlungsart für <strong>{{ PlanName }}</strong> über <strong>{{ MonthlyPrice }} EUR monatlich</strong> wurde erfolgreich eingerichtet.
+                </div>
+                <p style='line-height:1.65;color:#475467'>Die vereinbarten monatlichen Beträge werden ab jetzt automatisch eingezogen. Die jeweilige Rechnung erhalten Sie wie gewohnt vor dem Einzug.</p>
+                """ + EmailFooter)},
+            new EmailTemplate{Key="subscription-mandate-failed",Subject="Zahlungseinrichtung fehlgeschlagen – {{ PlanName }}",Body=EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlungseinrichtung hat leider nicht geklappt</h1>
+                <p style='line-height:1.65;color:#475467'>bei der Einrichtung Ihrer Zahlungsart für <strong>{{ PlanName }}</strong> ist ein Problem aufgetreten.</p>
+                <div style='background:#fef3f2;border:1px solid #fda29b;border-radius:10px;padding:16px 18px;margin:20px 0;color:#b42318;font-size:14px;line-height:1.6'>
+                  <strong>Grund:</strong> {{ FailureReason }}
+                </div>
+                <p style='line-height:1.65;color:#475467'>Bitte versuchen Sie es erneut, gerne auch mit einer anderen Karte oder Zahlungsart:</p>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ CheckoutUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Jetzt erneut versuchen</a>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls es weiterhin nicht funktioniert, antworten Sie gerne auf diese E-Mail — wir helfen Ihnen persönlich weiter.</p>
+                """ + EmailFooter)},
             new EmailTemplate{Key="customer-intake",Subject="Willkommen bei {{ CompanyName }} – Bitte vervollständigen Sie Ihre Angaben",Body=EmailShell("""
                 <p style='margin:0 0 18px'>Hallo,</p>
                 <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Vervollständigen Sie Ihre Angaben</h1>
@@ -953,6 +974,34 @@ END;
                   <div><strong>Fällig bis:</strong> {{ DueDate }}</div>
                 </div>
                 """ + EmailFooter));
+
+        await UpsertAsync("subscription-mandate-confirmed",
+            "Zahlungseinrichtung bestätigt – {{ PlanName }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlungseinrichtung erfolgreich bestätigt</h1>
+                <div style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:16px 18px;margin:20px 0;color:#065f46;font-size:14px;line-height:1.6'>
+                  Ihre Zahlungsart für <strong>{{ PlanName }}</strong> über <strong>{{ MonthlyPrice }} EUR monatlich</strong> wurde erfolgreich eingerichtet.
+                </div>
+                <p style='line-height:1.65;color:#475467'>Die vereinbarten monatlichen Beträge werden ab jetzt automatisch eingezogen. Die jeweilige Rechnung erhalten Sie wie gewohnt vor dem Einzug.</p>
+                """ + EmailFooter));
+
+        await UpsertAsync("subscription-mandate-failed",
+            "Zahlungseinrichtung fehlgeschlagen – {{ PlanName }}",
+            EmailShell("""
+                <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Zahlungseinrichtung hat leider nicht geklappt</h1>
+                <p style='line-height:1.65;color:#475467'>bei der Einrichtung Ihrer Zahlungsart für <strong>{{ PlanName }}</strong> ist ein Problem aufgetreten.</p>
+                <div style='background:#fef3f2;border:1px solid #fda29b;border-radius:10px;padding:16px 18px;margin:20px 0;color:#b42318;font-size:14px;line-height:1.6'>
+                  <strong>Grund:</strong> {{ FailureReason }}
+                </div>
+                <p style='line-height:1.65;color:#475467'>Bitte versuchen Sie es erneut, gerne auch mit einer anderen Karte oder Zahlungsart:</p>
+                <div style='text-align:center;margin:30px 0'>
+                  <a href='{{ CheckoutUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Jetzt erneut versuchen</a>
+                </div>
+                <p style='font-size:13px;line-height:1.6;color:#667085'>Falls es weiterhin nicht funktioniert, antworten Sie gerne auf diese E-Mail — wir helfen Ihnen persönlich weiter.</p>
+                """ + EmailFooter));
+
         const string mandateSubject = "Zahlungsart für {{ PlanName }} sicher einrichten – {{ ContractReference }}";
         const string mandateBody = """
                 <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
