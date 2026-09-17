@@ -473,6 +473,7 @@ await db.Database.ExecuteSqlRawAsync("""
     // Mandats-Erinnerungsmail (separat von MandateEmailSentAt/-Status/-AttemptCount der Erst-Mail)
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateReminderSentAt') ALTER TABLE "CustomerSubscriptions" ADD "MandateReminderSentAt" DATETIMEOFFSET(7) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateReminderCount') ALTER TABLE "CustomerSubscriptions" ADD "MandateReminderCount" INT NOT NULL DEFAULT 0;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateFailureNotifiedAt') ALTER TABLE "CustomerSubscriptions" ADD "MandateFailureNotifiedAt" DATETIMEOFFSET(7) NULL;""");
 
     // Agenturvertrag: neue Vertragspflicht gilt nur für ab jetzt neu entstehende Angebote/Abos.
     // Spalte zunächst NULLable anlegen (SQL Server löst Spaltennamen im selben Batch schon beim Parsen auf,

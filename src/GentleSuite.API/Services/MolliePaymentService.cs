@@ -382,9 +382,16 @@ public sealed class MolliePaymentService : IMolliePaymentService
             {
                 if (becameValid)
                     await NotifyMandateOutcomeAsync(subscription, true, null, ct);
-                else if (status is "failed" or "canceled" or "expired")
+                // Nur EINE Fehlschlag-Benachrichtigung pro Abo, nicht eine pro abgelaufenem Versuch — ohne
+                // diese Sperre erzeugt jeder abgelaufene Zahlungsversuch über NotifyMandateOutcomeAsync einen
+                // neuen Versuch, der seinerseits nach ~15 Minuten erneut abläuft und wieder benachrichtigt
+                // (unbegrenzte Endlosschleife). Weitere Erinnerungen übernimmt der bereits gedrosselte
+                // SendMandateReminderEmailAsync-Cron (alle 2 Tage, max. 3x).
+                else if (status is "failed" or "canceled" or "expired" && subscription.MandateFailureNotifiedAt == null)
                 {
                     var failureMessage = payment["details"]?["failureMessage"]?.GetValue<string>();
+                    subscription.MandateFailureNotifiedAt = DateTimeOffset.UtcNow;
+                    await _db.SaveChangesAsync(ct);
                     await NotifyMandateOutcomeAsync(subscription, false, failureMessage, ct);
                 }
             }

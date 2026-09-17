@@ -58,6 +58,10 @@ public class CustomerSubscription : BaseEntity
     public string? MollieFirstPaymentId { get; set; }
     public string? MollieFirstPaymentStatus { get; set; }
     public int MollieMandateAttempt { get; set; }
+    /// <summary>Set the first time a "mandate failed" outcome email goes out, so a customer who never
+    /// completes setup gets exactly one such notification instead of one per expired retry attempt —
+    /// further nudges come from the already-capped SendMandateReminderEmailAsync cron instead.</summary>
+    public DateTimeOffset? MandateFailureNotifiedAt { get; set; }
     public DateTimeOffset? MandateEmailSentAt { get; set; }
     public string? MandateEmailRecipient { get; set; }
     public string? MandateEmailStatus { get; set; }
