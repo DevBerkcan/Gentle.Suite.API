@@ -345,15 +345,61 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         if (kind == "mandate" && Guid.TryParse(MetadataString(metadata, "subscriptionId"), out var subscriptionId))
         {
-            var subscription = await _db.CustomerSubscriptions
+            await ApplyMandatePaymentStatusAsync(subscriptionId, paymentId, status, payment, ct);
+            return;
+        }
+
+        if (kind == "invoice" && Guid.TryParse(MetadataString(metadata, "invoiceId"), out var invoiceId))
+        {
+            await ApplyInvoicePaymentStatusAsync(invoiceId, paymentId, status, ct);
+            return;
+        }
+    }
+
+    // Mollie can deliver the same payment webhook more than once, and a webhook delivery can also
+    // land while the customer's confirmation page is independently polling GetMandateStatusAsync for
+    // the same payment. Without serialization, two concurrent calls both read the same "previous"
+    // status before either commits its update, so both conclude the status "just changed" and each
+    // fires its own outcome email/payment record. sp_getapplock (scoped to this transaction, keyed on
+    // the Mollie payment id) makes the read-modify-write atomic across calls: the loser blocks until
+    // the winner commits, then sees the already-applied status and correctly no-ops.
+    private async Task AcquirePaymentLockAsync(string paymentId, CancellationToken ct)
+    {
+        var lockResult = await _db.Database
+            .SqlQueryRaw<int>(
+                "DECLARE @res int; EXEC @res = sp_getapplock @Resource = {0}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000; SELECT @res AS Value;",
+                paymentId)
+            .SingleAsync(ct);
+        if (lockResult < 0)
+            throw new InvalidOperationException($"Konnte keine Sperre für die Mollie-Zahlung {paymentId} erhalten (sp_getapplock-Code {lockResult}).");
+    }
+
+    private async Task ApplyMandatePaymentStatusAsync(Guid subscriptionId, string paymentId, string status, JsonNode payment, CancellationToken ct)
+    {
+        CustomerSubscription? subscription;
+        string? previousStatus;
+        var becameValid = false;
+        var shouldNotifySuccess = false;
+        var shouldNotifyFailure = false;
+        string? failureMessage = null;
+
+        await using (var tx = await _db.Database.BeginTransactionAsync(ct))
+        {
+            await AcquirePaymentLockAsync(paymentId, ct);
+
+            subscription = await _db.CustomerSubscriptions
                 .Include(s => s.Plan)
                 .Include(s => s.Customer).ThenInclude(c => c.Contacts)
                 .FirstOrDefaultAsync(s => s.Id == subscriptionId, ct);
-            if (subscription == null || subscription.MollieFirstPaymentId != paymentId) return;
-            var previousStatus = subscription.MollieFirstPaymentStatus;
+            if (subscription == null || subscription.MollieFirstPaymentId != paymentId)
+            {
+                await tx.CommitAsync(ct);
+                return;
+            }
+
+            previousStatus = subscription.MollieFirstPaymentStatus;
             subscription.MollieFirstPaymentStatus = status;
 
-            var becameValid = false;
             if (status == "paid" && !string.IsNullOrWhiteSpace(subscription.MollieCustomerId))
             {
                 var mandates = await GetAsync($"customers/{subscription.MollieCustomerId}/mandates", ct);
@@ -372,7 +418,6 @@ public sealed class MolliePaymentService : IMolliePaymentService
                     }
                 }
             }
-            await _db.SaveChangesAsync(ct);
 
             // Proaktive Rückmeldung an den Kunden, sobald sich das Ergebnis dieses Zahlungsversuchs erstmals
             // klärt — unabhängig davon, ob der Kunde die Bestätigungsseite im Browser noch offen hat. Der
@@ -381,7 +426,9 @@ public sealed class MolliePaymentService : IMolliePaymentService
             if (previousStatus != status)
             {
                 if (becameValid)
-                    await NotifyMandateOutcomeAsync(subscription, true, null, ct);
+                {
+                    shouldNotifySuccess = true;
+                }
                 // Nur EINE Fehlschlag-Benachrichtigung pro Abo, nicht eine pro abgelaufenem Versuch — ohne
                 // diese Sperre erzeugt jeder abgelaufene Zahlungsversuch über NotifyMandateOutcomeAsync einen
                 // neuen Versuch, der seinerseits nach ~15 Minuten erneut abläuft und wieder benachrichtigt
@@ -389,28 +436,48 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 // SendMandateReminderEmailAsync-Cron (alle 2 Tage, max. 3x).
                 else if (status is "failed" or "canceled" or "expired" && subscription.MandateFailureNotifiedAt == null)
                 {
-                    var failureMessage = payment["details"]?["failureMessage"]?.GetValue<string>();
+                    failureMessage = payment["details"]?["failureMessage"]?.GetValue<string>();
                     subscription.MandateFailureNotifiedAt = DateTimeOffset.UtcNow;
-                    await _db.SaveChangesAsync(ct);
-                    await NotifyMandateOutcomeAsync(subscription, false, failureMessage, ct);
+                    shouldNotifyFailure = true;
                 }
             }
-            return;
+
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
         }
 
-        if (kind == "invoice" && Guid.TryParse(MetadataString(metadata, "invoiceId"), out var invoiceId))
+        // Sent after the commit (and outside the lock) so the transaction isn't held open across a
+        // slow SMTP call.
+        if (shouldNotifySuccess)
+            await NotifyMandateOutcomeAsync(subscription, true, null, ct);
+        else if (shouldNotifyFailure)
+            await NotifyMandateOutcomeAsync(subscription, false, failureMessage, ct);
+    }
+
+    private async Task ApplyInvoicePaymentStatusAsync(Guid invoiceId, string paymentId, string status, CancellationToken ct)
+    {
+        Invoice? invoice;
+        var isNewlyPaid = false;
+        var exhaustedRetries = false;
+
+        await using (var tx = await _db.Database.BeginTransactionAsync(ct))
         {
-            var invoice = await _db.Invoices
+            await AcquirePaymentLockAsync(paymentId, ct);
+
+            invoice = await _db.Invoices
                 .Include(i => i.Payments)
                 .Include(i => i.Customer).ThenInclude(c => c.Contacts)
                 .FirstOrDefaultAsync(i => i.Id == invoiceId, ct);
-            if (invoice == null) return;
+            if (invoice == null)
+            {
+                await tx.CommitAsync(ct);
+                return;
+            }
             if (!string.IsNullOrWhiteSpace(invoice.ExternalPaymentReference) && invoice.ExternalPaymentReference != paymentId)
                 throw new InvalidOperationException("Mollie-Zahlung stimmt nicht mit der Rechnung überein.");
             invoice.ExternalPaymentReference = paymentId;
             invoice.PaymentCollectionStatus = status;
 
-            var isNewlyPaid = false;
             if (status == "paid")
             {
                 isNewlyPaid = !invoice.Payments.Any(p => p.Reference == paymentId);
@@ -442,7 +509,6 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 invoice.PaidAt = null;
             }
 
-            var exhaustedRetries = false;
             if (status is "failed" or "expired" or "canceled")
             {
                 invoice.CollectionAttemptCount++;
@@ -465,15 +531,16 @@ public sealed class MolliePaymentService : IMolliePaymentService
             }
 
             await _db.SaveChangesAsync(ct);
-
-            if (isNewlyPaid)
-                await SendPaymentReceivedEmailAsync(invoice, ct);
-            if (exhaustedRetries)
-                await NotifyStaffAsync(
-                    "Mollie-Einzug endgültig fehlgeschlagen",
-                    $"Der automatische Einzug für Rechnung {invoice.InvoiceNumber} (Kunde: {invoice.Customer.CompanyName}) ist nach {invoice.CollectionAttemptCount} Versuchen fehlgeschlagen (letzter Status: {status}). Die Rechnung wurde auf 'Überfällig' gesetzt und muss manuell nachverfolgt werden.",
-                    ct);
+            await tx.CommitAsync(ct);
         }
+
+        if (isNewlyPaid)
+            await SendPaymentReceivedEmailAsync(invoice, ct);
+        if (exhaustedRetries)
+            await NotifyStaffAsync(
+                "Mollie-Einzug endgültig fehlgeschlagen",
+                $"Der automatische Einzug für Rechnung {invoice.InvoiceNumber} (Kunde: {invoice.Customer.CompanyName}) ist nach {invoice.CollectionAttemptCount} Versuchen fehlgeschlagen (letzter Status: {status}). Die Rechnung wurde auf 'Überfällig' gesetzt und muss manuell nachverfolgt werden.",
+                ct);
     }
 
     private const int MaxCollectionAttempts = 3;
