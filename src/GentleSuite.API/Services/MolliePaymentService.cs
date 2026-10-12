@@ -84,7 +84,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
             amount = new { currency = "EUR", value = "0.01" },
             customerId = subscription.MollieCustomerId,
             sequenceType = "first",
-            description = $"Zahlungseinrichtung {subscription.ContractReference} - {subscription.Plan.Name}",
+            description = $"Zahlungseinrichtung {subscription.ContractReference} - {subscription.InstallmentSourceTitle ?? subscription.Plan.Name}",
             redirectUrl = $"{frontendBaseUrl}/payment/mandate-result?sub={subscription.Id}",
             webhookUrl = $"{publicBaseUrl}/api/mollie/webhook",
             metadata = new { kind = "mandate", subscriptionId = subscription.Id }
@@ -136,7 +136,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 {
                     ["ContactName"] = contactName,
                     ["CustomerName"] = subscription.Customer.CompanyName,
-                    ["PlanName"] = subscription.Plan.Name,
+                    ["PlanName"] = subscription.InstallmentSourceTitle ?? subscription.Plan.Name,
                     ["MonthlyPrice"] = (subscription.AgreedMonthlyPrice ?? subscription.Plan.MonthlyPrice).ToString("0.00", CultureInfo.GetCultureInfo("de-DE")),
                     ["StartDate"] = subscription.StartDate.ToString("dd.MM.yyyy", CultureInfo.GetCultureInfo("de-DE")),
                     ["ContractReference"] = subscription.ContractReference ?? "-",
@@ -360,19 +360,15 @@ public sealed class MolliePaymentService : IMolliePaymentService
     // land while the customer's confirmation page is independently polling GetMandateStatusAsync for
     // the same payment. Without serialization, two concurrent calls both read the same "previous"
     // status before either commits its update, so both conclude the status "just changed" and each
-    // fires its own outcome email/payment record. sp_getapplock (scoped to this transaction, keyed on
-    // the Mollie payment id) makes the read-modify-write atomic across calls: the loser blocks until
-    // the winner commits, then sees the already-applied status and correctly no-ops.
-    private async Task AcquirePaymentLockAsync(string paymentId, CancellationToken ct)
-    {
-        var lockResult = await _db.Database
-            .SqlQueryRaw<int>(
-                "DECLARE @res int; EXEC @res = sp_getapplock @Resource = {0}, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000; SELECT @res AS Value;",
-                paymentId)
-            .SingleAsync(ct);
-        if (lockResult < 0)
-            throw new InvalidOperationException($"Konnte keine Sperre für die Mollie-Zahlung {paymentId} erhalten (sp_getapplock-Code {lockResult}).");
-    }
+    // fires its own outcome email/payment record. A pessimistic row lock (UPDLOCK/HOLDLOCK, held for
+    // the lifetime of this transaction) on the exact subscription/invoice row being processed makes the
+    // read-modify-write atomic across calls: the loser blocks on the SELECT until the winner commits,
+    // then sees the already-applied status and correctly no-ops.
+    //
+    // (Previously this used sp_getapplock via SqlQueryRaw<int>+SingleAsync — that throws "'FromSql' or
+    // 'SqlQuery' was called with non-composable SQL and with a query composing over it" on every call,
+    // because EF Core refuses to compose SingleAsync over a multi-statement DECLARE/EXEC/SELECT batch.
+    // That silently broke 100% of webhook processing from 2026-09-18 until this fix.)
 
     private async Task ApplyMandatePaymentStatusAsync(Guid subscriptionId, string paymentId, string status, JsonNode payment, CancellationToken ct)
     {
@@ -385,12 +381,11 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         await using (var tx = await _db.Database.BeginTransactionAsync(ct))
         {
-            await AcquirePaymentLockAsync(paymentId, ct);
-
             subscription = await _db.CustomerSubscriptions
+                .FromSqlInterpolated($"SELECT * FROM CustomerSubscriptions WITH (UPDLOCK, HOLDLOCK, ROWLOCK) WHERE Id = {subscriptionId}")
                 .Include(s => s.Plan)
                 .Include(s => s.Customer).ThenInclude(c => c.Contacts)
-                .FirstOrDefaultAsync(s => s.Id == subscriptionId, ct);
+                .FirstOrDefaultAsync(ct);
             if (subscription == null || subscription.MollieFirstPaymentId != paymentId)
             {
                 await tx.CommitAsync(ct);
@@ -462,12 +457,11 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         await using (var tx = await _db.Database.BeginTransactionAsync(ct))
         {
-            await AcquirePaymentLockAsync(paymentId, ct);
-
             invoice = await _db.Invoices
+                .FromSqlInterpolated($"SELECT * FROM Invoices WITH (UPDLOCK, HOLDLOCK, ROWLOCK) WHERE Id = {invoiceId}")
                 .Include(i => i.Payments)
                 .Include(i => i.Customer).ThenInclude(c => c.Contacts)
-                .FirstOrDefaultAsync(i => i.Id == invoiceId, ct);
+                .FirstOrDefaultAsync(ct);
             if (invoice == null)
             {
                 await tx.CommitAsync(ct);
@@ -607,7 +601,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 await _email.SendTemplatedEmailAsync(contact.Email, "subscription-mandate-confirmed", new Dictionary<string, object>
                 {
                     ["ContactName"] = contactName,
-                    ["PlanName"] = subscription.Plan.Name,
+                    ["PlanName"] = subscription.InstallmentSourceTitle ?? subscription.Plan.Name,
                     ["MonthlyPrice"] = (subscription.AgreedMonthlyPrice ?? subscription.Plan.MonthlyPrice).ToString("0.00", CultureInfo.GetCultureInfo("de-DE")),
                 }, subscription.CustomerId, ct: ct);
             }
@@ -617,7 +611,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 await _email.SendTemplatedEmailAsync(contact.Email, "subscription-mandate-failed", new Dictionary<string, object>
                 {
                     ["ContactName"] = contactName,
-                    ["PlanName"] = subscription.Plan.Name,
+                    ["PlanName"] = subscription.InstallmentSourceTitle ?? subscription.Plan.Name,
                     ["FailureReason"] = string.IsNullOrWhiteSpace(failureMessage) ? "Die Zahlung wurde nicht angenommen." : failureMessage,
                     ["CheckoutUrl"] = checkout.CheckoutUrl,
                 }, subscription.CustomerId, ct: ct);

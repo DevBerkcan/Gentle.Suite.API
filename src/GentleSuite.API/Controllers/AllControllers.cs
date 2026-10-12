@@ -454,17 +454,36 @@ public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentSer
 }
 
 [ApiController, Route("api/mollie"), AllowAnonymous]
-public class MollieWebhookController(IMolliePaymentService mollie) : ControllerBase
+public class MollieWebhookController(IMolliePaymentService mollie, ILogger<MollieWebhookController> logger) : ControllerBase
 {
     [HttpPost("webhook")]
     public async Task<IActionResult> PaymentWebhook([FromForm] string id)
     {
-        await mollie.HandlePaymentWebhookAsync(id);
-        return Ok();
+        try
+        {
+            await mollie.HandlePaymentWebhookAsync(id);
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Mollie webhook processing failed for payment {PaymentId}", id);
+            throw;
+        }
     }
 
     [HttpGet("mandate-status/{subscriptionId}")]
-    public async Task<ActionResult<MollieMandateStatusDto>> MandateStatus(Guid subscriptionId) => Ok(await mollie.GetMandateStatusAsync(subscriptionId));
+    public async Task<ActionResult<MollieMandateStatusDto>> MandateStatus(Guid subscriptionId)
+    {
+        try
+        {
+            return Ok(await mollie.GetMandateStatusAsync(subscriptionId));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Mollie mandate-status check failed for subscription {SubscriptionId}", subscriptionId);
+            throw;
+        }
+    }
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
