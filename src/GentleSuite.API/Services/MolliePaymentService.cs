@@ -476,8 +476,13 @@ public sealed class MolliePaymentService : IMolliePaymentService
             {
                 isNewlyPaid = !invoice.Payments.Any(p => p.Reference == paymentId);
                 if (isNewlyPaid)
-                    invoice.Payments.Add(new InvoicePayment
+                    // Added via the DbSet (not invoice.Payments.Add) with the FK set explicitly: adding
+                    // to a collection navigation that was populated by .Include() on a FromSqlInterpolated
+                    // root query can get mis-tracked as Modified instead of Added, producing an UPDATE for
+                    // a row that doesn't exist yet (DbUpdateConcurrencyException, "0 rows affected").
+                    _db.InvoicePayments.Add(new InvoicePayment
                     {
+                        InvoiceId = invoice.Id,
                         Amount = invoice.GrossTotal,
                         PaymentDate = DateTimeOffset.UtcNow,
                         PaymentMethod = "Mollie SEPA-Lastschrift",
@@ -491,8 +496,9 @@ public sealed class MolliePaymentService : IMolliePaymentService
             {
                 var reversalReference = $"{paymentId}:chargeback";
                 if (!invoice.Payments.Any(p => p.Reference == reversalReference))
-                    invoice.Payments.Add(new InvoicePayment
+                    _db.InvoicePayments.Add(new InvoicePayment
                     {
+                        InvoiceId = invoice.Id,
                         Amount = -invoice.GrossTotal,
                         PaymentDate = DateTimeOffset.UtcNow,
                         PaymentMethod = "Mollie SEPA-Rücklastschrift",
