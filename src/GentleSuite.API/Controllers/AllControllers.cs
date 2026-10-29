@@ -610,6 +610,18 @@ public class AgencyContractsController(IAgencyContractService svc) : ControllerB
     [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) => File(await svc.GeneratePdfAsync(id), "application/pdf", "Agenturvertrag.pdf");
 }
 
+[ApiController, Route("api/estimates"), Authorize]
+public class EstimatesController(IEstimateService svc) : ControllerBase
+{
+    [HttpGet] public async Task<ActionResult<PagedResult<EstimateListDto>>> List([FromQuery] PaginationParams p, [FromQuery] Guid? customerId, [FromQuery] EstimateStatus? status) => Ok(await svc.GetPagedAsync(p, customerId, status));
+    [HttpGet("{id}")] public async Task<ActionResult<EstimateDto>> GetById(Guid id) { var r = await svc.GetByIdAsync(id); return r == null ? NotFound() : Ok(r); }
+    [HttpPost] public async Task<ActionResult<EstimateDto>> Create(SaveEstimateRequest req) => Ok(await svc.CreateAsync(req));
+    [HttpPut("{id}")] public async Task<ActionResult<EstimateDto>> Update(Guid id, SaveEstimateRequest req) => Ok(await svc.UpdateAsync(id, req));
+    [HttpPost("{id}/duplicate")] public async Task<ActionResult<EstimateDto>> Duplicate(Guid id) => Ok(await svc.DuplicateAsync(id));
+    [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
+    [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) { var (pdf, name) = await svc.GeneratePdfAsync(id); return File(pdf, "application/pdf", name); }
+}
+
 [ApiController, Route("api/contractclauseblocks"), Authorize]
 public class ContractClauseBlocksController(IContractClauseBlockService svc) : ControllerBase
 {

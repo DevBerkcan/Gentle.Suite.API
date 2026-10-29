@@ -86,6 +86,7 @@ builder.Services.AddScoped<IPaymentTermService, PaymentTermServiceImpl>();
 builder.Services.AddScoped<IContractTemplateService, ContractTemplateServiceImpl>();
 builder.Services.AddScoped<IAgencyContractService, AgencyContractServiceImpl>();
 builder.Services.AddScoped<IContractClauseBlockService, ContractClauseBlockServiceImpl>();
+builder.Services.AddScoped<IEstimateService, EstimateServiceImpl>();
 builder.Services.AddScoped<ITimeTrackingService, TimeTrackingServiceImpl>();
 builder.Services.AddScoped<IVatService, VatServiceImpl>();
 builder.Services.AddScoped<IEmailLogService, EmailLogServiceImpl>();
@@ -583,6 +584,45 @@ await db.Database.ExecuteSqlRawAsync("""
         );
     END
     """);
+
+    // Schätzungen (Aufwandsschätzungen): purely additive — creates only the new "Estimates" table + index, touches no existing table/data.
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='Estimates')
+    BEGIN
+        CREATE TABLE "Estimates" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "EstimateNumber" NVARCHAR(64) NOT NULL,
+            "CustomerId" UNIQUEIDENTIFIER NULL,
+            "CustomerDisplayName" NVARCHAR(300) NULL,
+            "Title" NVARCHAR(300) NOT NULL DEFAULT '',
+            "Subtitle" NVARCHAR(500) NULL,
+            "Version" NVARCHAR(32) NOT NULL DEFAULT '1.0',
+            "Date" DATETIMEOFFSET(7) NOT NULL,
+            "PreparedBy" NVARCHAR(200) NULL,
+            "ApprovedBy" NVARCHAR(200) NULL,
+            "Responsible" NVARCHAR(200) NULL,
+            "Classification" NVARCHAR(32) NOT NULL DEFAULT 'vertraulich',
+            "Status" INT NOT NULL DEFAULT 0,
+            "FixedPrice" DECIMAL(18,2) NULL,
+            "FixedPriceLabel" NVARCHAR(200) NULL,
+            "SituationText" NVARCHAR(MAX) NULL,
+            "ProposalText" NVARCHAR(MAX) NULL,
+            "CostNote" NVARCHAR(MAX) NULL,
+            "OperationText" NVARCHAR(MAX) NULL,
+            "TimelineNote" NVARCHAR(MAX) NULL,
+            "ContentJson" NVARCHAR(MAX) NOT NULL DEFAULT '{{}}', -- braces doubled: ExecuteSqlRaw runs string.Format
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_Estimates" PRIMARY KEY ("Id"),
+            CONSTRAINT "FK_Estimates_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id")
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Estimates_CustomerId' AND object_id=OBJECT_ID('Estimates')) CREATE INDEX "IX_Estimates_CustomerId" ON "Estimates" ("CustomerId");""");
 
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }

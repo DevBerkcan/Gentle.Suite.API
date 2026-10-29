@@ -483,3 +483,39 @@ public record CustomerDocumentDto(Guid Id, Guid CustomerId, string FileName, str
 // === CSV-Import ===
 public record CsvImportRowDto(int Row, string CompanyName, string FirstName, string LastName, string Email, string? Phone, string? Position, string? Street, string? City, string? ZipCode, string? Country, string? Industry, string? Website);
 public record CsvImportResultDto(int Imported, int Skipped, List<string> Errors);
+
+// === Schätzungen (Aufwandsschätzungen) ===
+/// <summary>One bullet / list entry. Label is an optional bold lead-in ("Datenschutz: …").</summary>
+public class EstimateItemDto { public string? Label { get; set; } public string Text { get; set; } = string.Empty; }
+/// <summary>Module / Ausbaustufe row with a fixed-price range (Pauschale von–bis, netto).</summary>
+public class EstimateModuleDto { public string Title { get; set; } = string.Empty; public string? Description { get; set; } public decimal? PriceFrom { get; set; } public decimal? PriceTo { get; set; } }
+public class EstimateTimelineRowDto { public string Phase { get; set; } = string.Empty; public string? Period { get; set; } public string? Result { get; set; } }
+/// <summary>Everything list-like of an Estimate, persisted as Estimate.ContentJson.</summary>
+public class EstimateContentDto
+{
+    public List<EstimateItemDto> Basis { get; set; } = new();          // 01 Grundlage
+    public List<EstimateItemDto> Decisions { get; set; } = new();      // 01 Festlegungen
+    public List<EstimateItemDto> Architecture { get; set; } = new();   // 02 Architektur
+    public List<EstimateItemDto> Implementation { get; set; } = new(); // 02 Umsetzung
+    public List<EstimateItemDto> Pilot { get; set; } = new();          // 02 Pilotbetrieb
+    public List<EstimateModuleDto> Modules { get; set; } = new();      // 03 Module
+    public List<EstimateModuleDto> Extensions { get; set; } = new();   // 03 Ausbaustufen (optional)
+    public List<EstimateItemDto> Assumptions { get; set; } = new();    // 03 Annahmen und Abhängigkeiten
+    public List<EstimateItemDto> Exclusions { get; set; } = new();     // 03 Nicht im Umfang enthalten
+    public List<EstimateItemDto> Risks { get; set; } = new();          // 04
+    public List<EstimateItemDto> OpenQuestions { get; set; } = new();  // 05
+    public List<EstimateTimelineRowDto> Timeline { get; set; } = new();// 06
+    public List<EstimateItemDto> NextSteps { get; set; } = new();      // 07
+}
+public record EstimateListDto(Guid Id, string EstimateNumber, string Title, Guid? CustomerId, string? CustomerName, string Version, decimal? FixedPrice, decimal ModulesFrom, decimal ModulesTo, EstimateStatus Status, DateTimeOffset Date, DateTimeOffset CreatedAt);
+public record EstimateDto(Guid Id, string EstimateNumber, Guid? CustomerId, string? CustomerName, string? CustomerDisplayName,
+    string Title, string? Subtitle, string Version, DateTimeOffset Date, string? PreparedBy, string? ApprovedBy, string? Responsible,
+    string Classification, EstimateStatus Status, decimal? FixedPrice, string? FixedPriceLabel,
+    string? SituationText, string? ProposalText, string? CostNote, string? OperationText, string? TimelineNote,
+    EstimateContentDto Content, decimal ModulesFrom, decimal ModulesTo, decimal ExtensionsFrom, decimal ExtensionsTo,
+    DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt);
+/// <summary>Create + update payload (full replace of all editable fields).</summary>
+public record SaveEstimateRequest(Guid? CustomerId, string? CustomerDisplayName, string Title, string? Subtitle, string? Version, DateTimeOffset? Date,
+    string? PreparedBy, string? ApprovedBy, string? Responsible, string? Classification, EstimateStatus? Status,
+    decimal? FixedPrice, string? FixedPriceLabel, string? SituationText, string? ProposalText, string? CostNote, string? OperationText, string? TimelineNote,
+    EstimateContentDto? Content);
