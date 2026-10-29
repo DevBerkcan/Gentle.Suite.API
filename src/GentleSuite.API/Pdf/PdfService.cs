@@ -893,7 +893,7 @@ public class PdfService : IPdfService
                         sec.Item().PaddingTop(10).ShowEntire().Background(Brand.Fill).BorderLeft(3).BorderColor(Brand.Navy).PaddingVertical(9).PaddingHorizontal(12).Row(r =>
                         {
                             r.RelativeItem().AlignMiddle().Text((Has(e.FixedPriceLabel) ? e.FixedPriceLabel!.Trim().TrimEnd(':') : "Festpreis") + ":").FontFamily(Brand.Display).Bold().FontSize(10).FontColor(Brand.Navy);
-                            r.AutoItem().AlignMiddle().Text($"{Eur(e.FixedPrice.Value)} netto").FontFamily(Brand.Display).Bold().FontSize(12).FontColor(Brand.Navy);
+                            r.AutoItem().AlignMiddle().Text(co.DefaultTaxMode == TaxMode.SmallBusiness ? Eur(e.FixedPrice.Value) : $"{Eur(e.FixedPrice.Value)} netto").FontFamily(Brand.Display).Bold().FontSize(12).FontColor(Brand.Navy);
                         });
                     if (extensions.Count > 0)
                     {
