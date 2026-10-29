@@ -51,6 +51,16 @@ internal static class Brand
         col.Item().PaddingTop(7).Text(text.ToUpperInvariant()).FontFamily(Display).Bold().FontSize(11).FontColor(Navy).LetterSpacing(0.04f);
     }
 
+    /// <summary>A heading plus the content added to the returned column move to the next page together when less than
+    /// <paramref name="minHeight"/> would be left for them — keeps headings from ending up alone at the bottom of a page.
+    /// (EnsureSpace only acts when its content would be split, so the heading must share one item with its content.)</summary>
+    public static ColumnDescriptor Group(ColumnDescriptor col, float minHeight = 90)
+    {
+        ColumnDescriptor group = null!;
+        col.Item().EnsureSpace(minHeight).Column(c => group = c); // the handler runs immediately; items added later still render
+        return group;
+    }
+
     /// <summary>Header cell of a table: navy fill, small white upper-case label.</summary>
     public static IContainer HeadCell(IContainer c) => c.Background(Navy).PaddingVertical(6).PaddingHorizontal(4);
     public static TextStyle HeadText => TextStyle.Default.FontFamily(Display).FontSize(7).Bold().FontColor("#FFFFFF").LetterSpacing(0.05f);
@@ -129,32 +139,34 @@ public class PdfService : IPdfService
                 string Num(string title) => $"{++n:00} — {title}";
                 if (!string.IsNullOrEmpty(quote.Subject)) col.Item().Text($"Betr.: {quote.Subject}").FontFamily(Brand.Display).Bold().FontSize(13).FontColor(Brand.Navy);
                 if (!string.IsNullOrEmpty(quote.IntroText)) col.Item().PaddingTop(8).Text(quote.IntroText).FontSize(9);
-                if (oneTime.Any()) { Brand.Section(col, Num("Einmalige Leistungen")); col.Item().PaddingTop(8).Element(e => BuildQuoteTable(e, oneTime, false)); col.Item().AlignRight().PaddingTop(6).Text($"Summe: {quote.SubtotalOneTime:N2} €").Bold().FontColor(Brand.Navy); }
-                if (recurring.Any()) { Brand.Section(col, Num("Monatliche Leistungen")); col.Item().PaddingTop(8).Element(e => BuildQuoteTable(e, recurring, true)); col.Item().AlignRight().PaddingTop(6).Text($"Monatlich: {quote.SubtotalMonthly:N2} €/Mon.").Bold().FontColor(Brand.Navy); }
+                if (oneTime.Any()) { var g = Brand.Group(col, 110); Brand.Section(g, Num("Einmalige Leistungen")); g.Item().PaddingTop(8).Element(e => BuildQuoteTable(e, oneTime, false)); g.Item().AlignRight().PaddingTop(6).Text($"Summe: {quote.SubtotalOneTime:N2} €").Bold().FontColor(Brand.Navy); }
+                if (recurring.Any()) { var g = Brand.Group(col, 110); Brand.Section(g, Num("Monatliche Leistungen")); g.Item().PaddingTop(8).Element(e => BuildQuoteTable(e, recurring, true)); g.Item().AlignRight().PaddingTop(6).Text($"Monatlich: {quote.SubtotalMonthly:N2} €/Mon.").Bold().FontColor(Brand.Navy); }
                 BuildTotalsBox(col, quote.Subtotal, quote.TaxRate, quote.TaxAmount, quote.GrandTotal, quote.TaxMode);
                 if (!string.IsNullOrEmpty(quote.OutroText)) col.Item().PaddingTop(14).Text(quote.OutroText).FontSize(9);
                 if (paymentTerms?.Any() == true)
                 {
-                    Brand.Section(col, Num("Zahlungsbedingungen"));
+                    var pg = Brand.Group(col);
+                    Brand.Section(pg, Num("Zahlungsbedingungen"));
                     foreach (var pt in paymentTerms)
                     {
                         var chosen = pt.Key == quote.ChosenPaymentTermKey;
-                        col.Item().PaddingTop(6).Text(t =>
+                        pg.Item().PaddingTop(6).Text(t =>
                         {
                             t.Span(chosen ? "☑ " : "☐ ").FontSize(9);
                             t.Span(pt.Title).Bold().FontSize(9).FontColor(chosen ? Brand.Navy : Brand.Text);
                         });
-                        col.Item().PaddingTop(2).PaddingLeft(14).Text(pt.Content).FontSize(8).FontColor(Brand.Muted);
+                        pg.Item().PaddingTop(2).PaddingLeft(14).Text(pt.Content).FontSize(8).FontColor(Brand.Muted);
                     }
                 }
                 if (planOptions?.Any() == true)
                 {
                     var singleOption = planOptions.Count == 1;
-                    Brand.Section(col, Num(singleOption ? "Zahlungsweise" : "Zahlungsoptionen"));
+                    var og = Brand.Group(col);
+                    Brand.Section(og, Num(singleOption ? "Zahlungsweise" : "Zahlungsoptionen"));
                     foreach (var opt in planOptions)
                     {
                         var chosen = opt.Key == quote.ChosenPaymentPlanOptionKey;
-                        col.Item().PaddingTop(6).Text(t =>
+                        og.Item().PaddingTop(6).Text(t =>
                         {
                             if (!singleOption) t.Span(chosen ? "☑ " : "☐ ").FontSize(9);
                             t.Span(opt.Title).Bold().FontSize(9).FontColor(chosen ? Brand.Navy : Brand.Text);
@@ -165,7 +177,7 @@ public class PdfService : IPdfService
                             opt.DownPayment.HasValue && opt.DownPayment.Value > 0 ? $"{opt.DownPayment:N2} € Anzahlung" : null,
                             opt.MonthlyAmount.HasValue && opt.MonthlyAmount.Value > 0 ? $"{opt.MonthlyAmount:N2} €/Monat" + (opt.Months.HasValue ? $" × {opt.Months}" : "") : null,
                         }.Where(s => s != null));
-                        if (!string.IsNullOrEmpty(sub)) col.Item().PaddingTop(2).PaddingLeft(singleOption ? 0 : 14).Text(sub).FontSize(8).FontColor(Brand.Muted);
+                        if (!string.IsNullOrEmpty(sub)) og.Item().PaddingTop(2).PaddingLeft(singleOption ? 0 : 14).Text(sub).FontSize(8).FontColor(Brand.Muted);
                     }
                 }
                 if (legal?.Any() == true) foreach (var b in legal) { col.Item().PaddingTop(12).Text(b.Title).Bold().FontSize(9).FontColor(Brand.Navy); col.Item().PaddingTop(3).Text(b.Content).FontSize(7.5f).FontColor(Brand.Muted); }
@@ -717,8 +729,9 @@ public class PdfService : IPdfService
             {
                 foreach (var s in sections)
                 {
-                    Brand.Section(col, s.Title);
-                    col.Item().PaddingTop(6).Text(s.Content).FontSize(9);
+                    var sec = Brand.Group(col);
+                    Brand.Section(sec, s.Title);
+                    sec.Item().PaddingTop(6).Text(s.Content).FontSize(9);
                 }
                 if (legal?.Any() == true) foreach (var b in legal) { col.Item().PaddingTop(12).Text(b.Title).Bold().FontSize(9).FontColor(Brand.Navy); col.Item().PaddingTop(3).Text(b.Content).FontSize(7.5f).FontColor(Brand.Muted); }
                 BuildBilateralSignatureArea(col, co, contract);
@@ -855,37 +868,36 @@ public class PdfService : IPdfService
 
                 if (hasSituation)
                 {
-                    EstimateSection(col, Num("Ausgangslage"));
-                    EstimatePara(col, e.SituationText);
-                    if (basis.Count > 0) { EstimateSub(col, "Grundlage"); EstimateBullets(col, basis); }
-                    if (decisions.Count > 0) { EstimateSub(col, "Festlegungen"); EstimateBullets(col, decisions); }
+                    var sec = EstimateSection(col, Num("Ausgangslage"));
+                    EstimatePara(sec, e.SituationText);
+                    if (basis.Count > 0) EstimateBullets(EstimateSub(sec, "Grundlage"), basis);
+                    if (decisions.Count > 0) EstimateBullets(EstimateSub(sec, "Festlegungen"), decisions);
                 }
 
                 if (hasProposal)
                 {
-                    EstimateSection(col, Num("Vorschlag Architektur, Umsetzung und Pilot"));
-                    EstimatePara(col, e.ProposalText);
-                    if (architecture.Count > 0) { EstimateSub(col, "Architektur"); EstimateBullets(col, architecture); }
-                    if (implementation.Count > 0) { EstimateSub(col, "Umsetzung"); EstimateBullets(col, implementation); }
-                    if (pilot.Count > 0) { EstimateSub(col, "Pilotbetrieb"); EstimateBullets(col, pilot); }
+                    var sec = EstimateSection(col, Num("Vorschlag Architektur, Umsetzung und Pilot"));
+                    EstimatePara(sec, e.ProposalText);
+                    if (architecture.Count > 0) EstimateBullets(EstimateSub(sec, "Architektur"), architecture);
+                    if (implementation.Count > 0) EstimateBullets(EstimateSub(sec, "Umsetzung"), implementation);
+                    if (pilot.Count > 0) EstimateBullets(EstimateSub(sec, "Pilotbetrieb"), pilot);
                 }
 
                 if (hasCost)
                 {
-                    EstimateSection(col, Num("Aufwandsschätzung"));
+                    var sec = EstimateSection(col, Num("Aufwandsschätzung"));
                     var (mFrom, mTo) = EstimateJson.Range(modules);
                     var (xFrom, xTo) = EstimateJson.Range(extensions);
-                    if (modules.Count > 0) col.Item().PaddingTop(10).Element(x => BuildEstimateModuleTable(x, modules, "Summe Module"));
+                    if (modules.Count > 0) sec.Item().PaddingTop(10).Element(x => BuildEstimateModuleTable(x, modules, "Summe Module"));
                     if (e.FixedPrice.HasValue)
-                        col.Item().PaddingTop(10).ShowEntire().Background(Brand.Fill).BorderLeft(3).BorderColor(Brand.Navy).PaddingVertical(9).PaddingHorizontal(12).Row(r =>
+                        sec.Item().PaddingTop(10).ShowEntire().Background(Brand.Fill).BorderLeft(3).BorderColor(Brand.Navy).PaddingVertical(9).PaddingHorizontal(12).Row(r =>
                         {
                             r.RelativeItem().AlignMiddle().Text((Has(e.FixedPriceLabel) ? e.FixedPriceLabel!.Trim().TrimEnd(':') : "Festpreis") + ":").FontFamily(Brand.Display).Bold().FontSize(10).FontColor(Brand.Navy);
                             r.AutoItem().AlignMiddle().Text($"{Eur(e.FixedPrice.Value)} netto").FontFamily(Brand.Display).Bold().FontSize(12).FontColor(Brand.Navy);
                         });
                     if (extensions.Count > 0)
                     {
-                        EstimateSub(col, "Ausbaustufen (optional)");
-                        col.Item().PaddingTop(6).Element(x => BuildEstimateModuleTable(x, extensions, "Summe Ausbaustufen"));
+                        EstimateSub(sec, "Ausbaustufen (optional)").Item().PaddingTop(6).Element(x => BuildEstimateModuleTable(x, extensions, "Summe Ausbaustufen"));
                     }
 
                     var overview = new List<(string Label, string Value, bool Strong)>(); // Betrieb is free text → left aligned
@@ -910,8 +922,7 @@ public class PdfService : IPdfService
                     if (Has(e.OperationText)) overview.Add(("Betrieb", e.OperationText!, false));
                     if (overview.Count > 0)
                     {
-                        EstimateSub(col, "Kostenübersicht");
-                        col.Item().PaddingTop(6).ShowEntire().Table(t =>
+                        EstimateSub(sec, "Kostenübersicht").Item().PaddingTop(6).ShowEntire().Table(t =>
                         {
                             t.ColumnsDefinition(cd => { cd.RelativeColumn(1.1f); cd.RelativeColumn(1.6f); });
                             foreach (var (label, value, strong) in overview)
@@ -923,19 +934,19 @@ public class PdfService : IPdfService
                             }
                         });
                     }
-                    if (Has(e.CostNote)) col.Item().PaddingTop(8).Text(e.CostNote!).FontSize(8.5f).FontColor(Brand.Muted).LineHeight(1.35f);
-                    if (assumptions.Count > 0) { EstimateSub(col, "Annahmen und Abhängigkeiten"); EstimateBullets(col, assumptions); }
-                    if (exclusions.Count > 0) { EstimateSub(col, "Nicht im Umfang enthalten"); EstimateBullets(col, exclusions); }
+                    if (Has(e.CostNote)) sec.Item().PaddingTop(8).Text(e.CostNote!).FontSize(8.5f).FontColor(Brand.Muted).LineHeight(1.35f);
+                    if (assumptions.Count > 0) EstimateBullets(EstimateSub(sec, "Annahmen und Abhängigkeiten"), assumptions);
+                    if (exclusions.Count > 0) EstimateBullets(EstimateSub(sec, "Nicht im Umfang enthalten"), exclusions);
                 }
 
-                if (risks.Count > 0) { EstimateSection(col, Num("Wesentliche Risiken")); col.Item().PaddingTop(4); EstimateBullets(col, risks); }
-                if (questions.Count > 0) { EstimateSection(col, Num("Offene Fragen")); col.Item().PaddingTop(4); EstimateNumbered(col, questions); }
+                if (risks.Count > 0) { var sec = EstimateSection(col, Num("Wesentliche Risiken")); sec.Item().PaddingTop(4); EstimateBullets(sec, risks); }
+                if (questions.Count > 0) { var sec = EstimateSection(col, Num("Offene Fragen")); sec.Item().PaddingTop(4); EstimateNumbered(sec, questions); }
 
                 if (hasTimeline)
                 {
-                    EstimateSection(col, Num("Zeitplan"));
+                    var sec = EstimateSection(col, Num("Zeitplan"));
                     if (timeline.Count > 0)
-                        col.Item().PaddingTop(10).Table(t =>
+                        sec.Item().PaddingTop(10).Table(t =>
                         {
                             t.ColumnsDefinition(cd => { cd.RelativeColumn(1.6f); cd.RelativeColumn(1.3f); cd.RelativeColumn(2.6f); });
                             t.Header(h =>
@@ -951,7 +962,7 @@ public class PdfService : IPdfService
                                 t.Cell().Element(Brand.BodyCell).Text(row.Result ?? "").FontSize(8.5f);
                             }
                         });
-                    if (Has(e.TimelineNote)) col.Item().PaddingTop(8).Text(e.TimelineNote!).FontSize(8.5f).FontColor(Brand.Muted).LineHeight(1.35f);
+                    if (Has(e.TimelineNote)) sec.Item().PaddingTop(8).Text(e.TimelineNote!).FontSize(8.5f).FontColor(Brand.Muted).LineHeight(1.35f);
                 }
 
                 // The last section and the closing box move to the next page together (when they fit there), so the
@@ -959,7 +970,7 @@ public class PdfService : IPdfService
                 var tailHeight = Math.Min(380, 120 + (nextSteps.Count > 0 ? 50 + 22 * nextSteps.Count : 0));
                 col.Item().EnsureSpace(tailHeight).Column(tail =>
                 {
-                if (nextSteps.Count > 0) { EstimateSection(tail, Num("Nächste Schritte")); tail.Item().PaddingTop(4); EstimateNumbered(tail, nextSteps); }
+                if (nextSteps.Count > 0) { var sec = EstimateSection(tail, Num("Nächste Schritte")); sec.Item().PaddingTop(4); EstimateNumbered(sec, nextSteps); }
 
                 // Closing
                 tail.Item().PaddingTop(24).ShowEntire().Background(Brand.Navy).PaddingHorizontal(24).PaddingVertical(20).Column(cl =>
@@ -1003,12 +1014,21 @@ public class PdfService : IPdfService
         if (!string.IsNullOrWhiteSpace(text)) col.Item().PaddingTop(8).Text(text).FontSize(9.5f).LineHeight(1.35f);
     }
 
-    /// <summary>Same look as Brand.Section, but never leaves the heading orphaned at the bottom of a page.</summary>
-    private static void EstimateSection(ColumnDescriptor col, string text) =>
-        col.Item().EnsureSpace(110).Column(h => Brand.Section(h, text));
+    /// <summary>Brand.Section in its own group: add the section's content to the returned column so the heading
+    /// never ends up alone at the bottom of a page.</summary>
+    private static ColumnDescriptor EstimateSection(ColumnDescriptor col, string text)
+    {
+        var g = Brand.Group(col, 110);
+        Brand.Section(g, text);
+        return g;
+    }
 
-    private static void EstimateSub(ColumnDescriptor col, string title) =>
-        col.Item().EnsureSpace(60).PaddingTop(12).Text(title).FontFamily(Brand.Display).Bold().FontSize(9.5f).FontColor(Brand.Navy);
+    private static ColumnDescriptor EstimateSub(ColumnDescriptor col, string title)
+    {
+        var g = Brand.Group(col, 60);
+        g.Item().PaddingTop(12).Text(title).FontFamily(Brand.Display).Bold().FontSize(9.5f).FontColor(Brand.Navy);
+        return g;
+    }
 
     private static void EstimateItemText(TextDescriptor t, EstimateItemDto i)
     {
