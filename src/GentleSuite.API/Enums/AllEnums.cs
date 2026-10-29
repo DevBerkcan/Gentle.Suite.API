@@ -45,6 +45,9 @@ public enum NoteType { General, Credential, Technical, Financial, Internal }
 public enum SignatureStatus { Pending, Signed, Declined, Expired }
 public enum AgencyContractStatus { Draft, SentForSignature, FullyExecuted, Declined }
 
+// === Schätzungen (Aufwandsschätzungen) ===
+public enum EstimateStatus { Draft, Sent, Accepted, Rejected }
+
 // === Accounting ===
 public enum AccountType { Asset, Liability, Income, Expense, Equity }
 public enum JournalEntryStatus { Draft, Posted }

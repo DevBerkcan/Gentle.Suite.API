@@ -278,6 +278,19 @@ public interface IAgencyContractService
     Task<AgencyContractDto> CreateFromWizardAsync(GenerateContractRequest req, CancellationToken ct = default);
 }
 
+public interface IEstimateService
+{
+    Task<PagedResult<EstimateListDto>> GetPagedAsync(PaginationParams p, Guid? customerId, EstimateStatus? status, CancellationToken ct = default);
+    Task<EstimateDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<EstimateDto> CreateAsync(SaveEstimateRequest req, CancellationToken ct = default);
+    Task<EstimateDto> UpdateAsync(Guid id, SaveEstimateRequest req, CancellationToken ct = default);
+    /// <summary>Copies the estimate as a new draft with the same number and the next version (1.0 → 2.0).</summary>
+    Task<EstimateDto> DuplicateAsync(Guid id, CancellationToken ct = default);
+    /// <summary>Soft-delete; only allowed for drafts.</summary>
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
+    Task<(byte[] Pdf, string FileName)> GeneratePdfAsync(Guid id, CancellationToken ct = default);
+}
+
 public interface IContractClauseBlockService
 {
     Task<List<ContractClauseBlockDto>> GetAllAsync(CancellationToken ct = default);
@@ -444,6 +457,7 @@ public interface IPdfService
     Task<byte[]> GenerateQuotePdfAsync(Quote quote, CompanySettings company, CancellationToken ct = default);
     Task<byte[]> GenerateInvoicePdfAsync(Invoice invoice, CompanySettings company, CancellationToken ct = default);
     Task<byte[]> GenerateAgencyContractPdfAsync(AgencyContract contract, CompanySettings company, CancellationToken ct = default);
+    Task<byte[]> GenerateEstimatePdfAsync(Estimate estimate, CompanySettings company, CancellationToken ct = default);
 }
 
 public interface ICurrentUserService
