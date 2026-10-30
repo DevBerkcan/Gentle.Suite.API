@@ -29,6 +29,7 @@ public static class SeedData
         await SeedContractTemplates(db);
         await SeedContractClauseBlocks(db);
         await ContractModuleSeed.EnsureAsync(db);
+        await ClauseRewriteSeed.EnsureAsync(db);
         await LegalDocumentSeed.EnsureAsync(db);
     }
 
