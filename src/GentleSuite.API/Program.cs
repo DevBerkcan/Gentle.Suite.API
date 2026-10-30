@@ -702,6 +702,8 @@ await db.Database.ExecuteSqlRawAsync("""
         );
     END
     """);
+    // Schätzung → Angebot: additive nullable link column.
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Estimates','QuoteId') IS NULL ALTER TABLE "Estimates" ADD "QuoteId" UNIQUEIDENTIFIER NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Estimates_CustomerId' AND object_id=OBJECT_ID('Estimates')) CREATE INDEX "IX_Estimates_CustomerId" ON "Estimates" ("CustomerId");""");
 
     // Rechts-Ablauf pro Projekt: purely additive — creates only the new "ProjectLegalWorkflows" table + index, touches no existing table/data.

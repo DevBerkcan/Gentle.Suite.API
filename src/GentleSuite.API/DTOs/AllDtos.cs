@@ -556,7 +556,9 @@ public record EstimateDto(Guid Id, string EstimateNumber, Guid? CustomerId, stri
     string Classification, EstimateStatus Status, decimal? FixedPrice, string? FixedPriceLabel,
     string? SituationText, string? ProposalText, string? CostNote, string? OperationText, string? TimelineNote,
     EstimateContentDto Content, decimal ModulesFrom, decimal ModulesTo, decimal ExtensionsFrom, decimal ExtensionsTo,
-    DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt);
+    DateTimeOffset CreatedAt, DateTimeOffset? UpdatedAt, Guid? QuoteId = null);
+/// <summary>"fixed" = Festpreis anteilig auf die Module verteilt, "upper"/"lower"/"middle" = obere/untere Spanne bzw. Mitte je Modul.</summary>
+public record CreateQuoteFromEstimateRequest(string PriceMode = "fixed");
 /// <summary>Create + update payload (full replace of all editable fields).</summary>
 public record SaveEstimateRequest(Guid? CustomerId, string? CustomerDisplayName, string Title, string? Subtitle, string? Version, DateTimeOffset? Date,
     string? PreparedBy, string? ApprovedBy, string? Responsible, string? Classification, EstimateStatus? Status,
@@ -568,7 +570,7 @@ public record LegalWorkflowSubStepDto(string Key, string Title, string State, st
 public record LegalWorkflowStepDto(string Key, int Number, string Title, string Description, string State, List<LegalWorkflowSubStepDto> SubSteps);
 public record LegalWorkflowListItemDto(Guid QuoteId, string QuoteNumber, string? Subject, Guid CustomerId, string CustomerName, QuoteStatus QuoteStatus, int DoneSteps, int TotalSteps, string? NextStep, bool HasProblem, DateTimeOffset LastActivity);
 public record LegalWorkflowDto(Guid QuoteId, string QuoteNumber, string? Subject, Guid CustomerId, string CustomerName, QuoteStatus QuoteStatus, decimal QuoteTotal,
-    Guid? AgencyContractId, string? AgencyContractNumber, string? ContactEmail, int DoneSteps, int TotalSteps, List<LegalWorkflowStepDto> Steps,
+    Guid? AgencyContractId, string? AgencyContractNumber, Guid? AvContractId, string? ContactEmail, int DoneSteps, int TotalSteps, List<LegalWorkflowStepDto> Steps,
     DateTimeOffset? RightsRequestedAt, string? RightsRequestedTo, DateTimeOffset? RightsGrantedAt, string? RightsGrantedByName, bool RightsReferenceConsent,
     DateTimeOffset? AcceptanceRequestedAt, string? AcceptanceRequestedTo, DateTimeOffset? AcceptanceDeadline, string? AcceptanceScope, string? AcceptanceResult,
     DateTimeOffset? AcceptanceRespondedAt, string? AcceptanceByName, string? AcceptanceRemarks, bool AcceptanceDeemed);

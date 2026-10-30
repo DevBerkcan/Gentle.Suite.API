@@ -1512,6 +1512,8 @@ public class AgencyContractServiceImpl : IAgencyContractService
         }
 
         var template = await _db.ContractTemplates.FindAsync(new object[] { req.ContractTemplateId }, ct) ?? throw new KeyNotFoundException("Vertragsvorlage nicht gefunden.");
+        // An AV-Vertrag has no price of its own — showing the quote total as "Vertragswert" would be misleading.
+        if (template.Key == LegalDocumentSeed.AvTemplateKey) totalValue = null;
         var contractNumber = await _seq.NextNumberAsync("AgencyContract", DateTime.UtcNow.Year, "AV", 4, ct, includeYear: false);
 
         var contract = new AgencyContract
@@ -1546,6 +1548,9 @@ public class AgencyContractServiceImpl : IAgencyContractService
     {
         var c = await _db.AgencyContracts.Include(x => x.Customer).ThenInclude(cu => cu.Contacts).FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException();
         if (c.Status != AgencyContractStatus.Draft) throw new InvalidOperationException("Dieser Vertrag wurde bereits versendet oder abgeschlossen.");
+        // Vorlagen (z. B. AV-Vertrag) enthalten Platzhalter wie "[bitte ergänzen]" — die dürfen nie beim Kunden landen.
+        var open = (JsonSerializer.Deserialize<List<ContractSectionDto>>(c.SectionsJson) ?? new()).Where(x => (x.Title + " " + x.Content).Contains("[bitte", StringComparison.OrdinalIgnoreCase)).Select(x => x.Title).ToList();
+        if (open.Count > 0) throw new InvalidOperationException($"Bitte zuerst die Platzhalter „[bitte …]“ ersetzen oder streichen: {string.Join(", ", open)}");
         var contact = c.Customer.Contacts.FirstOrDefault(x => x.IsPrimary) ?? c.Customer.Contacts.FirstOrDefault();
         if (contact == null || string.IsNullOrWhiteSpace(contact.Email))
             throw new InvalidOperationException("Für diesen Kunden ist keine E-Mail-Adresse hinterlegt.");
@@ -1563,7 +1568,9 @@ public class AgencyContractServiceImpl : IAgencyContractService
         var chosenKeys = string.IsNullOrEmpty(c.LegalTextBlocks) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(c.LegalTextBlocks) ?? new();
         var autoAttachKeys = await _db.LegalTextBlocks.Where(b => b.IsActive && b.AutoAttachToQuotes).Select(b => b.Key).ToListAsync(ct);
         var allKeys = chosenKeys.Union(autoAttachKeys).ToList();
-        if (allKeys.Count > 0)
+        // The AV-Vertrag is a standalone data-protection agreement; the AGB already came with the quote.
+        var isAv = c.ContractTemplateId != null && await _db.ContractTemplates.AnyAsync(t => t.Id == c.ContractTemplateId && t.Key == LegalDocumentSeed.AvTemplateKey, ct);
+        if (allKeys.Count > 0 && !isAv)
         {
             var blocks = await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
             c.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks.Select(b => new { b.Key, b.Title, b.Content, b.AttachmentFileName }));

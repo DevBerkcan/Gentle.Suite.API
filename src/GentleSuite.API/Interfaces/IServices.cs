@@ -306,6 +306,8 @@ public interface IEstimateService
     /// <summary>Soft-delete; only allowed for drafts.</summary>
     Task DeleteAsync(Guid id, CancellationToken ct = default);
     Task<(byte[] Pdf, string FileName)> GeneratePdfAsync(Guid id, CancellationToken ct = default);
+    /// <summary>One click "Angebot erstellen": modules → quote lines, scope notes carried over, estimate linked to the quote.</summary>
+    Task<QuoteDetailDto> CreateQuoteAsync(Guid id, CreateQuoteFromEstimateRequest req, CancellationToken ct = default);
 }
 
 public interface IContractClauseBlockService

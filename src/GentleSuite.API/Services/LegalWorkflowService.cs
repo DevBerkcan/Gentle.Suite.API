@@ -69,6 +69,8 @@ public class LegalWorkflowServiceImpl : ILegalWorkflowService
     {
         public Quote Quote = null!;
         public AgencyContract? Contract;
+        /// <summary>Latest AV-Vertrag (template "av-vertrag") of the customer — an AV contract covers the customer, not just one quote.</summary>
+        public AgencyContract? AvContract;
         public ProjectLegalWorkflow? Workflow;
         public bool AgbAttached;
     }
@@ -110,7 +112,16 @@ public class LegalWorkflowServiceImpl : ILegalWorkflowService
             .OrderByDescending(c => c.Status == AgencyContractStatus.FullyExecuted).ThenByDescending(c => c.CreatedAt).FirstOrDefaultAsync(ct);
         var wf = await _db.Set<ProjectLegalWorkflow>().FirstOrDefaultAsync(w => w.QuoteGroupId == quote.QuoteGroupId, ct);
         var agbKeys = await AgbKeysAsync(ct);
-        return new ProjectData { Quote = quote, Contract = contract, Workflow = wf, AgbAttached = SnapshotHasAgb(quote.LegalTextBlocksSnapshot, agbKeys) };
+        var av = (await AvContractsAsync(new[] { quote.CustomerId }, ct)).FirstOrDefault();
+        return new ProjectData { Quote = quote, Contract = contract, AvContract = av, Workflow = wf, AgbAttached = SnapshotHasAgb(quote.LegalTextBlocksSnapshot, agbKeys) };
+    }
+
+    /// <summary>AV contracts of the given customers, best first (signed before pending, newest first).</summary>
+    async Task<List<AgencyContract>> AvContractsAsync(IEnumerable<Guid> customerIds, CancellationToken ct)
+    {
+        var ids = customerIds.Distinct().ToList();
+        return (await _db.AgencyContracts.Where(c => ids.Contains(c.CustomerId) && c.ContractTemplate != null && c.ContractTemplate.Key == LegalDocumentSeed.AvTemplateKey).ToListAsync(ct))
+            .OrderByDescending(c => c.Status == AgencyContractStatus.FullyExecuted).ThenByDescending(c => c.CreatedAt).ToList();
     }
 
     async Task<ProjectLegalWorkflow> EnsureWorkflowAsync(ProjectData d, CancellationToken ct)
@@ -138,6 +149,20 @@ public class LegalWorkflowServiceImpl : ILegalWorkflowService
             return new(key, def.Title, s?.State ?? "open", s?.Note, s?.UpdatedAt, true, def.Optional, def.Hint);
         }
         static string Auto(bool done) => done ? "done" : "open";
+        // A signed AV contract of this customer ticks the step automatically; a manual "nicht nötig"/"erledigt" still wins.
+        LegalWorkflowSubStepDto AvItem()
+        {
+            var m = Manual("av-contract");
+            var av = d.AvContract;
+            if (m.State != "open" || av == null) return m;
+            return av.Status switch
+            {
+                AgencyContractStatus.FullyExecuted => m with { State = "done", Note = $"{av.ContractNumber} unterschrieben", At = av.CustomerSignedAt },
+                AgencyContractStatus.SentForSignature => m with { Note = $"{av.ContractNumber} wartet auf Unterschrift des Kunden" },
+                AgencyContractStatus.Declined => m with { State = "problem", Note = $"{av.ContractNumber} abgelehnt" },
+                _ => m with { Note = $"{av.ContractNumber} als Entwurf angelegt" },
+            };
+        }
         var accepted = q.Status is QuoteStatus.Accepted or QuoteStatus.Ordered || q.SignedAt.HasValue;
 
         var steps = new List<LegalWorkflowStepDto>
@@ -157,7 +182,7 @@ public class LegalWorkflowServiceImpl : ILegalWorkflowService
                 new("contract-signed", "Unterschrift des Kunden", c?.Status == AgencyContractStatus.Declined ? "problem" : Auto(c?.Status == AgencyContractStatus.FullyExecuted),
                     c?.Status == AgencyContractStatus.Declined ? $"Abgelehnt: {c.DeclineReason}" : c?.CustomerSignedByName, c?.CustomerSignedAt, false, false),
             }),
-            new("av", 3, "AV-Vertrag", "Auftragsverarbeitung nach Art. 28 DSGVO, falls wir Daten des Kunden verarbeiten.", "", new() { Manual("av-contract") }),
+            new("av", 3, "AV-Vertrag", "Auftragsverarbeitung nach Art. 28 DSGVO, falls wir Daten des Kunden verarbeiten.", "", new() { AvItem() }),
             new("website", 4, "Rechtstexte der Kunden-Website", "Pflichttexte und Einwilligungen auf der Website des Kunden.", "",
                 ManualItems.Where(m => m.Step == "website").Select(m => Manual(m.Key)).ToList()),
             new("rights", 5, "Urheberrechte freigeben lassen", "Der Kunde bestätigt die Rechte an gelieferten Inhalten (Texte, Bilder, Logos).", "", new()
@@ -203,7 +228,7 @@ public class LegalWorkflowServiceImpl : ILegalWorkflowService
         var q = d.Quote; var w = d.Workflow;
         var contact = q.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? q.Customer.Contacts.FirstOrDefault();
         return new LegalWorkflowDto(q.Id, q.QuoteNumber, q.Subject, q.CustomerId, q.Customer.CompanyName, q.Status, q.GrandTotal,
-            d.Contract?.Id, d.Contract?.ContractNumber, contact?.Email, done, total, steps,
+            d.Contract?.Id, d.Contract?.ContractNumber, d.AvContract?.Id, contact?.Email, done, total, steps,
             w?.RightsRequestedAt, w?.RightsRequestedTo, w?.RightsGrantedAt, w?.RightsGrantedByName, w?.RightsReferenceConsent ?? false,
             w?.AcceptanceRequestedAt, w?.AcceptanceRequestedTo, w?.AcceptanceDeadline, w?.AcceptanceScope, w?.AcceptanceResult,
             w?.AcceptanceRespondedAt, w?.AcceptanceByName, w?.AcceptanceRemarks, AcceptanceDeemed(w));
@@ -224,6 +249,7 @@ public class LegalWorkflowServiceImpl : ILegalWorkflowService
         var contracts = await _db.AgencyContracts.Where(c => c.Quote != null && groupIds.Contains(c.Quote.QuoteGroupId))
             .Select(c => new { c, c.Quote!.QuoteGroupId }).ToListAsync(ct);
         var agbKeys = await AgbKeysAsync(ct);
+        var avContracts = await AvContractsAsync(quotes.Select(q => q.CustomerId), ct);
 
         return quotes.Select(q =>
         {
@@ -233,6 +259,7 @@ public class LegalWorkflowServiceImpl : ILegalWorkflowService
                 Contract = contracts.Where(x => x.QuoteGroupId == q.QuoteGroupId).Select(x => x.c)
                     .OrderByDescending(c => c.Status == AgencyContractStatus.FullyExecuted).ThenByDescending(c => c.CreatedAt).FirstOrDefault(),
                 Workflow = workflows.FirstOrDefault(w => w.QuoteGroupId == q.QuoteGroupId),
+                AvContract = avContracts.FirstOrDefault(c => c.CustomerId == q.CustomerId),
                 AgbAttached = SnapshotHasAgb(q.LegalTextBlocksSnapshot, agbKeys),
             };
             var (done, total, next, problem) = Summarize(BuildSteps(d));
