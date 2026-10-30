@@ -312,6 +312,8 @@ public class InvoicesController(IInvoiceService svc) : ControllerBase
     [HttpPost("{id}/payment")] public async Task<ActionResult<InvoiceDetailDto>> Payment(Guid id, RecordPaymentRequest req) => Ok(await svc.RecordPaymentAsync(id, req));
     [HttpPost("{id}/cancel")] public async Task<ActionResult<InvoiceDetailDto>> Cancel(Guid id, CreateCancellationRequest req) => Ok(await svc.CreateCancellationAsync(id, req));
     [HttpPost("{id}/send")] public async Task<IActionResult> Send(Guid id) { await svc.SendAsync(id); return NoContent(); }
+    /// <summary>Verschiebt den geplanten SEPA-Einzug einer Abo-Rechnung (nur "scheduled", ohne laufende Mollie-Zahlung).</summary>
+    [HttpPost("{id}/collection-date"), Authorize(Policy = "AdminOnly")] public async Task<ActionResult<SubscriptionInvoiceDto>> RescheduleCollection(Guid id, RescheduleCollectionRequest req) => Ok(await svc.RescheduleCollectionAsync(id, req));
     [HttpPost("from-time-entries")] public async Task<ActionResult<InvoiceDetailDto>> FromTimeEntries(CreateInvoiceFromTimeEntriesRequest req) => Ok(await svc.CreateFromTimeEntriesAsync(req));
     [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) => File(await svc.GeneratePdfAsync(id), "application/pdf", $"Rechnung.pdf");
     [HttpGet("export.csv")]

@@ -143,6 +143,8 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<CustomerSubscription>().HasIndex(x => x.MandateSetupToken).IsUnique().HasFilter("[MandateSetupToken] IS NOT NULL");
         mb.Entity<CustomerSubscription>().Property(x => x.MollieMandateMethod).HasMaxLength(32);
         mb.Entity<CustomerSubscription>().Property(x => x.MandateAccountLast4).HasMaxLength(8);
+        mb.Entity<CustomerSubscription>().Property(x => x.LastSetupAttemptMethod).HasMaxLength(32);
+        mb.Entity<CustomerSubscription>().Property(x => x.LastSetupError).HasMaxLength(1000);
         mb.Entity<Customer>().Property(x => x.MollieCustomerId).HasMaxLength(64);
         mb.Entity<Customer>().Property(x => x.MollieMandateId).HasMaxLength(64);
         mb.Entity<NumberSequence>().HasIndex(x => new { x.EntityType, x.Year }).IsUnique();

@@ -116,6 +116,16 @@ public class CustomerSubscription : BaseEntity
     public string? MandateAccountLast4 { get; set; }
     /// <summary>Billing periods are computed as BillingAnchorDate + n months; set on the first billing (or on a backlog reschedule).</summary>
     public DateTimeOffset? BillingAnchorDate { get; set; }
+
+    // Sichtbarkeit fehlgeschlagener Kunden-Einrichtungen (/payment/setup/{token}): letzter Versuch, Methode,
+    // Fehler (deutscher Kundentext + ggf. Mollie-Detail mit maskierter IBAN — nie eine volle IBAN).
+    /// <summary>When the customer last tried to set up a payment method on the public setup page.</summary>
+    public DateTimeOffset? LastSetupAttemptAt { get; set; }
+    /// <summary>"iban" | "card".</summary>
+    public string? LastSetupAttemptMethod { get; set; }
+    /// <summary>Error of the last attempt; null after a successful setup.</summary>
+    public string? LastSetupError { get; set; }
+    public int? SetupAttemptCount { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity

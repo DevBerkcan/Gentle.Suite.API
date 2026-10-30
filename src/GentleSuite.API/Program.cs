@@ -186,6 +186,11 @@ try
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','MollieMandateMethod') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "MollieMandateMethod" NVARCHAR(32) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','MandateAccountLast4') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "MandateAccountLast4" NVARCHAR(8) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','BillingAnchorDate') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "BillingAnchorDate" DATETIMEOFFSET(7) NULL;""");
+    // Fehlgeschlagene Kunden-Einrichtungen sichtbar machen: purely additive — four new nullable columns, no default, no data update.
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','LastSetupAttemptAt') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "LastSetupAttemptAt" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','LastSetupAttemptMethod') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "LastSetupAttemptMethod" NVARCHAR(32) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','LastSetupError') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "LastSetupError" NVARCHAR(1000) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','SetupAttemptCount') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "SetupAttemptCount" INT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_MandateSetupToken' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_MandateSetupToken" ON "CustomerSubscriptions" ("MandateSetupToken") WHERE "MandateSetupToken" IS NOT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Customers','MollieCustomerId') IS NULL ALTER TABLE "Customers" ADD "MollieCustomerId" NVARCHAR(64) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Customers','MollieMandateId') IS NULL ALTER TABLE "Customers" ADD "MollieMandateId" NVARCHAR(64) NULL;""");
@@ -734,6 +739,12 @@ app.UseExceptionHandler(a => a.Run(async ctx =>
     ctx.Response.ContentType = "application/json";
     var msg = ex?.Message ?? "Internal server error";
     if (status == StatusCodes.Status500InternalServerError && ex?.InnerException != null) msg += " => " + ex.InnerException.Message;
+    // Public customer pages (payment setup) never show technical details — the real cause goes to the log.
+    if (status == StatusCodes.Status500InternalServerError && ctx.Request.Path.StartsWithSegments("/api/public"))
+    {
+        ctx.RequestServices.GetRequiredService<ILogger<Program>>().LogError(ex, "Public endpoint {Path} failed", ctx.Request.Path);
+        msg = "Das hat gerade leider nicht geklappt. Bitte versuchen Sie es in ein paar Minuten noch einmal.";
+    }
     await ctx.Response.WriteAsJsonAsync(new { error = msg });
 }));
 
