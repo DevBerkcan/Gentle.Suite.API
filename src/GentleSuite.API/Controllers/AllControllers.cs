@@ -669,6 +669,25 @@ public class ContractClauseBlocksController(IContractClauseBlockService svc) : C
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
 }
 
+[ApiController, Route("api/legal-workflows"), Authorize]
+public class LegalWorkflowsController(ILegalWorkflowService svc) : ControllerBase
+{
+    [HttpGet] public async Task<ActionResult<List<LegalWorkflowListItemDto>>> List() => Ok(await svc.GetListAsync());
+    [HttpGet("{quoteId}")] public async Task<ActionResult<LegalWorkflowDto>> Get(Guid quoteId) => Ok(await svc.GetAsync(quoteId));
+    [HttpPut("{quoteId}/items")] public async Task<ActionResult<LegalWorkflowDto>> UpdateItem(Guid quoteId, UpdateLegalWorkflowItemRequest req) => Ok(await svc.UpdateItemAsync(quoteId, req));
+    [HttpPost("{quoteId}/rights-request")] public async Task<ActionResult<LegalWorkflowDto>> RightsRequest(Guid quoteId, SendLegalRequestRequest req) => Ok(await svc.SendRightsRequestAsync(quoteId, req));
+    [HttpPost("{quoteId}/acceptance-request")] public async Task<ActionResult<LegalWorkflowDto>> AcceptanceRequest(Guid quoteId, SendLegalRequestRequest req) => Ok(await svc.SendAcceptanceRequestAsync(quoteId, req));
+}
+
+[ApiController, Route("api/public/legal"), AllowAnonymous]
+public class PublicLegalWorkflowController(ILegalWorkflowService svc) : ControllerBase
+{
+    [HttpGet("rights/{token}")] public async Task<ActionResult<PublicRightsReleaseDto>> GetRights(string token) { var r = await svc.GetRightsByTokenAsync(token); return r == null ? NotFound() : Ok(r); }
+    [HttpPost("rights/{token}")] public async Task<IActionResult> ConfirmRights(string token, ConfirmRightsReleaseRequest req) { await svc.ConfirmRightsAsync(token, req, HttpContext.Connection.RemoteIpAddress?.ToString()); return NoContent(); }
+    [HttpGet("acceptance/{token}")] public async Task<ActionResult<PublicAcceptanceDto>> GetAcceptance(string token) { var r = await svc.GetAcceptanceByTokenAsync(token); return r == null ? NotFound() : Ok(r); }
+    [HttpPost("acceptance/{token}")] public async Task<IActionResult> ProcessAcceptance(string token, ProcessAcceptanceRequest req) { await svc.ProcessAcceptanceAsync(token, req, HttpContext.Connection.RemoteIpAddress?.ToString()); return NoContent(); }
+}
+
 [ApiController, Route("api/contract-approval"), AllowAnonymous]
 public class AgencyContractApprovalController(IAgencyContractService svc) : ControllerBase
 {

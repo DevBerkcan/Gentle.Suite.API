@@ -506,3 +506,16 @@ public interface INumberSequenceService
 }
 
 public record NumberRangeConfig(string EntityType, int Year, string Prefix, int NextValue, int Padding);
+
+public interface ILegalWorkflowService
+{
+    Task<List<LegalWorkflowListItemDto>> GetListAsync(CancellationToken ct = default);
+    Task<LegalWorkflowDto> GetAsync(Guid quoteId, CancellationToken ct = default);
+    Task<LegalWorkflowDto> UpdateItemAsync(Guid quoteId, UpdateLegalWorkflowItemRequest req, CancellationToken ct = default);
+    Task<LegalWorkflowDto> SendRightsRequestAsync(Guid quoteId, SendLegalRequestRequest req, CancellationToken ct = default);
+    Task<LegalWorkflowDto> SendAcceptanceRequestAsync(Guid quoteId, SendLegalRequestRequest req, CancellationToken ct = default);
+    Task<PublicRightsReleaseDto?> GetRightsByTokenAsync(string token, CancellationToken ct = default);
+    Task ConfirmRightsAsync(string token, ConfirmRightsReleaseRequest req, string? ip, CancellationToken ct = default);
+    Task<PublicAcceptanceDto?> GetAcceptanceByTokenAsync(string token, CancellationToken ct = default);
+    Task ProcessAcceptanceAsync(string token, ProcessAcceptanceRequest req, string? ip, CancellationToken ct = default);
+}

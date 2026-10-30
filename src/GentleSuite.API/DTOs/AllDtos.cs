@@ -562,3 +562,19 @@ public record SaveEstimateRequest(Guid? CustomerId, string? CustomerDisplayName,
     string? PreparedBy, string? ApprovedBy, string? Responsible, string? Classification, EstimateStatus? Status,
     decimal? FixedPrice, string? FixedPriceLabel, string? SituationText, string? ProposalText, string? CostNote, string? OperationText, string? TimelineNote,
     EstimateContentDto? Content);
+
+// === Rechts-Ablauf pro Projekt (Legal-Cockpit-Workflow) ===
+public record LegalWorkflowSubStepDto(string Key, string Title, string State, string? Note, DateTimeOffset? At, bool Manual, bool Optional, string? Hint = null);
+public record LegalWorkflowStepDto(string Key, int Number, string Title, string Description, string State, List<LegalWorkflowSubStepDto> SubSteps);
+public record LegalWorkflowListItemDto(Guid QuoteId, string QuoteNumber, string? Subject, Guid CustomerId, string CustomerName, QuoteStatus QuoteStatus, int DoneSteps, int TotalSteps, string? NextStep, bool HasProblem, DateTimeOffset LastActivity);
+public record LegalWorkflowDto(Guid QuoteId, string QuoteNumber, string? Subject, Guid CustomerId, string CustomerName, QuoteStatus QuoteStatus, decimal QuoteTotal,
+    Guid? AgencyContractId, string? AgencyContractNumber, string? ContactEmail, int DoneSteps, int TotalSteps, List<LegalWorkflowStepDto> Steps,
+    DateTimeOffset? RightsRequestedAt, string? RightsRequestedTo, DateTimeOffset? RightsGrantedAt, string? RightsGrantedByName, bool RightsReferenceConsent,
+    DateTimeOffset? AcceptanceRequestedAt, string? AcceptanceRequestedTo, DateTimeOffset? AcceptanceDeadline, string? AcceptanceScope, string? AcceptanceResult,
+    DateTimeOffset? AcceptanceRespondedAt, string? AcceptanceByName, string? AcceptanceRemarks, bool AcceptanceDeemed);
+public record UpdateLegalWorkflowItemRequest(string Key, string State, string? Note);
+public record SendLegalRequestRequest(string? RecipientEmail, string? Scope = null, int DeadlineDays = 14);
+public record PublicRightsReleaseDto(string ProviderName, string CustomerName, string ProjectTitle, string QuoteNumber, string Text, bool AlreadyConfirmed, DateTimeOffset? ConfirmedAt, string? ConfirmedByName, string? ContactName, string? ContactEmail);
+public record ConfirmRightsReleaseRequest(string Name, string Email, bool Confirm, bool ReferenceConsent);
+public record PublicAcceptanceDto(string ProviderName, string CustomerName, string ProjectTitle, string QuoteNumber, string? Scope, string Text, DateTimeOffset? Deadline, string? Result, DateTimeOffset? RespondedAt, string? ByName, string? ContactName, string? ContactEmail);
+public record ProcessAcceptanceRequest(string Result, string Name, string Email, string? Remarks, string? SignatureData);

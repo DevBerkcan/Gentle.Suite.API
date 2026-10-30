@@ -41,6 +41,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
     public DbSet<AgencyContract> AgencyContracts => Set<AgencyContract>();
     public DbSet<ContractClauseBlock> ContractClauseBlocks => Set<ContractClauseBlock>();
     public DbSet<Estimate> Estimates => Set<Estimate>();
+    public DbSet<ProjectLegalWorkflow> ProjectLegalWorkflows => Set<ProjectLegalWorkflow>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<InvoiceLine> InvoiceLines => Set<InvoiceLine>();
     public DbSet<InvoicePayment> InvoicePayments => Set<InvoicePayment>();
@@ -194,6 +195,13 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<AgencyContract>().HasOne(x => x.Subscription).WithMany().HasForeignKey(x => x.SubscriptionId).OnDelete(DeleteBehavior.Restrict);
         mb.Entity<AgencyContract>().HasOne(x => x.ContractTemplate).WithMany().HasForeignKey(x => x.ContractTemplateId).OnDelete(DeleteBehavior.ClientSetNull);
         mb.Entity<Estimate>().HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.ClientSetNull);
+        mb.Entity<ProjectLegalWorkflow>().HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+        mb.Entity<ProjectLegalWorkflow>().HasIndex(x => x.QuoteGroupId).IsUnique();
+        // Same lengths as the raw CREATE TABLE in Program.cs, so a fresh DB (EnsureCreated) can index the token hashes too.
+        mb.Entity<ProjectLegalWorkflow>().Property(x => x.RightsTokenHash).HasMaxLength(128);
+        mb.Entity<ProjectLegalWorkflow>().Property(x => x.AcceptanceTokenHash).HasMaxLength(128);
+        mb.Entity<ProjectLegalWorkflow>().HasIndex(x => x.RightsTokenHash);
+        mb.Entity<ProjectLegalWorkflow>().HasIndex(x => x.AcceptanceTokenHash);
 
         // Decimal precision
         foreach (var prop in mb.Model.GetEntityTypes().SelectMany(t => t.GetProperties()).Where(p => p.ClrType == typeof(decimal) || p.ClrType == typeof(decimal?)))

@@ -94,6 +94,15 @@ public class QuoteServiceImpl : IQuoteService
         dto.LegalTextBlockOptions = _mapper.Map<List<LegalTextBlockDto>>(options);
     }
 
+    /// <summary>True when the set of texts that would go out with the quote (manual + auto-attached) contains a usable AGB.</summary>
+    private async Task<bool> HasAgbForQuoteAsync(string? legalTextBlockKeysJson, CancellationToken ct)
+    {
+        var chosenKeys = string.IsNullOrEmpty(legalTextBlockKeysJson) ? new List<string>() : JsonSerializer.Deserialize<List<string>>(legalTextBlockKeysJson) ?? new List<string>();
+        return await _db.LegalTextBlocks.AnyAsync(b => b.IsActive && b.Type == LegalDocumentType.Agb
+            && (b.AutoAttachToQuotes || chosenKeys.Contains(b.Key))
+            && ((b.Content != null && b.Content.Trim() != "") || b.AttachmentPath != null), ct);
+    }
+
     public async Task<QuoteDetailDto> CreateAsync(CreateQuoteRequest req, CancellationToken ct)
     {
         if (req.TemplateId.HasValue) return await CreateFromTemplateAsync(req.CustomerId, req.TemplateId.Value, ct, req.IntroText, req.OutroText);
@@ -194,6 +203,9 @@ public class QuoteServiceImpl : IQuoteService
         if (quote.Status is not (QuoteStatus.Draft or QuoteStatus.Sent or QuoteStatus.Viewed)) throw new InvalidOperationException("Bitte eine neue Angebotsversion erstellen.");
         if (req.ExpirationDays < 1 || req.ExpirationDays > 365) throw new ArgumentException("Die Gueltigkeit muss zwischen 1 und 365 Tagen liegen.");
         if (!quote.Lines.Any()) throw new ArgumentException("Ein Angebot ohne Positionen kann nicht versendet werden.");
+        // Every quote must go out with our AGB (as in Legal Cockpit) — otherwise the AGB never become part of the contract.
+        if (!await HasAgbForQuoteAsync(quote.LegalTextBlocks, ct))
+            throw new ArgumentException("Ohne AGB kann kein Angebot versendet werden. Bitte unter Verträge → Rechtstexte AGB hinterlegen und \"automatisch an Angebote anhängen\" aktivieren.");
         var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
         quote.TaxMode = EnforceCompanyTaxMode(co?.DefaultTaxMode ?? TaxMode.Standard, quote.TaxMode);
         if (quote.TaxMode == TaxMode.SmallBusiness)

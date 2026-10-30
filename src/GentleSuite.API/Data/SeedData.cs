@@ -1110,6 +1110,50 @@ END;
             agencyContractTemplate.Subject = agencyContractSubject;
             agencyContractTemplate.Body = agencyContractBody;
         }
+
+        // Rechts-Ablauf: only added when missing, so later edits in the email-template editor are kept.
+        if (!existing.Contains("legal-rights-release"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "legal-rights-release", Subject = "Bitte bestätigen: Rechte an Ihren Inhalten für {{ ProjectTitle }}", Body = """
+                <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
+                  <div style='max-width:620px;margin:0 auto'>
+                    <div style='padding:0 8px 20px;font-size:22px;font-weight:700;color:#344054'>GentleSuite</div>
+                    <div style='height:5px;background:linear-gradient(90deg,#344054,#10b981);border-radius:12px 12px 0 0'></div>
+                    <div style='background:#ffffff;border:1px solid #eaecf0;border-top:0;border-radius:0 0 12px 12px;padding:36px 32px'>
+                      <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                      <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Bitte bestätigen Sie die Rechte an Ihren Inhalten</h1>
+                      <p style='line-height:1.65;color:#475467'>für das Projekt <strong>{{ ProjectTitle }}</strong> ({{ QuoteNumber }}) verwenden wir Texte, Bilder, Logos und weitere Inhalte, die Sie uns zur Verfügung stellen. Damit wir diese rechtssicher einsetzen dürfen, bitten wir Sie um eine kurze Bestätigung, dass Sie über die nötigen Rechte verfügen. Das dauert weniger als eine Minute.</p>
+                      <div style='text-align:center;margin:30px 0'>
+                        <a href='{{ Url }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Freigabe ansehen und bestätigen</a>
+                      </div>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie Rückfragen haben, antworten Sie einfach auf diese E-Mail.</p>
+                      <hr style='border:0;border-top:1px solid #eaecf0;margin:28px 0'/>
+                      <p style='font-size:13px;line-height:1.6;color:#475467;margin:0'>Mit freundlichen Grüßen<br/><strong>Gentle Group</strong><br/>Girardetstraße 17 · 42109 Wuppertal<br/><a href='mailto:office@gentlegroup.de' style='color:#344054'>office@gentlegroup.de</a></p>
+                    </div>
+                  </div>
+                </div>
+                """ });
+        if (!existing.Contains("legal-acceptance-request"))
+            db.EmailTemplates.Add(new EmailTemplate { Key = "legal-acceptance-request", Subject = "Abnahme bis {{ Deadline }}: {{ ProjectTitle }}", Body = """
+                <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
+                  <div style='max-width:620px;margin:0 auto'>
+                    <div style='padding:0 8px 20px;font-size:22px;font-weight:700;color:#344054'>GentleSuite</div>
+                    <div style='height:5px;background:linear-gradient(90deg,#344054,#10b981);border-radius:12px 12px 0 0'></div>
+                    <div style='background:#ffffff;border:1px solid #eaecf0;border-top:0;border-radius:0 0 12px 12px;padding:36px 32px'>
+                      <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
+                      <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Bitte nehmen Sie Ihr Projekt ab</h1>
+                      <p style='line-height:1.65;color:#475467'>die Leistungen für <strong>{{ ProjectTitle }}</strong> ({{ QuoteNumber }}) sind fertiggestellt. Bitte prüfen Sie die Leistungen und erklären Sie über den folgenden Link die Abnahme — oder teilen Sie uns wesentliche Mängel mit.</p>
+                      <p style='line-height:1.65;color:#475467'><strong>Umfang:</strong> {{ Scope }}<br/><strong>Frist:</strong> bis {{ Deadline }}</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Erhalten wir bis zum Ablauf der Frist keine Rückmeldung, gelten die Leistungen gemäß Vertrag als abgenommen.</p>
+                      <div style='text-align:center;margin:30px 0'>
+                        <a href='{{ Url }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Abnahmeprotokoll öffnen</a>
+                      </div>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie Rückfragen haben, antworten Sie einfach auf diese E-Mail.</p>
+                      <hr style='border:0;border-top:1px solid #eaecf0;margin:28px 0'/>
+                      <p style='font-size:13px;line-height:1.6;color:#475467;margin:0'>Mit freundlichen Grüßen<br/><strong>Gentle Group</strong><br/>Girardetstraße 17 · 42109 Wuppertal<br/><a href='mailto:office@gentlegroup.de' style='color:#344054'>office@gentlegroup.de</a></p>
+                    </div>
+                  </div>
+                </div>
+                """ });
         await db.SaveChangesAsync();
     }
 

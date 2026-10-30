@@ -87,6 +87,7 @@ builder.Services.AddScoped<IContractTemplateService, ContractTemplateServiceImpl
 builder.Services.AddScoped<IAgencyContractService, AgencyContractServiceImpl>();
 builder.Services.AddScoped<IContractClauseBlockService, ContractClauseBlockServiceImpl>();
 builder.Services.AddScoped<IEstimateService, EstimateServiceImpl>();
+builder.Services.AddScoped<ILegalWorkflowService, LegalWorkflowServiceImpl>();
 builder.Services.AddScoped<ITimeTrackingService, TimeTrackingServiceImpl>();
 builder.Services.AddScoped<IVatService, VatServiceImpl>();
 builder.Services.AddScoped<IEmailLogService, EmailLogServiceImpl>();
@@ -702,6 +703,54 @@ await db.Database.ExecuteSqlRawAsync("""
     END
     """);
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Estimates_CustomerId' AND object_id=OBJECT_ID('Estimates')) CREATE INDEX "IX_Estimates_CustomerId" ON "Estimates" ("CustomerId");""");
+
+    // Rechts-Ablauf pro Projekt: purely additive — creates only the new "ProjectLegalWorkflows" table + index, touches no existing table/data.
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ProjectLegalWorkflows')
+    BEGIN
+        CREATE TABLE "ProjectLegalWorkflows" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "QuoteGroupId" UNIQUEIDENTIFIER NOT NULL,
+            "CustomerId" UNIQUEIDENTIFIER NOT NULL,
+            "ManualStepsJson" NVARCHAR(MAX) NOT NULL DEFAULT '{{}}', -- braces doubled: ExecuteSqlRaw runs string.Format
+            "RightsTokenHash" NVARCHAR(128) NULL,
+            "RightsTokenExpiry" DATETIMEOFFSET(7) NULL,
+            "RightsRequestedAt" DATETIMEOFFSET(7) NULL,
+            "RightsRequestedTo" NVARCHAR(320) NULL,
+            "RightsGrantedAt" DATETIMEOFFSET(7) NULL,
+            "RightsGrantedByName" NVARCHAR(300) NULL,
+            "RightsGrantedByEmail" NVARCHAR(320) NULL,
+            "RightsGrantedIp" NVARCHAR(64) NULL,
+            "RightsReferenceConsent" BIT NOT NULL DEFAULT 0,
+            "RightsTextSnapshot" NVARCHAR(MAX) NULL,
+            "AcceptanceTokenHash" NVARCHAR(128) NULL,
+            "AcceptanceTokenExpiry" DATETIMEOFFSET(7) NULL,
+            "AcceptanceRequestedAt" DATETIMEOFFSET(7) NULL,
+            "AcceptanceRequestedTo" NVARCHAR(320) NULL,
+            "AcceptanceDeadline" DATETIMEOFFSET(7) NULL,
+            "AcceptanceScope" NVARCHAR(MAX) NULL,
+            "AcceptanceResult" NVARCHAR(64) NULL,
+            "AcceptanceRespondedAt" DATETIMEOFFSET(7) NULL,
+            "AcceptanceByName" NVARCHAR(300) NULL,
+            "AcceptanceByEmail" NVARCHAR(320) NULL,
+            "AcceptanceIp" NVARCHAR(64) NULL,
+            "AcceptanceRemarks" NVARCHAR(MAX) NULL,
+            "AcceptanceSignatureData" NVARCHAR(MAX) NULL,
+            "AcceptanceTextSnapshot" NVARCHAR(MAX) NULL,
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_ProjectLegalWorkflows" PRIMARY KEY ("Id"),
+            CONSTRAINT "FK_ProjectLegalWorkflows_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id")
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectLegalWorkflows_QuoteGroupId' AND object_id=OBJECT_ID('ProjectLegalWorkflows')) CREATE UNIQUE INDEX "IX_ProjectLegalWorkflows_QuoteGroupId" ON "ProjectLegalWorkflows" ("QuoteGroupId");""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectLegalWorkflows_RightsTokenHash' AND object_id=OBJECT_ID('ProjectLegalWorkflows')) CREATE INDEX "IX_ProjectLegalWorkflows_RightsTokenHash" ON "ProjectLegalWorkflows" ("RightsTokenHash");""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectLegalWorkflows_AcceptanceTokenHash' AND object_id=OBJECT_ID('ProjectLegalWorkflows')) CREATE INDEX "IX_ProjectLegalWorkflows_AcceptanceTokenHash" ON "ProjectLegalWorkflows" ("AcceptanceTokenHash");""");
 
 
     await SeedData.InitializeAsync(scope.ServiceProvider);
