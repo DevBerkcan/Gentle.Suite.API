@@ -76,6 +76,30 @@ public class PaymentMonitoringService : IPaymentMonitoringService
         if (webhookErrors.Count > 0)
             issues.Add(new("warning", "webhook-errors", $"{webhookErrors.Count} Mollie-Webhook-Fehler in 24 h", Truncate(webhookErrors.OrderByDescending(e => e.StartedAt).First().Error), null, null, null, webhookErrors.Min(e => e.StartedAt)));
 
+        // Mail delivery: invoices, setup links and reminders all depend on SMTP. A broken password once went unnoticed
+        // for two weeks, so a failing newest mail is critical; isolated failures in the last 72 h are a warning.
+        var recentMails = await _db.EmailLogs.AsNoTracking()
+            .Where(e => e.CreatedAt > now.AddHours(-72))
+            .OrderByDescending(e => e.CreatedAt)
+            .Select(e => new { e.CreatedAt, e.Status, e.To, e.Subject, e.Error })
+            .ToListAsync(ct);
+        var failedMails = recentMails.Where(e => e.Status == EmailStatus.Failed).ToList();
+        if (failedMails.Count > 0)
+        {
+            var latestFailure = failedMails[0];
+            var recipients = string.Join(", ", failedMails.Select(e => e.To).Distinct().Take(5));
+            if (recentMails[0].Status == EmailStatus.Failed)
+            {
+                var lastSuccess = recentMails.FirstOrDefault(e => e.Status == EmailStatus.Sent)?.CreatedAt;
+                var since = failedMails.Where(e => lastSuccess == null || e.CreatedAt > lastSuccess).Min(e => e.CreatedAt);
+                issues.Add(new("critical", "mail-delivery-failed", "Mailversand gestört – die letzte E-Mail ist fehlgeschlagen",
+                    Truncate($"{latestFailure.Error} · betroffen: {recipients}"), null, null, null, since));
+            }
+            else
+                issues.Add(new("warning", "mail-delivery-failed", $"{failedMails.Count} E-Mail(s) in 72 h fehlgeschlagen",
+                    Truncate($"Zuletzt: „{latestFailure.Subject}“ an {latestFailure.To} – {latestFailure.Error}"), null, null, null, failedMails.Min(e => e.CreatedAt)));
+        }
+
         var order = new Dictionary<string, int> { ["critical"] = 0, ["warning"] = 1, ["info"] = 2 };
         issues = issues.OrderBy(i => order[i.Severity]).ThenBy(i => i.Since ?? now).ToList();
 
