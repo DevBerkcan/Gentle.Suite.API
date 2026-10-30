@@ -755,6 +755,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 app.UseMiddleware<GentleSuite.API.Middleware.GentleBookApiKeyMiddleware>();
+app.UseMiddleware<GentleSuite.API.Middleware.GentleHubApiKeyMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
