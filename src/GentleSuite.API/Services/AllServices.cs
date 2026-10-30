@@ -667,7 +667,11 @@ public class SubscriptionServiceImpl : ISubscriptionService
                 MandateSetupUrl = s.MandateSetupToken == null ? null : $"{frontend}/payment/setup/{s.MandateSetupToken}",
                 InvoicesPaid = st?.Paid ?? 0,
                 InvoicesTotal = st?.Total ?? 0,
-                OutstandingAmount = Math.Round(st?.Outstanding ?? 0m, 2)
+                OutstandingAmount = Math.Round(st?.Outstanding ?? 0m, 2),
+                LastSetupAttemptAt = s.LastSetupAttemptAt,
+                LastSetupAttemptMethod = s.LastSetupAttemptMethod,
+                LastSetupError = s.LastSetupError,
+                SetupAttemptCount = s.SetupAttemptCount
             };
         }).ToList();
     }

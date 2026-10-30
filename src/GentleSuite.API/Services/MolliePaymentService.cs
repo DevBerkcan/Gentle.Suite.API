@@ -226,6 +226,8 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         if (IsValid(subscription.MollieMandateStatus))
         {
+            // Einrichtung erfolgreich (egal über welchen Weg): Fehler löschen, Zeitpunkt des letzten Versuchs bleibt.
+            subscription.LastSetupError = null;
             subscription.Customer.MollieCustomerId ??= subscription.MollieCustomerId;
             subscription.Customer.MollieMandateId = subscription.MollieMandateId;
             if (subscription.Status == SubscriptionStatus.PendingConfirmation && subscription.BusinessCustomerConfirmed)
@@ -496,71 +498,148 @@ public sealed class MolliePaymentService : IMolliePaymentService
     public async Task<MandateSetupStatusDto> CreateIbanMandateAsync(string token, MandateSetupIbanRequest req, CancellationToken ct)
     {
         var subscription = await GetByTokenAsync(token, ct);
-        EnsureSetupAllowed(subscription);
-        if (!IbanMandatesEnabled)
-            throw new InvalidOperationException("Die Einrichtung per IBAN ist derzeit nicht verfügbar. Bitte nutzen Sie die Zahlung per Karte.");
-        if (!req.Confirm)
-            throw new InvalidOperationException("Bitte bestätigen Sie das SEPA-Lastschriftmandat.");
-        var holder = (req.AccountHolder ?? string.Empty).Trim();
-        if (holder.Length is < 2 or > 70)
-            throw new InvalidOperationException("Bitte geben Sie den Namen des Kontoinhabers an.");
+        // Beendeter Vertrag / bereits gültige Zahlungsart: veraltete Seite, kein fehlgeschlagener Einrichtungsversuch.
+        if (IsEnded(subscription) || IsValid(subscription.MollieMandateStatus)) EnsureSetupAllowed(subscription);
+
         var iban = IbanTools.Normalize(req.Iban);
-        if (!IbanTools.IsValid(iban))
-            throw new InvalidOperationException("Die IBAN ist ungültig. Bitte prüfen Sie Ihre Eingabe.");
-
-        if (await TryAdoptExistingMandateAsync(subscription, ct))
-        {
-            await _db.SaveChangesAsync(ct);
-            return new MandateSetupStatusDto("valid");
-        }
-
-        var mollieCustomerId = await EnsureMollieCustomerAsync(subscription, ct);
-        var reference = $"GS-{subscription.Id:N}"[..15].ToUpperInvariant();
-        var keyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{iban}|{holder}")))[..16];
-        JsonNode mandate;
+        string? mollieDetail = null;
         try
         {
-            mandate = await PostAsync($"customers/{Uri.EscapeDataString(mollieCustomerId)}/mandates", new
+            EnsureSetupAllowed(subscription);
+            if (!IbanMandatesEnabled)
+                throw new InvalidOperationException("Die Einrichtung per IBAN ist derzeit nicht verfügbar. Bitte nutzen Sie die Zahlung per Karte.");
+            if (!req.Confirm)
+                throw new InvalidOperationException("Bitte bestätigen Sie das SEPA-Lastschriftmandat.");
+            var holder = (req.AccountHolder ?? string.Empty).Trim();
+            if (holder.Length is < 2 or > 70)
+                throw new InvalidOperationException("Bitte geben Sie den Namen des Kontoinhabers an.");
+            if (!IbanTools.IsValid(iban))
+                throw new InvalidOperationException("Die IBAN ist ungültig. Bitte prüfen Sie Ihre Eingabe.");
+
+            if (await TryAdoptExistingMandateAsync(subscription, ct))
             {
-                method = "directdebit",
-                consumerName = holder,
-                consumerAccount = iban,
-                signatureDate = BerlinTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                mandateReference = reference
-            }, $"iban-mandate-{subscription.Id:N}-{keyHash}", ct);
-        }
-        catch (MollieApiException ex)
-        {
-            _logger.LogWarning("Mollie rejected IBAN mandate for subscription {SubscriptionId}: {StatusCode} {Detail}", subscription.Id, ex.StatusCode, IbanTools.MaskIbans(ex.Detail ?? ""));
-            throw new InvalidOperationException("Die Einrichtung des Lastschriftmandats wurde von unserem Zahlungsdienstleister abgelehnt. Bitte prüfen Sie Ihre Angaben oder nutzen Sie die Zahlung per Karte.");
-        }
+                await _db.SaveChangesAsync(ct);
+                return new MandateSetupStatusDto("valid");
+            }
 
-        ApplyMandate(subscription, mandate);
-        subscription.MollieMandateMethod ??= "directdebit";
-        subscription.MandateAccountLast4 ??= iban[^4..];
-        await _db.SaveChangesAsync(ct);
+            var mollieCustomerId = await EnsureMollieCustomerAsync(subscription, ct);
+            var reference = $"GS-{subscription.Id:N}"[..15].ToUpperInvariant();
+            var keyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{iban}|{holder}")))[..16];
+            JsonNode mandate;
+            try
+            {
+                mandate = await PostAsync($"customers/{Uri.EscapeDataString(mollieCustomerId)}/mandates", new
+                {
+                    method = "directdebit",
+                    consumerName = holder,
+                    consumerAccount = iban,
+                    signatureDate = BerlinTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    mandateReference = reference
+                }, $"iban-mandate-{subscription.Id:N}-{keyHash}", ct);
+            }
+            catch (MollieApiException ex)
+            {
+                mollieDetail = MollieErrorText(ex);
+                _logger.LogWarning("Mollie rejected IBAN mandate for subscription {SubscriptionId}: {StatusCode} {Detail}", subscription.Id, ex.StatusCode, IbanTools.MaskIbans(ex.Detail ?? ""));
+                throw new InvalidOperationException("Die Einrichtung des Lastschriftmandats wurde von unserem Zahlungsdienstleister abgelehnt. Bitte prüfen Sie Ihre Angaben oder nutzen Sie die Zahlung per Karte.");
+            }
 
-        var status = RequiredString(mandate, "status");
-        if (IsValid(status))
-        {
-            await NotifyMandateOutcomeAsync(subscription, true, null, ct);
-            return new MandateSetupStatusDto("valid");
+            ApplyMandate(subscription, mandate);
+            subscription.MollieMandateMethod ??= "directdebit";
+            subscription.MandateAccountLast4 ??= iban[^4..];
+            await _db.SaveChangesAsync(ct);
+
+            var status = RequiredString(mandate, "status");
+            if (IsValid(status))
+            {
+                await NotifyMandateOutcomeAsync(subscription, true, null, ct);
+                return new MandateSetupStatusDto("valid");
+            }
+            if (status == "pending") return new MandateSetupStatusDto("processing");
+            mollieDetail = $"Mandatsstatus '{status}'";
+            throw new InvalidOperationException("Das Lastschriftmandat konnte nicht eingerichtet werden. Bitte nutzen Sie die Zahlung per Karte.");
         }
-        if (status == "pending") return new MandateSetupStatusDto("processing");
-        throw new InvalidOperationException("Das Lastschriftmandat konnte nicht eingerichtet werden. Bitte nutzen Sie die Zahlung per Karte.");
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var (message, detail) = DescribeSetupFailure(ex, "Die Einrichtung per IBAN ist fehlgeschlagen.");
+            await RecordSetupAttemptAsync(subscription.Id, "iban", ComposeSetupError(message, detail ?? mollieDetail, iban), ct);
+            throw;
+        }
     }
 
     public async Task<MandateSetupCheckoutDto> CreateSetupCheckoutAsync(string token, CancellationToken ct)
     {
         var subscription = await GetByTokenAsync(token, ct);
-        EnsureSetupAllowed(subscription);
-        if (await TryAdoptExistingMandateAsync(subscription, ct))
+        if (IsEnded(subscription) || IsValid(subscription.MollieMandateStatus)) EnsureSetupAllowed(subscription);
+        try
         {
-            await _db.SaveChangesAsync(ct);
-            throw new InvalidOperationException("Für diesen Vertrag ist bereits eine gültige Zahlungsart hinterlegt.");
+            EnsureSetupAllowed(subscription);
+            if (!await TryAdoptExistingMandateAsync(subscription, ct))
+                return new MandateSetupCheckoutDto(await CreateFirstPaymentAsync(subscription, ct));
         }
-        return new MandateSetupCheckoutDto(await CreateFirstPaymentAsync(subscription, ct));
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var (message, detail) = DescribeSetupFailure(ex, "Die Kartenzahlung konnte nicht gestartet werden.");
+            await RecordSetupAttemptAsync(subscription.Id, "card", ComposeSetupError(message, detail, null), ct);
+            throw;
+        }
+        await _db.SaveChangesAsync(ct);
+        throw new InvalidOperationException("Für diesen Vertrag ist bereits eine gültige Zahlungsart hinterlegt.");
     }
+
+    // === Fehlgeschlagene Einrichtungsversuche (für Admin/Monitoring sichtbar) ===
+
+    private static string MollieErrorText(MollieApiException ex) => $"HTTP {ex.StatusCode}: {ex.Detail ?? "ohne Detailangabe"}";
+
+    /// <summary>Kundentext (deutsch) + separat das technische Detail für den Admin.</summary>
+    private static (string Message, string? Detail) DescribeSetupFailure(Exception ex, string fallback) => ex switch
+    {
+        MollieApiException m => (fallback, MollieErrorText(m)),
+        InvalidOperationException => (ex.Message, null),
+        _ => (fallback, $"{ex.GetType().Name}: {ex.Message}")
+    };
+
+    /// <summary>"Kundentext | Mollie: Detail", IBANs maskiert, max. 1000 Zeichen — es wird nie eine volle IBAN gespeichert.</summary>
+    private static string ComposeSetupError(string message, string? detail, string? iban)
+    {
+        var text = string.IsNullOrWhiteSpace(detail) ? message : $"{message} | Mollie: {detail.Trim()}";
+        if (!string.IsNullOrEmpty(iban) && iban.Length >= 15)
+            text = text.Replace(iban, $"{iban[..4]}********{iban[^4..]}", StringComparison.OrdinalIgnoreCase);
+        text = IbanTools.MaskIbans(text);
+        return text.Length > 1000 ? text[..1000] : text;
+    }
+
+    /// <summary>Records a failed customer setup attempt (time, method, count++) as one atomic UPDATE, independent of
+    /// whatever is still pending in the change tracker. Never throws: the customer must get the original error.</summary>
+    private async Task RecordSetupAttemptAsync(Guid subscriptionId, string method, string error, CancellationToken ct)
+    {
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            await _db.CustomerSubscriptions.IgnoreQueryFilters().Where(s => s.Id == subscriptionId)
+                .ExecuteUpdateAsync(u => u
+                    .SetProperty(s => s.LastSetupAttemptAt, now)
+                    .SetProperty(s => s.LastSetupAttemptMethod, method)
+                    .SetProperty(s => s.LastSetupError, error)
+                    .SetProperty(s => s.SetupAttemptCount, s => (s.SetupAttemptCount ?? 0) + 1), ct);
+            _logger.LogWarning("Mandate setup attempt failed for subscription {SubscriptionId} ({Method}): {Error}", subscriptionId, method, error);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Could not record failed setup attempt for subscription {SubscriptionId}", subscriptionId);
+        }
+    }
+
+    private static string CardFailureText(string status, JsonNode payment)
+    {
+        var friendly = status == "failed" ? "Kartenzahlung fehlgeschlagen" : "Kartenzahlung abgebrochen oder abgelaufen";
+        var details = payment["details"];
+        var parts = new[] { NodeString(details?["failureReason"]), NodeString(details?["failureMessage"]) }
+            .Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList();
+        return ComposeSetupError(friendly, parts.Count == 0 ? $"Status '{status}'" : $"Status '{status}', {string.Join(" – ", parts)}", null);
+    }
+
+    private static string? NodeString(JsonNode? node) => node is JsonValue v && v.TryGetValue<string>(out var s) ? s : node?.ToString();
 
     // === Einzug ===
 
@@ -781,6 +860,16 @@ public sealed class MolliePaymentService : IMolliePaymentService
                     ApplyMandate(subscription, mandate);
             }
             var becameValid = !wasValid && IsValid(subscription.MollieMandateStatus);
+
+            // Fehlgeschlagener Karten-Einrichtungsversuch: genau einmal je Zahlung (Statuswechsel), unabhängig von der Mail-Drossel.
+            if (isCurrent && previousStatus != status && TerminalFailureStatuses.Contains(status) && !IsValid(subscription.MollieMandateStatus))
+            {
+                subscription.LastSetupAttemptAt = DateTimeOffset.UtcNow;
+                subscription.LastSetupAttemptMethod = "card";
+                subscription.LastSetupError = CardFailureText(status, payment);
+                subscription.SetupAttemptCount = (subscription.SetupAttemptCount ?? 0) + 1;
+                _logger.LogWarning("Mandate first payment {PaymentId} for subscription {SubscriptionId} ended {Status}", paymentId, subscription.Id, status);
+            }
 
             // Proaktive Rückmeldung an den Kunden, sobald sich das Ergebnis dieses Zahlungsversuchs erstmals
             // klärt. Fehlschlag-Mails enthalten den dauerhaften Einrichtungslink und dürfen daher wiederholt

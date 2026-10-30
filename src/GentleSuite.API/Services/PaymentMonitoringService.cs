@@ -66,6 +66,12 @@ public class PaymentMonitoringService : IPaymentMonitoringService
             var title = s.InstallmentSourceTitle ?? s.Plan?.Name ?? "Abo";
             if (!mandateValid && s.Status != SubscriptionStatus.Paused && now - s.CreatedAt > TimeSpan.FromDays(3))
                 issues.Add(new("warning", "mandate-missing", $"Mandat fehlt: {title}", s.MollieMandateStatus == "pending" ? "Mandat wird von Mollie/Bank noch geprüft." : "Kunde hat die Zahlungsart noch nicht eingerichtet.", s.Customer.CompanyName, s.Id, null, s.CreatedAt));
+            if (!mandateValid && !string.IsNullOrWhiteSpace(s.LastSetupError) && s.LastSetupAttemptAt != null && now - s.LastSetupAttemptAt.Value < TimeSpan.FromDays(14))
+            {
+                var method = s.LastSetupAttemptMethod == "card" ? "Karte" : s.LastSetupAttemptMethod == "iban" ? "IBAN" : s.LastSetupAttemptMethod ?? "unbekannt";
+                issues.Add(new("warning", "mandate-setup-failed", $"Einrichtung fehlgeschlagen: {title}",
+                    Truncate($"Letzter Versuch per {method} ({s.SetupAttemptCount ?? 1}×): {s.LastSetupError}"), s.Customer.CompanyName, s.Id, null, s.LastSetupAttemptAt));
+            }
             if (!mandateValid && string.Equals(s.MandateEmailStatus, "failed", StringComparison.OrdinalIgnoreCase))
                 issues.Add(new("warning", "mandate-email-failed", $"Mandats-E-Mail fehlgeschlagen: {title}", s.MandateEmailLastError, s.Customer.CompanyName, s.Id, null, s.MandateEmailSentAt ?? s.UpdatedAt));
             if (mandateValid && s.Status != SubscriptionStatus.Paused && (s.BillingAuthorizedAt == null || s.Status == SubscriptionStatus.PendingConfirmation))

@@ -92,6 +92,7 @@ public interface IInvoiceService
     Task SendAsync(Guid id, CancellationToken ct = default);
     Task<InvoiceDetailDto> CreateFromTimeEntriesAsync(CreateInvoiceFromTimeEntriesRequest req, CancellationToken ct = default);
     Task HandleRecurringSetupAsync(Guid invoiceId, CancellationToken ct = default);
+    Task<SubscriptionInvoiceDto> RescheduleCollectionAsync(Guid invoiceId, RescheduleCollectionRequest req, CancellationToken ct = default);
 
 }
 

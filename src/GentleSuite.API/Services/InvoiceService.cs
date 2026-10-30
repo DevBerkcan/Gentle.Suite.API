@@ -21,9 +21,10 @@ public class InvoiceServiceImpl : IInvoiceService
     private readonly IEmailService _email;
     private readonly IActivityLogService _activity;
     private readonly INumberSequenceService _seq;
+    private readonly ILogger<InvoiceServiceImpl> _logger;
 
-    public InvoiceServiceImpl(AppDbContext db, IMapper mapper, IPdfService pdf, IEmailService email, IActivityLogService activity, INumberSequenceService seq)
-    { _db = db; _mapper = mapper; _pdf = pdf; _email = email; _activity = activity; _seq = seq; }
+    public InvoiceServiceImpl(AppDbContext db, IMapper mapper, IPdfService pdf, IEmailService email, IActivityLogService activity, INumberSequenceService seq, ILogger<InvoiceServiceImpl> logger)
+    { _db = db; _mapper = mapper; _pdf = pdf; _email = email; _activity = activity; _seq = seq; _logger = logger; }
 
     public async Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(PaginationParams p, InvoiceStatus? status, Guid? customerId, CancellationToken ct, string? kind = null)
     {
@@ -125,6 +126,122 @@ public class InvoiceServiceImpl : IInvoiceService
             await HandleRecurringSetupAsync(inv.Id, ct);
 
         return (await GetByIdAsync(inv.Id, ct))!;
+    }
+
+    /// <summary>Höchstens so weit darf ein geplanter Einzug in die Zukunft verschoben werden.</summary>
+    private const int MaxCollectionPostponeDays = 90;
+
+    /// <summary>Admin: verschiebt den noch nicht gestarteten SEPA-Einzug einer Abo-Rechnung (z. B. weil der Kunde die
+    /// Rechnung verspätet erhalten hat). Nur für "scheduled" ohne laufende Mollie-Zahlung — eine bereits erzeugte
+    /// Mollie-Zahlung lässt sich nicht verschieben. Der Kunde wird nur auf ausdrücklichen Wunsch informiert.</summary>
+    public async Task<SubscriptionInvoiceDto> RescheduleCollectionAsync(Guid invoiceId, RescheduleCollectionRequest req, CancellationToken ct)
+    {
+        var todayDate = DateOnly.FromDateTime(BerlinTime.Today.DateTime);
+        var minDate = todayDate.AddDays(1);
+        var maxDate = todayDate.AddDays(MaxCollectionPostponeDays);
+        if (req.Date < minDate)
+            throw new InvalidOperationException($"Der neue Einzugstermin muss frühestens morgen ({minDate:dd.MM.yyyy}) sein.");
+        if (req.Date > maxDate)
+            throw new InvalidOperationException($"Der neue Einzugstermin darf höchstens {MaxCollectionPostponeDays} Tage in der Zukunft liegen (spätestens {maxDate:dd.MM.yyyy}).");
+        var reason = string.IsNullOrWhiteSpace(req.Reason) ? null : req.Reason.Trim();
+        if (reason is { Length: > 500 }) reason = reason[..500];
+        var newDate = BerlinTime.Midnight(req.Date.ToDateTime(TimeOnly.MinValue));
+
+        Invoice invoice;
+        DateTimeOffset? oldDate;
+        string? recipient = null;
+        string? contactName = null;
+        string? mandateMethod = null;
+
+        // Row lock: the billing job / a webhook must not start or change this collection while it is being moved.
+        await using (var tx = await _db.Database.BeginTransactionAsync(ct))
+        {
+            invoice = await _db.Invoices
+                .FromSqlInterpolated($"SELECT * FROM Invoices WITH (UPDLOCK, HOLDLOCK, ROWLOCK) WHERE Id = {invoiceId}")
+                .Include(i => i.Customer).ThenInclude(c => c.Contacts.Where(x => !x.IsDeleted))
+                .FirstOrDefaultAsync(ct)
+                ?? throw new KeyNotFoundException("Rechnung wurde nicht gefunden.");
+
+            if (invoice.SubscriptionId == null)
+                throw new InvalidOperationException("Nur Rechnungen aus Serienrechnungen/Ratenzahlungen haben einen automatischen Einzug.");
+            if (invoice.Status is InvoiceStatus.Paid or InvoiceStatus.Cancelled)
+                throw new InvalidOperationException("Die Rechnung ist bereits bezahlt oder storniert.");
+            if (!string.Equals(invoice.PaymentCollectionStatus, "scheduled", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Nur ein geplanter, noch nicht gestarteter Einzug kann verschoben werden.");
+            if (!string.IsNullOrWhiteSpace(invoice.ExternalPaymentReference))
+                throw new InvalidOperationException("Für diese Rechnung läuft bereits eine Mollie-Zahlung; der Einzug kann nicht mehr verschoben werden.");
+            // SEPA pre-notification: the customer was told a date, so a debit may only move later, never earlier.
+            if (invoice.PaymentCollectionDueDate is { } announced && newDate < announced)
+                throw new InvalidOperationException($"Der Einzug kann nur nach hinten verschoben werden (angekündigt: {announced:dd.MM.yyyy}).");
+
+            if (req.NotifyCustomer)
+            {
+                var contact = invoice.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? invoice.Customer.Contacts.FirstOrDefault();
+                recipient = contact?.Email?.Trim();
+                if (string.IsNullOrWhiteSpace(recipient))
+                    throw new InvalidOperationException("Beim Kunden ist keine E-Mail-Adresse hinterlegt. Bitte ohne Benachrichtigung speichern oder zuerst eine E-Mail-Adresse ergänzen.");
+                contactName = contact == null ? null : string.Join(" ", new[] { contact.FirstName, contact.LastName }.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+                var subscriptionId = invoice.SubscriptionId;
+                mandateMethod = await _db.CustomerSubscriptions.IgnoreQueryFilters().Where(s => s.Id == subscriptionId)
+                    .Select(s => s.MollieMandateMethod).FirstOrDefaultAsync(ct);
+            }
+
+            oldDate = invoice.PaymentCollectionDueDate;
+            invoice.PaymentCollectionDueDate = newDate;
+            if (invoice.DueDate < newDate) invoice.DueDate = newDate;
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+
+        var de = System.Globalization.CultureInfo.GetCultureInfo("de-DE");
+        var oldText = oldDate?.ToString("dd.MM.yyyy", de) ?? "–";
+        var newText = newDate.ToString("dd.MM.yyyy", de);
+        _logger.LogInformation("Collection of invoice {InvoiceNumber} ({InvoiceId}) moved from {OldDate} to {NewDate}; notifyCustomer={Notify}; reason: {Reason}",
+            invoice.InvoiceNumber, invoice.Id, oldText, newText, req.NotifyCustomer, reason ?? "-");
+        await _activity.LogAsync(invoice.CustomerId, "Invoice", invoice.Id, "CollectionRescheduled",
+            $"Einzug für Rechnung {invoice.InvoiceNumber} von {oldText} auf {newText} verschoben." +
+            (reason != null ? $" Grund: {reason}" : "") +
+            (req.NotifyCustomer ? $" Kunde per E-Mail informiert ({recipient})." : " Kunde nicht informiert."), ct: ct);
+
+        if (req.NotifyCustomer && recipient != null)
+        {
+            try
+            {
+                var co = await _db.CompanySettings.AsNoTracking().FirstOrDefaultAsync(ct);
+                var sender = string.IsNullOrWhiteSpace(co?.CompanyName) ? "Gentle Group" : co!.CompanyName;
+                var amount = invoice.GrossTotal.ToString("N2", de) + " €";
+                var how = mandateMethod switch
+                {
+                    "creditcard" => "von der hinterlegten Kreditkarte",
+                    "paypal" => "über das hinterlegte PayPal-Konto",
+                    _ => "per SEPA-Lastschrift"
+                };
+                static string Enc(string text) => System.Net.WebUtility.HtmlEncode(text);
+                var greeting = string.IsNullOrWhiteSpace(contactName) ? "Sehr geehrte Damen und Herren," : $"Hallo {Enc(contactName)},";
+                var body =
+                    $"<p>{greeting}</p>" +
+                    $"<p><strong>Neuer Einzugstermin für Rechnung {Enc(invoice.InvoiceNumber)}:</strong> Der Betrag von {Enc(amount)} wird am {newText} {how} eingezogen.</p>" +
+                    "<p>Sie müssen nichts weiter tun. Bei Fragen antworten Sie einfach auf diese E-Mail.</p>" +
+                    $"<p>Viele Grüße<br/>{Enc(sender)}</p>";
+                // SendEmailAsync writes the EmailLog entry (Sent/Failed) itself.
+                await _email.SendEmailAsync(recipient, $"Neuer Einzugstermin für Rechnung {invoice.InvoiceNumber}", body, ct: ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Never undo the already saved new date because of a mail problem.
+                _logger.LogError(ex, "Reschedule notification failed for invoice {InvoiceId}", invoice.Id);
+            }
+        }
+
+        var row = await _db.Invoices.AsNoTracking().Where(i => i.Id == invoiceId)
+            .Select(i => new
+            {
+                i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate,
+                i.CollectionAttemptCount, i.PaidAt, i.ChargedBackAt,
+                LastFailure = _db.InvoicePaymentAttempts.Where(a => a.InvoiceId == i.Id).OrderByDescending(a => a.CreatedAt).Select(a => a.FailureReason).FirstOrDefault()
+            }).FirstAsync(ct);
+        return new SubscriptionInvoiceDto(row.Id, row.InvoiceNumber, row.InvoiceDate, row.BillingPeriodStart, row.BillingPeriodEnd, row.GrossTotal, row.Status,
+            row.PaymentCollectionStatus, row.PaymentCollectionDueDate, row.CollectionAttemptCount, row.PaidAt, row.ChargedBackAt != null, row.LastFailure);
     }
 
     public async Task HandleRecurringSetupAsync(Guid invoiceId, CancellationToken ct)
