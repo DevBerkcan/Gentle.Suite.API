@@ -28,6 +28,7 @@ public static class SeedData
         await SeedInstallmentSystemPlan(db);
         await SeedContractTemplates(db);
         await SeedContractClauseBlocks(db);
+        await ContractModuleSeed.EnsureAsync(db);
     }
 
     /// <summary>Seeds the 3 starter Vertragsarten so der "Verträge"-Bereich nicht leer ist.

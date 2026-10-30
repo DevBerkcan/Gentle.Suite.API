@@ -1723,7 +1723,7 @@ public class AgencyContractServiceImpl : IAgencyContractService
         var addressSnapshot = new CustomerAddressSnapshotDto(customer.CompanyName, loc?.Street, loc?.ZipCode, loc?.City, loc?.Country, contact?.FullName);
 
         var allBlocks = await _db.ContractClauseBlocks.Where(b => b.IsActive).ToListAsync(ct);
-        var kernBlocks = allBlocks.Where(b => b.Category == "kern" && b.Key != "sonstiges").OrderBy(b => b.SortOrder).ToList();
+        var kernBlocks = allBlocks.Where(b => b.Category == "kern" && b.Key != "sonstiges").OrderBy(b => b.SortOrder).ThenBy(b => b.Title).ToList();
         var sonstigesBlock = allBlocks.FirstOrDefault(b => b.Key == "sonstiges");
         var kreativBlocks = allBlocks.Where(b => b.Category == "kreativ").OrderBy(b => b.SortOrder).ToList();
 
@@ -1736,9 +1736,12 @@ public class AgencyContractServiceImpl : IAgencyContractService
         var optionenBlocks = allBlocks.Where(b => b.Category == "optionen" && req.OptionaleKlauselKeys.Contains(b.Key)).OrderBy(b => b.SortOrder).ToList();
         foreach (var b in optionenBlocks) sections.Add(new ContractSectionDto(b.Title, b.Content));
 
-        var categoryOrder = new[] { "webseiten", "design", "marketing", "wartung" };
-        var leistungsBlocks = allBlocks.Where(b => req.LeistungsBlockKeys.Contains(b.Key) && categoryOrder.Contains(b.Category))
-            .OrderBy(b => Array.IndexOf(categoryOrder, b.Category)).ThenBy(b => b.SortOrder).ToList();
+        // Known categories first in this order, any further (admin-created) Leistungs-category after them.
+        var categoryOrder = new[] { "webseiten", "software", "design", "marketing", "beratung", "wartung" };
+        var reserved = new[] { "kern", "kreativ", "optionen" };
+        static int Rank(string[] order, string cat) { var i = Array.IndexOf(order, cat); return i < 0 ? order.Length : i; }
+        var leistungsBlocks = allBlocks.Where(b => req.LeistungsBlockKeys.Contains(b.Key) && !reserved.Contains(b.Category))
+            .OrderBy(b => Rank(categoryOrder, b.Category)).ThenBy(b => b.Category).ThenBy(b => b.SortOrder).ToList();
         foreach (var b in leistungsBlocks) sections.Add(new ContractSectionDto(b.Title, b.Content));
 
         if (leistungsBlocks.Any(b => b.IsCreativeWork))
