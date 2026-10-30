@@ -207,8 +207,9 @@ public class SubscriptionBillingJob
         var periodStart = sub.NextBillingDate;
         // Rückstand (Mandat/Freigabe kam später als der geplante Termin, oder der Job lief nicht): verpasste
         // Perioden werden NICHT nachträglich an aufeinanderfolgenden Tagen eingezogen — der Plan startet ab
-        // heute neu (Anker = Aktivierungstag).
-        if (periodStart < today)
+        // heute neu (Anker = Aktivierungstag). Bei bereits laufendem Abo mit festem Abbuchungstag erst, wenn auch dessen
+        // Termin vorbei ist (CollectionSchedule.IsBacklog); ohne festen Tag unverändert "periodStart < today".
+        if (CollectionSchedule.IsBacklog(periodStart, sub.CollectionDayOfMonth, sub.BillingAnchorDate != null, today))
         {
             _logger.LogInformation("Subscription {SubId}: billing date {Date:yyyy-MM-dd} lies in the past; schedule restarts today", sub.Id, periodStart);
             periodStart = today;
@@ -253,9 +254,10 @@ public class SubscriptionBillingJob
                 netPrice = (sub.AgreedMonthlyPrice ?? sub.Plan.MonthlyPrice) * billingMonths;
             }
             var grossTotal = BillingMath.Gross(netPrice, co.DefaultTaxMode);
-            // Einzugstag = Periodenbeginn, frühestens aber nach Ablauf der SEPA-Vorabankündigung (Berliner Datum).
-            var earliestCollection = today.AddDays(preNotificationDays);
-            var collectionDueDate = periodStart < earliestCollection ? earliestCollection : BerlinTime.StartOfDay(periodStart);
+            // Einzugstag = Periodenbeginn bzw. fester Abbuchungstag (CollectionDayOfMonth), frühestens aber nach Ablauf
+            // der SEPA-Vorabankündigung (Berliner Datum). Wird nur bei Erstellung gesetzt — spätere Änderungen des
+            // Abbuchungstags lassen bereits erstellte Rechnungen unberührt.
+            var collectionDueDate = CollectionSchedule.DueDate(periodStart, sub.CollectionDayOfMonth, today, preNotificationDays);
 
             var inv = new Invoice
             {

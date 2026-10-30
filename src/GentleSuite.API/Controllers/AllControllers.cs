@@ -454,6 +454,7 @@ public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentSer
     [HttpPost("manual-installment-plan")] public async Task<ActionResult<CustomerSubscriptionDto>> CreateManualInstallmentPlan(CreateManualInstallmentPlanRequest req) => Ok(await svc.CreateManualInstallmentPlanAsync(req));
     [HttpGet("billing-calendar")] public async Task<ActionResult<BillingCalendarDto>> BillingCalendar([FromQuery] int days = 90) => Ok(await svc.GetBillingCalendarAsync(days));
     [HttpGet("{id}/invoices")] public async Task<ActionResult<List<SubscriptionInvoiceDto>>> GetInvoices(Guid id) => Ok(await svc.GetInvoicesAsync(id));
+    [HttpPut("{id}/collection-day"), Authorize(Policy = "AdminOnly")] public async Task<ActionResult<CustomerSubscriptionDto>> SetCollectionDay(Guid id, SetCollectionDayRequest req) => Ok(await svc.SetCollectionDayAsync(id, req));
     [HttpPost("{id}/mandate/check"), Authorize(Policy = "AdminOnly")]
     public async Task<ActionResult<CustomerSubscriptionDto>> CheckMandate(Guid id)
     {

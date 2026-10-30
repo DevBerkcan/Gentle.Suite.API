@@ -14,7 +14,10 @@ public static class BerlinTime
     public static DateTimeOffset Today => StartOfDay(DateTimeOffset.UtcNow);
 
     /// <summary>Berlin midnight of the calendar day the given instant falls on (in Berlin).</summary>
-    public static DateTimeOffset StartOfDay(DateTimeOffset instant) => Midnight(TimeZoneInfo.ConvertTime(instant, Zone).Date);
+    public static DateTimeOffset StartOfDay(DateTimeOffset instant) => Midnight(LocalDate(instant));
+
+    /// <summary>Berlin calendar date the given instant falls on.</summary>
+    public static DateTime LocalDate(DateTimeOffset instant) => TimeZoneInfo.ConvertTime(instant, Zone).Date;
 
     /// <summary>Berlin midnight of a calendar date, e.g. 2026-11-12T00:00:00+01:00.</summary>
     public static DateTimeOffset Midnight(DateTime date)
@@ -54,6 +57,51 @@ public static class BillingMath
         while (next <= currentPeriodStart) next = anchor.AddMonths((++periods + 1) * stepMonths);
         return next;
     }
+}
+
+/// <summary>Einzugstermin einer neuen Abo-/Raten-Rechnung — einzige Quelle für SubscriptionBillingJob und alle
+/// Prognosen (Abo-DTO, Einrichtungsseite, Abrechnungskalender). Optionaler fester Abbuchungstag
+/// (CustomerSubscription.CollectionDayOfMonth, 1–28) verschiebt nur den Einzug, nie die Leistungs-/Rechnungsperiode.</summary>
+public static class CollectionSchedule
+{
+    public const int MinDay = 1;
+    public const int MaxDay = 28;
+
+    public static bool IsValidDay(int? day) => day is >= MinDay and <= MaxDay;
+
+    /// <summary>Ohne festen Tag: der Periodenbeginn selbst (bisheriges Verhalten). Mit Tag d: Berliner Mitternacht des
+    /// ersten Kalendertags mit Tag d, der nicht vor dem (Berliner) Periodenbeginn liegt — gleicher Monat, wenn
+    /// Periodenbeginn.Day ≤ d, sonst Folgemonat. Als Periodenbeginn zählt das spätere aus Kalenderdatum im gespeicherten
+    /// Offset (Anker 03.09. +02:00 → Periode 03.12. 00:00+02:00 = 02.12. 23:00 Berlin bleibt "der 3.") und Berliner Datum
+    /// (ein als UTC gespeicherter Beginn darf nie auf den Berliner Vortag fallen).</summary>
+    public static DateTimeOffset BaseDate(DateTimeOffset periodStart, int? collectionDay)
+    {
+        if (!IsValidDay(collectionDay)) return periodStart;
+        var day = collectionDay!.Value;
+        var berlinDate = BerlinTime.LocalDate(periodStart);
+        var start = periodStart.Date > berlinDate ? periodStart.Date : berlinDate;
+        var month = new DateTime(start.Year, start.Month, 1);
+        if (start.Day > day) month = month.AddMonths(1);
+        return BerlinTime.Midnight(new DateTime(month.Year, month.Month, day));
+    }
+
+    /// <summary>PaymentCollectionDueDate = max(Basis, heute + Vorabankündigung) als Berliner Mitternacht. Ohne festen Tag
+    /// identisch zur bisherigen Job-Formel (periodStart &lt; earliest ? earliest : StartOfDay(periodStart)).</summary>
+    public static DateTimeOffset DueDate(DateTimeOffset periodStart, int? collectionDay, DateTimeOffset today, int preNotificationDays)
+    {
+        var basis = BaseDate(periodStart, collectionDay);
+        var earliest = today.AddDays(preNotificationDays);
+        return basis < earliest ? earliest : BerlinTime.StartOfDay(basis);
+    }
+
+    /// <summary>Rückstand → der Plan startet ab heute neu (Anker = heute). Ohne festen Tag (und vor der ersten Abrechnung,
+    /// d. h. ohne Anker) wie bisher "Periodenbeginn liegt vor heute". Mit festem Tag und bestehendem Anker erst, wenn auch
+    /// der Abbuchungstag dieser Periode vorbei ist: Ihre Rechnung kann sich nur verzögern, weil der vorherige Einzug
+    /// (Abbuchungstag nach Periodenbeginn) noch offen war — sonst würde jeder Monat den Anker verschieben. Betrifft
+    /// höchstens die aktuelle Periode (ihr Abbuchungstag liegt vor bzw. — Sonderfall Anker 29.–31. mit Tag 28 im
+    /// Februar — auf dem nächsten Periodenbeginn), es wird also nie ein Rückstau nachgezogen.</summary>
+    public static bool IsBacklog(DateTimeOffset periodStart, int? collectionDay, bool hasAnchor, DateTimeOffset today)
+        => (hasAnchor ? BaseDate(periodStart, collectionDay) : periodStart) < today;
 }
 
 public static class MandateLabels
@@ -111,7 +159,8 @@ public static class IbanTools
 }
 
 /// <summary>"Nächster Einzug" für Abo-DTO und öffentliche Einrichtungsseite: Termin/Betrag der tatsächlich
-/// offenen Rechnung (PaymentCollectionDueDate, brutto), sonst Prognose max(NextBillingDate, heute + Vorabankündigung).</summary>
+/// offenen Rechnung (PaymentCollectionDueDate, brutto), sonst Prognose über CollectionSchedule (max(Basis, heute +
+/// Vorabankündigung); Basis = NextBillingDate bzw. nächster fester Abbuchungstag).</summary>
 public static class NextCollection
 {
     public static readonly string[] OpenStatuses = { "scheduled", "open", "pending", "authorized" };
@@ -160,8 +209,8 @@ public static class NextCollection
         };
         if (blocked != null) return new Info(null, amount, null, true, blocked);
 
-        var earliest = today.AddDays(preNotificationDays);
-        var planned = BerlinTime.StartOfDay(s.NextBillingDate);
-        return new Info(planned > earliest ? planned : earliest, amount, null, true, null);
+        // Gleiche Regel wie SubscriptionBillingJob: Rückstand → Neustart ab heute, dann CollectionSchedule.DueDate.
+        var periodStart = CollectionSchedule.IsBacklog(s.NextBillingDate, s.CollectionDayOfMonth, s.BillingAnchorDate != null, today) ? today : s.NextBillingDate;
+        return new Info(CollectionSchedule.DueDate(periodStart, s.CollectionDayOfMonth, today, preNotificationDays), amount, null, true, null);
     }
 }

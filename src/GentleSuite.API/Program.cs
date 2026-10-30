@@ -191,6 +191,8 @@ try
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','LastSetupAttemptMethod') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "LastSetupAttemptMethod" NVARCHAR(32) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','LastSetupError') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "LastSetupError" NVARCHAR(1000) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','SetupAttemptCount') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "SetupAttemptCount" INT NULL;""");
+    // Fester Abbuchungstag je Abo (1–28, Ausnahme): purely additive — one new nullable column, no default, no data update.
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','CollectionDayOfMonth') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "CollectionDayOfMonth" INT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_MandateSetupToken' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_MandateSetupToken" ON "CustomerSubscriptions" ("MandateSetupToken") WHERE "MandateSetupToken" IS NOT NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Customers','MollieCustomerId') IS NULL ALTER TABLE "Customers" ADD "MollieCustomerId" NVARCHAR(64) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Customers','MollieMandateId') IS NULL ALTER TABLE "Customers" ADD "MollieMandateId" NVARCHAR(64) NULL;""");

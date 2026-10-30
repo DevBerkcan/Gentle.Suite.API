@@ -286,7 +286,9 @@ public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Gui
     DateTimeOffset? NextCollectionDate = null, decimal? NextCollectionAmount = null, string? NextCollectionInvoiceNumber = null, bool NextCollectionIsForecast = false, string? NextCollectionBlockedReason = null,
     string? MandateMethod = null, string? MandateAccountLast4 = null, string? MandateSetupUrl = null, int InvoicesPaid = 0, int InvoicesTotal = 0, decimal OutstandingAmount = 0,
     // Letzter Einrichtungsversuch des Kunden über /payment/setup/{token} (LastSetupError = null → erfolgreich bzw. kein Fehler)
-    DateTimeOffset? LastSetupAttemptAt = null, string? LastSetupAttemptMethod = null, string? LastSetupError = null, int? SetupAttemptCount = null);
+    DateTimeOffset? LastSetupAttemptAt = null, string? LastSetupAttemptMethod = null, string? LastSetupError = null, int? SetupAttemptCount = null,
+    // Fester Abbuchungstag (1–28) als Ausnahme; null = Standard (Einzug zum Periodenbeginn)
+    int? CollectionDayOfMonth = null);
 /// <summary>Date = actual collection day (PaymentCollectionDueDate of an issued invoice, else forecast); Amount = gross.</summary>
 public record BillingOccurrenceDto(Guid SubscriptionId, string CustomerName, string Title, bool IsInstallmentPlan, DateTimeOffset Date, decimal Amount, bool IsLastInstallment, string? InvoiceNumber = null, bool IsForecast = true);
 public record BillingCalendarDto(List<BillingOccurrenceDto> Occurrences, decimal TotalNext30Days, decimal TotalNext90Days);
@@ -297,6 +299,9 @@ public record EligibleSubscriptionQuoteDto(Guid Id, string QuoteNumber, int Vers
 public record SubscriptionInvoiceDto(Guid Id, string InvoiceNumber, DateTimeOffset InvoiceDate, DateTimeOffset? BillingPeriodStart, DateTimeOffset? BillingPeriodEnd, decimal GrossTotal, InvoiceStatus Status, string? PaymentCollectionStatus, DateTimeOffset? PaymentCollectionDueDate, int CollectionAttemptCount = 0, DateTimeOffset? PaidAt = null, bool ChargedBack = false, string? LastFailureReason = null);
 /// <summary>POST /api/invoices/{id}/collection-date — verschiebt den geplanten SEPA-Einzug einer Abo-Rechnung (Admin).</summary>
 public record RescheduleCollectionRequest(DateOnly Date, string? Reason = null, bool NotifyCustomer = false);
+/// <summary>PUT /api/subscriptions/{id}/collection-day — fester Abbuchungstag 1–28 oder null (= Standard, Periodenbeginn). Admin.
+/// Gilt nur für künftig erstellte Rechnungen; bereits erstellte Rechnungen behalten ihren Einzugstermin.</summary>
+public record SetCollectionDayRequest(int? Day);
 public record UpdateSubscriptionStatusRequest(SubscriptionStatus Status, string? Reason = null);
 public record MollieMandateCheckoutDto(string CheckoutUrl, string PaymentId, string Status);
 public record MandateEmailResultDto(bool Sent, string? Recipient, DateTimeOffset? SentAt, string Status, string? Error);

@@ -126,6 +126,10 @@ public class CustomerSubscription : BaseEntity
     /// <summary>Error of the last attempt; null after a successful setup.</summary>
     public string? LastSetupError { get; set; }
     public int? SetupAttemptCount { get; set; }
+
+    /// <summary>Fester Abbuchungstag (1–28) als Ausnahme; null = Einzug zum Periodenbeginn. Verschiebt nur den
+    /// Einzugstermin neu erstellter Rechnungen (CollectionSchedule), nie Anker oder Leistungs-/Rechnungsperiode.</summary>
+    public int? CollectionDayOfMonth { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity
