@@ -173,6 +173,7 @@ public interface ISubscriptionService
     Task<CustomerSubscriptionDto> CreateSurchargedInstallmentPlanAsync(Guid customerId, Guid quoteId, int months, decimal financedAmount, decimal? informationalSurchargePercent, decimal? downPaymentPercent, Guid? downPaymentInvoiceId, string paymentPlanOptionKey, CancellationToken ct = default);
     Task<CustomerSubscriptionDto> CreateManualInstallmentPlanAsync(CreateManualInstallmentPlanRequest req, CancellationToken ct = default);
     Task<BillingCalendarDto> GetBillingCalendarAsync(int days, CancellationToken ct = default);
+    Task<CustomerSubscriptionDto> SetCollectionDayAsync(Guid subscriptionId, SetCollectionDayRequest req, CancellationToken ct = default);
 }
 
 public interface IMolliePaymentService

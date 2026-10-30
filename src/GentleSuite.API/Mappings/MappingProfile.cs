@@ -170,7 +170,8 @@ public class MappingProfile : Profile
                 s.RequiresAgencyContract,
                 null, null, null, false, null,
                 s.MollieMandateMethod, s.MandateAccountLast4, null, 0, 0, 0m,
-                s.LastSetupAttemptAt, s.LastSetupAttemptMethod, s.LastSetupError, s.SetupAttemptCount
+                s.LastSetupAttemptAt, s.LastSetupAttemptMethod, s.LastSetupError, s.SetupAttemptCount,
+                s.CollectionDayOfMonth
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()

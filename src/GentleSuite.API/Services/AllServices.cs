@@ -581,8 +581,8 @@ public class ProjectServiceImpl : IProjectService
 // === Subscription ===
 public class SubscriptionServiceImpl : ISubscriptionService
 {
-    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IInvoiceService _invoiceSvc; private readonly IMolliePaymentService _mollie; private readonly ILogger<SubscriptionServiceImpl> _logger; private readonly IConfiguration _configuration;
-    public SubscriptionServiceImpl(AppDbContext db, IMapper m, IInvoiceService invoiceSvc, IMolliePaymentService mollie, ILogger<SubscriptionServiceImpl> logger, IConfiguration configuration) { _db = db; _m = m; _invoiceSvc = invoiceSvc; _mollie = mollie; _logger = logger; _configuration = configuration; }
+    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IInvoiceService _invoiceSvc; private readonly IMolliePaymentService _mollie; private readonly ILogger<SubscriptionServiceImpl> _logger; private readonly IConfiguration _configuration; private readonly IActivityLogService _activity;
+    public SubscriptionServiceImpl(AppDbContext db, IMapper m, IInvoiceService invoiceSvc, IMolliePaymentService mollie, ILogger<SubscriptionServiceImpl> logger, IConfiguration configuration, IActivityLogService activity) { _db = db; _m = m; _invoiceSvc = invoiceSvc; _mollie = mollie; _logger = logger; _configuration = configuration; _activity = activity; }
     private int PreNotificationDays => Math.Max(1, _configuration.GetValue<int?>("Mollie:PreNotificationDays") ?? 14);
     /// <summary>Subscriptions incl. plan + customer, ignoring the soft-delete filter on the plan (a deleted plan
     /// must not make a subscription invisible) while still hiding deleted subscriptions/customers.</summary>
@@ -690,7 +690,6 @@ public class SubscriptionServiceImpl : ISubscriptionService
         var today = BerlinTime.Today;
         var horizon = today.AddDays(days + 1);
         var taxMode = (await _db.CompanySettings.AsNoTracking().FirstOrDefaultAsync(ct))?.DefaultTaxMode ?? TaxMode.Standard;
-        var earliest = today.AddDays(PreNotificationDays);
         var ids = subs.Select(s => s.Id).ToList();
         var openInvoices = ids.Count == 0 ? new() : await _db.Invoices.AsNoTracking()
             .Where(i => i.SubscriptionId != null && ids.Contains(i.SubscriptionId.Value) &&
@@ -714,14 +713,16 @@ public class SubscriptionServiceImpl : ISubscriptionService
             var step = BillingMath.CycleMonths(s.ContractBillingCycle);
             // Gleiche Regel wie der Job: Termin in der Vergangenheit → Neustart ab heute; ein noch offener Einzug
             // verschiebt die nächste Rechnung, daher beginnt die Prognose frühestens nach dem offenen Einzug.
-            var periodStart = s.NextBillingDate < today ? today : s.NextBillingDate;
-            var anchor = s.NextBillingDate < today ? today : (s.BillingAnchorDate ?? periodStart);
+            // Einzugstermin je Periode über CollectionSchedule (inkl. festem Abbuchungstag), identisch zum Job.
+            var backlog = CollectionSchedule.IsBacklog(s.NextBillingDate, s.CollectionDayOfMonth, s.BillingAnchorDate != null, today);
+            var periodStart = backlog ? today : s.NextBillingDate;
+            var anchor = backlog ? today : (s.BillingAnchorDate ?? periodStart);
             var index = s.InstallmentsCompleted;
             var minDate = issued.Count > 0 ? issued.Max(i => i.Date).AddDays(1) : DateTimeOffset.MinValue;
             for (var guard = 0; guard < 400; guard++)
             {
                 if (s.IsInstallmentPlan && index >= count) break;
-                var date = periodStart < earliest ? earliest : BerlinTime.StartOfDay(periodStart);
+                var date = CollectionSchedule.DueDate(periodStart, s.CollectionDayOfMonth, today, PreNotificationDays);
                 if (date < minDate) date = minDate;
                 if (date >= horizon) break;
                 decimal net;
@@ -745,6 +746,32 @@ public class SubscriptionServiceImpl : ISubscriptionService
             occurrences.Where(o => o.Date < in30).Sum(o => o.Amount),
             occurrences.Where(o => o.Date < in90).Sum(o => o.Amount));
     }
+    /// <summary>Admin: fester Abbuchungstag (1–28) bzw. null = Standard (Einzug zum Periodenbeginn). Ändert nur die Spalte
+    /// CollectionDayOfMonth — Anker, NextBillingDate und bereits erstellte Rechnungen (inkl. deren Einzugstermin) bleiben
+    /// unverändert; der Tag gilt für alle danach erstellten Rechnungen (CollectionSchedule im SubscriptionBillingJob).</summary>
+    public async Task<CustomerSubscriptionDto> SetCollectionDayAsync(Guid sid, SetCollectionDayRequest req, CancellationToken ct)
+    {
+        if (req.Day != null && !CollectionSchedule.IsValidDay(req.Day))
+            throw new ArgumentException($"Der Abbuchungstag muss zwischen {CollectionSchedule.MinDay} und {CollectionSchedule.MaxDay} liegen.");
+        var s = await SubscriptionsQuery().FirstOrDefaultAsync(x => x.Id == sid, ct)
+            ?? throw new KeyNotFoundException("Abonnement wurde nicht gefunden.");
+
+        var oldDay = s.CollectionDayOfMonth;
+        if (oldDay != req.Day)
+        {
+            s.CollectionDayOfMonth = req.Day;
+            await _db.SaveChangesAsync(ct);
+
+            static string Text(int? day) => day == null ? "Standard (Periodenbeginn)" : $"am {day}.";
+            var title = s.IsInstallmentPlan ? (s.InstallmentSourceTitle ?? s.Plan.Name) : s.Plan.Name;
+            _logger.LogInformation("Collection day of subscription {SubId} changed from {OldDay} to {NewDay}", s.Id, oldDay?.ToString() ?? "standard", req.Day?.ToString() ?? "standard");
+            await _activity.LogAsync(s.CustomerId, "Subscription", s.Id, "CollectionDayChanged",
+                $"Abbuchungstag für {(s.IsInstallmentPlan ? "Ratenzahlung" : "Serienrechnung")} „{title}“ von {Text(oldDay)} auf {Text(req.Day)} geändert. " +
+                "Gilt für alle künftigen Rechnungen; bereits erstellte Rechnungen behalten ihren Termin.", ct: ct);
+        }
+        return await GetByIdAsync(sid, ct);
+    }
+
     public async Task<List<EligibleSubscriptionQuoteDto>> GetEligibleQuotesAsync(Guid customerId, CancellationToken ct) => await _db.Quotes
         .AsNoTracking()
         .Include(q => q.Lines)
