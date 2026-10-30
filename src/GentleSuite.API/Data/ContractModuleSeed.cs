@@ -157,35 +157,38 @@ public static class ContractModuleSeed
         if (missing.Count == 0) return;
 
         var blocks = await db.ContractClauseBlocks.Where(b => b.IsActive).ToListAsync();
-        Section? Block(string key) => blocks.FirstOrDefault(b => b.Key == key) is { } b ? new Section(b.Title, b.Content) : null;
-
         foreach (var t in missing)
         {
-            var creative = t.DefaultBlocks.Any(k => blocks.Any(b => b.Key == k && b.IsCreativeWork));
-            var sections = new List<Section?>
-            {
-                Block("geltungsbereich"), Block("vertragsschluss"),
-            };
-            sections.AddRange(t.DefaultBlocks.Select(Block));
-            sections.Add(Block("mitwirkung"));
-            if (creative) sections.Add(Block("abnahme"));
-            sections.Add(new Section("Vergütung", Trim(VerguetungText)));
-            sections.Add(new Section(t.Ongoing ? "Vertragslaufzeit und Kündigung" : "Vertragslaufzeit", Trim(t.Ongoing ? LaufzeitDauer : LaufzeitProjekt)));
-            if (creative) sections.Add(Block("maengel"));
-            sections.Add(Block("haftung") ?? new Section("Haftung und Freistellung", Trim(Haftung)));
-            if (creative) sections.Add(Block("rechteeinraumung"));
-            sections.Add(Block("av-vertrag"));
-            sections.Add(Block("vertraulichkeit"));
-            sections.Add(Block("sonstiges"));
-
             db.ContractTemplates.Add(new ContractTemplate
             {
                 Key = t.Key, Name = t.Name, SortOrder = t.SortOrder,
-                SectionsJson = JsonSerializer.Serialize(sections.Where(s => s != null)),
+                SectionsJson = BuildSectionsJson(blocks, t.DefaultBlocks, t.Ongoing),
                 DefaultBlockKeysJson = JsonSerializer.Serialize(t.DefaultBlocks),
             });
         }
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>Standard section order of a contract template, assembled from the current clause blocks:
+    /// Geltung, Vertragsschluss, Leistungsmodule, Mitwirkung, (Abnahme), Vergütung, Laufzeit, (Mängel), Haftung,
+    /// (Rechte), AV, Vertraulichkeit, Sonstiges. Bracketed parts only for Werkleistungen (IsCreativeWork).</summary>
+    public static string BuildSectionsJson(List<ContractClauseBlock> blocks, string[] defaultBlocks, bool ongoing)
+    {
+        Section? Block(string key) => blocks.FirstOrDefault(b => b.Key == key) is { } b ? new Section(b.Title, b.Content) : null;
+        var creative = defaultBlocks.Any(k => blocks.Any(b => b.Key == k && b.IsCreativeWork));
+        var sections = new List<Section?> { Block("geltungsbereich"), Block("vertragsschluss") };
+        sections.AddRange(defaultBlocks.Select(Block));
+        sections.Add(Block("mitwirkung"));
+        if (creative) sections.Add(Block("abnahme"));
+        sections.Add(new Section("Vergütung", Trim(VerguetungText)));
+        sections.Add(new Section(ongoing ? "Vertragslaufzeit und Kündigung" : "Vertragslaufzeit", Trim(ongoing ? LaufzeitDauer : LaufzeitProjekt)));
+        if (creative) sections.Add(Block("maengel"));
+        sections.Add(Block("haftung") ?? new Section("Haftung und Freistellung", Trim(Haftung)));
+        if (creative) sections.Add(Block("rechteeinraumung"));
+        sections.Add(Block("av-vertrag"));
+        sections.Add(Block("vertraulichkeit"));
+        sections.Add(Block("sonstiges"));
+        return JsonSerializer.Serialize(sections.Where(s => s != null));
     }
 
     record Section(string Title, string Content);

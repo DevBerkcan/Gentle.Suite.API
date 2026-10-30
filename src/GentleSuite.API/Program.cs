@@ -755,6 +755,27 @@ await db.Database.ExecuteSqlRawAsync("""
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectLegalWorkflows_AcceptanceTokenHash' AND object_id=OBJECT_ID('ProjectLegalWorkflows')) CREATE INDEX "IX_ProjectLegalWorkflows_AcceptanceTokenHash" ON "ProjectLegalWorkflows" ("AcceptanceTokenHash");""");
 
 
+    // Website-Rechtstexte-Generator: purely additive — one new table "WebsiteLegalProfiles" (Konfiguration je Kunde).
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='WebsiteLegalProfiles')
+    BEGIN
+        CREATE TABLE "WebsiteLegalProfiles" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "CustomerId" UNIQUEIDENTIFIER NOT NULL,
+            "ConfigJson" NVARCHAR(MAX) NOT NULL DEFAULT '{{}}', -- braces doubled: ExecuteSqlRaw runs string.Format
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_WebsiteLegalProfiles" PRIMARY KEY ("Id"),
+            CONSTRAINT "FK_WebsiteLegalProfiles_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id")
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_WebsiteLegalProfiles_CustomerId' AND object_id=OBJECT_ID('WebsiteLegalProfiles')) CREATE UNIQUE INDEX "IX_WebsiteLegalProfiles_CustomerId" ON "WebsiteLegalProfiles" ("CustomerId");""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)

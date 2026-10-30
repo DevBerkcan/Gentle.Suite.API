@@ -42,6 +42,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
     public DbSet<ContractClauseBlock> ContractClauseBlocks => Set<ContractClauseBlock>();
     public DbSet<Estimate> Estimates => Set<Estimate>();
     public DbSet<ProjectLegalWorkflow> ProjectLegalWorkflows => Set<ProjectLegalWorkflow>();
+    public DbSet<WebsiteLegalProfile> WebsiteLegalProfiles => Set<WebsiteLegalProfile>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<InvoiceLine> InvoiceLines => Set<InvoiceLine>();
     public DbSet<InvoicePayment> InvoicePayments => Set<InvoicePayment>();
@@ -197,6 +198,8 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
         mb.Entity<Estimate>().HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.ClientSetNull);
         mb.Entity<ProjectLegalWorkflow>().HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
         mb.Entity<ProjectLegalWorkflow>().HasIndex(x => x.QuoteGroupId).IsUnique();
+        mb.Entity<WebsiteLegalProfile>().HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+        mb.Entity<WebsiteLegalProfile>().HasIndex(x => x.CustomerId).IsUnique();
         // Same lengths as the raw CREATE TABLE in Program.cs, so a fresh DB (EnsureCreated) can index the token hashes too.
         mb.Entity<ProjectLegalWorkflow>().Property(x => x.RightsTokenHash).HasMaxLength(128);
         mb.Entity<ProjectLegalWorkflow>().Property(x => x.AcceptanceTokenHash).HasMaxLength(128);
