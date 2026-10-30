@@ -581,12 +581,27 @@ public class ProjectServiceImpl : IProjectService
 // === Subscription ===
 public class SubscriptionServiceImpl : ISubscriptionService
 {
-    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IInvoiceService _invoiceSvc; private readonly IMolliePaymentService _mollie; private readonly ILogger<SubscriptionServiceImpl> _logger;
-    public SubscriptionServiceImpl(AppDbContext db, IMapper m, IInvoiceService invoiceSvc, IMolliePaymentService mollie, ILogger<SubscriptionServiceImpl> logger) { _db = db; _m = m; _invoiceSvc = invoiceSvc; _mollie = mollie; _logger = logger; }
+    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IInvoiceService _invoiceSvc; private readonly IMolliePaymentService _mollie; private readonly ILogger<SubscriptionServiceImpl> _logger; private readonly IConfiguration _configuration;
+    public SubscriptionServiceImpl(AppDbContext db, IMapper m, IInvoiceService invoiceSvc, IMolliePaymentService mollie, ILogger<SubscriptionServiceImpl> logger, IConfiguration configuration) { _db = db; _m = m; _invoiceSvc = invoiceSvc; _mollie = mollie; _logger = logger; _configuration = configuration; }
+    private int PreNotificationDays => Math.Max(1, _configuration.GetValue<int?>("Mollie:PreNotificationDays") ?? 14);
+    /// <summary>Subscriptions incl. plan + customer, ignoring the soft-delete filter on the plan (a deleted plan
+    /// must not make a subscription invisible) while still hiding deleted subscriptions/customers.</summary>
+    private IQueryable<CustomerSubscription> SubscriptionsQuery() => _db.CustomerSubscriptions.IgnoreQueryFilters()
+        .Where(s => !s.IsDeleted && !s.Customer.IsDeleted).Include(s => s.Plan).Include(s => s.Customer);
     public async Task<List<SubscriptionPlanDto>> GetPlansAsync(CancellationToken ct) => _m.Map<List<SubscriptionPlanDto>>(await _db.SubscriptionPlans.Include(p => p.IncludedServices).Include(p => p.WorkScopeRule).Include(p => p.SupportPolicy).ToListAsync(ct));
     public async Task<SubscriptionPlanDto> CreatePlanAsync(CreatePlanRequest req, CancellationToken ct) { var plan = new SubscriptionPlan { Name = req.Name, Description = req.Description, MonthlyPrice = req.MonthlyPrice, BillingCycle = req.BillingCycle, Category = req.Category, IsActive = true }; _db.SubscriptionPlans.Add(plan); await _db.SaveChangesAsync(ct); return _m.Map<SubscriptionPlanDto>(plan); }
     public async Task<SubscriptionPlanDto> UpdatePlanAsync(Guid id, UpdatePlanRequest req, CancellationToken ct) { var plan = await _db.SubscriptionPlans.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); plan.Name = req.Name; plan.Description = req.Description; plan.MonthlyPrice = req.MonthlyPrice; plan.BillingCycle = req.BillingCycle; plan.Category = req.Category; plan.IsActive = req.IsActive; await _db.SaveChangesAsync(ct); return _m.Map<SubscriptionPlanDto>(plan); }
-    public async Task DeletePlanAsync(Guid id, CancellationToken ct) { var plan = await _db.SubscriptionPlans.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); plan.IsDeleted = true; plan.DeletedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
+    public async Task DeletePlanAsync(Guid id, CancellationToken ct)
+    {
+        var plan = await _db.SubscriptionPlans.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        // Ein gelöschter Tarif würde laufende Abos aus Abrechnung/Übersicht verschwinden lassen (Soft-Delete-Filter
+        // auf der Pflicht-Navigation) — daher nur löschbar, solange kein nicht beendetes Abo darauf verweist.
+        var inUse = await _db.CustomerSubscriptions.IgnoreQueryFilters().CountAsync(s => s.PlanId == id && !s.IsDeleted &&
+            s.Status != SubscriptionStatus.Cancelled && s.Status != SubscriptionStatus.Expired && s.Status != SubscriptionStatus.Completed, ct);
+        if (inUse > 0)
+            throw new InvalidOperationException($"Der Tarif wird noch von {inUse} laufenden oder ausstehenden Abonnement(s) verwendet und kann nicht gelöscht werden. Bitte stattdessen deaktivieren.");
+        plan.IsDeleted = true; plan.DeletedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct);
+    }
     /// <summary>Sum of NetTotal across all Paid invoices per subscription — actual money received, not just invoiced.</summary>
     private async Task<Dictionary<Guid, decimal>> GetPaidAmountsAsync(IEnumerable<Guid> subscriptionIds, CancellationToken ct)
     {
@@ -600,82 +615,131 @@ public class SubscriptionServiceImpl : ISubscriptionService
     }
 
     public async Task<List<CustomerSubscriptionDto>> GetAllAsync(CancellationToken ct)
-    {
-        var subs = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
-        var dtos = _m.Map<List<CustomerSubscriptionDto>>(subs);
-        var paid = await GetPaidAmountsAsync(subs.Select(s => s.Id), ct);
-        return dtos.Zip(subs, (d, s) => d with { PaidAmount = paid.GetValueOrDefault(d.Id), BillingStage = DashboardAmounts.Stage(s) }).ToList();
-    }
+        => await EnrichAsync(await SubscriptionsQuery().OrderByDescending(s => s.CreatedAt).ToListAsync(ct), ct);
 
     public async Task<CustomerSubscriptionDto> GetByIdAsync(Guid sid, CancellationToken ct)
     {
-        var sub = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).FirstOrDefaultAsync(s => s.Id == sid, ct) ?? throw new KeyNotFoundException();
-        var dto = _m.Map<CustomerSubscriptionDto>(sub);
-        var paid = await GetPaidAmountsAsync(new[] { sid }, ct);
-        return dto with { PaidAmount = paid.GetValueOrDefault(sid), BillingStage = DashboardAmounts.Stage(sub) };
+        var sub = await SubscriptionsQuery().FirstOrDefaultAsync(s => s.Id == sid, ct) ?? throw new KeyNotFoundException();
+        return (await EnrichAsync(new List<CustomerSubscription> { sub }, ct))[0];
     }
 
     public async Task<List<CustomerSubscriptionDto>> GetCustomerSubscriptionsAsync(Guid cid, CancellationToken ct)
+        => await EnrichAsync(await SubscriptionsQuery().Where(s => s.CustomerId == cid).OrderByDescending(s => s.CreatedAt).ToListAsync(ct), ct);
+
+    /// <summary>Adds the computed contract fields (docs/mollie-api-contract.md §2): next collection (real pending
+    /// invoice or forecast), mandate method/last 4, stable setup link and invoice/payment totals.</summary>
+    private async Task<List<CustomerSubscriptionDto>> EnrichAsync(List<CustomerSubscription> subs, CancellationToken ct)
     {
-        var subs = await _db.CustomerSubscriptions.Include(s => s.Plan).Include(s => s.Customer).Where(s => s.CustomerId == cid).OrderByDescending(s => s.CreatedAt).ToListAsync(ct);
-        var dtos = _m.Map<List<CustomerSubscriptionDto>>(subs);
-        var paid = await GetPaidAmountsAsync(subs.Select(s => s.Id), ct);
-        return dtos.Zip(subs, (d, s) => d with { PaidAmount = paid.GetValueOrDefault(d.Id), BillingStage = DashboardAmounts.Stage(s) }).ToList();
+        // Setup-Link lazily erzeugen, damit der Admin ihn jederzeit kopieren kann (nur neue Spalte, keine Fachdaten).
+        var missingToken = subs.Where(s => s.MandateSetupToken == null && s.Status is not (SubscriptionStatus.Cancelled or SubscriptionStatus.Expired or SubscriptionStatus.Completed)).ToList();
+        foreach (var s in missingToken) s.MandateSetupToken = IbanTools.NewToken();
+        if (missingToken.Count > 0) await _db.SaveChangesAsync(ct);
+
+        var ids = subs.Select(s => s.Id).ToList();
+        var paid = await GetPaidAmountsAsync(ids, ct);
+        var open = await NextCollection.LoadOpenCollectionsAsync(_db, ids, ct);
+        var stats = ids.Count == 0 ? new() : await _db.Invoices
+            .Where(i => i.SubscriptionId != null && ids.Contains(i.SubscriptionId.Value) &&
+                        i.Status != InvoiceStatus.Draft && i.Status != InvoiceStatus.Cancelled &&
+                        i.Type != InvoiceType.Cancellation && i.Type != InvoiceType.CreditNote)
+            .GroupBy(i => i.SubscriptionId!.Value)
+            .Select(g => new { Id = g.Key, Total = g.Count(), Paid = g.Count(i => i.Status == InvoiceStatus.Paid), Outstanding = g.Where(i => i.Status != InvoiceStatus.Paid).Sum(i => i.GrossTotal) })
+            .ToDictionaryAsync(x => x.Id, ct);
+        var taxMode = (await _db.CompanySettings.AsNoTracking().FirstOrDefaultAsync(ct))?.DefaultTaxMode ?? TaxMode.Standard;
+        var frontend = (_configuration["FrontendBaseUrl"] ?? "https://gentlesuite.vercel.app").TrimEnd('/');
+        var today = BerlinTime.Today;
+
+        return subs.Select(s =>
+        {
+            var next = NextCollection.Compute(s, open.GetValueOrDefault(s.Id), taxMode, PreNotificationDays, today);
+            var st = stats.GetValueOrDefault(s.Id);
+            return _m.Map<CustomerSubscriptionDto>(s) with
+            {
+                PaidAmount = paid.GetValueOrDefault(s.Id),
+                BillingStage = DashboardAmounts.Stage(s),
+                NextCollectionDate = next.Date,
+                NextCollectionAmount = next.Amount,
+                NextCollectionInvoiceNumber = next.InvoiceNumber,
+                NextCollectionIsForecast = next.IsForecast,
+                NextCollectionBlockedReason = next.BlockedReason,
+                MandateMethod = s.MollieMandateMethod,
+                MandateAccountLast4 = s.MandateAccountLast4,
+                MandateSetupUrl = s.MandateSetupToken == null ? null : $"{frontend}/payment/setup/{s.MandateSetupToken}",
+                InvoicesPaid = st?.Paid ?? 0,
+                InvoicesTotal = st?.Total ?? 0,
+                OutstandingAmount = Math.Round(st?.Outstanding ?? 0m, 2)
+            };
+        }).ToList();
     }
 
-    /// <summary>Read-only forward projection of upcoming charges across all billing-ready subscriptions
-    /// (Serienrechnung + Ratenzahlung), for the cross-customer billing calendar. Mirrors the cycle/rounding
-    /// math in SubscriptionBillingJob.BillSubscriptionAsync exactly, but never mutates anything.</summary>
+    /// <summary>Read-only forward view of upcoming collections across all subscriptions (Serienrechnung +
+    /// Ratenzahlung) for the cross-customer billing calendar: already issued invoices with their real
+    /// collection day (PaymentCollectionDueDate) and gross amount, then forecasts for billing-ready plans
+    /// using the same anchor/rounding/VAT/pre-notification rules as SubscriptionBillingJob.</summary>
     public async Task<BillingCalendarDto> GetBillingCalendarAsync(int days, CancellationToken ct)
     {
-        var subs = await _db.CustomerSubscriptions
-            .Include(s => s.Plan).Include(s => s.Customer)
-            .Where(s => s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.PendingConfirmation)
+        var subs = await SubscriptionsQuery()
+            .Where(s => s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.PendingConfirmation || s.Status == SubscriptionStatus.Paused || s.Status == SubscriptionStatus.Completed)
+            .AsNoTracking()
             .ToListAsync(ct);
 
-        var horizon = DateTimeOffset.UtcNow.Date.AddDays(days);
+        var today = BerlinTime.Today;
+        var horizon = today.AddDays(days + 1);
+        var taxMode = (await _db.CompanySettings.AsNoTracking().FirstOrDefaultAsync(ct))?.DefaultTaxMode ?? TaxMode.Standard;
+        var earliest = today.AddDays(PreNotificationDays);
+        var ids = subs.Select(s => s.Id).ToList();
+        var openInvoices = ids.Count == 0 ? new() : await _db.Invoices.AsNoTracking()
+            .Where(i => i.SubscriptionId != null && ids.Contains(i.SubscriptionId.Value) &&
+                        i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Cancelled &&
+                        i.PaymentCollectionStatus != null && NextCollection.OpenStatuses.Contains(i.PaymentCollectionStatus) &&
+                        i.PaymentCollectionDueDate != null && i.PaymentCollectionDueDate < horizon)
+            .Select(i => new { SubscriptionId = i.SubscriptionId!.Value, i.InvoiceNumber, i.GrossTotal, Date = i.PaymentCollectionDueDate!.Value })
+            .ToListAsync(ct);
         var occurrences = new List<BillingOccurrenceDto>();
 
         foreach (var s in subs)
         {
-            if (DashboardAmounts.Stage(s) != "ready") continue;
             var title = s.IsInstallmentPlan ? (s.InstallmentSourceTitle ?? s.Plan.Name) : s.Plan.Name;
             var customerName = s.Customer.CompanyName;
+            var count = s.ContractDurationMonths ?? 1;
+            var issued = openInvoices.Where(i => i.SubscriptionId == s.Id).ToList();
+            foreach (var inv in issued)
+                occurrences.Add(new BillingOccurrenceDto(s.Id, customerName, title, s.IsInstallmentPlan, inv.Date, Math.Round(inv.GrossTotal, 2), s.IsInstallmentPlan && s.InstallmentsCompleted >= count, inv.InvoiceNumber, false));
 
-            if (s.IsInstallmentPlan)
+            if (DashboardAmounts.Stage(s) != "ready") continue;
+            var step = BillingMath.CycleMonths(s.ContractBillingCycle);
+            // Gleiche Regel wie der Job: Termin in der Vergangenheit → Neustart ab heute; ein noch offener Einzug
+            // verschiebt die nächste Rechnung, daher beginnt die Prognose frühestens nach dem offenen Einzug.
+            var periodStart = s.NextBillingDate < today ? today : s.NextBillingDate;
+            var anchor = s.NextBillingDate < today ? today : (s.BillingAnchorDate ?? periodStart);
+            var index = s.InstallmentsCompleted;
+            var minDate = issued.Count > 0 ? issued.Max(i => i.Date).AddDays(1) : DateTimeOffset.MinValue;
+            for (var guard = 0; guard < 400; guard++)
             {
-                var total = s.TotalInstallmentAmount ?? 0m;
-                var count = s.ContractDurationMonths ?? 1;
-                var baseAmount = s.AgreedMonthlyPrice ?? Math.Floor(total / count * 100m) / 100m;
-                var date = s.NextBillingDate;
-                for (var installmentIndex = s.InstallmentsCompleted; installmentIndex < count && date <= horizon; installmentIndex++)
+                if (s.IsInstallmentPlan && index >= count) break;
+                var date = periodStart < earliest ? earliest : BerlinTime.StartOfDay(periodStart);
+                if (date < minDate) date = minDate;
+                if (date >= horizon) break;
+                decimal net;
+                if (s.IsInstallmentPlan)
                 {
-                    var isLast = installmentIndex >= count - 1;
-                    var amount = isLast ? total - baseAmount * (count - 1) : baseAmount;
-                    occurrences.Add(new BillingOccurrenceDto(s.Id, customerName, title, true, date, amount, isLast));
-                    date = date.AddMonths(1);
+                    var total = s.TotalInstallmentAmount ?? 0m;
+                    net = BillingMath.InstallmentNet(total, count, s.AgreedMonthlyPrice ?? BillingMath.InstallmentAmount(total, count), index);
                 }
-            }
-            else
-            {
-                var amount = s.AgreedMonthlyPrice ?? s.Plan.MonthlyPrice;
-                var date = s.NextBillingDate;
-                var stepMonths = s.ContractBillingCycle switch { BillingCycle.Quarterly => 3, BillingCycle.Yearly => 12, _ => 1 };
-                while (date <= horizon)
-                {
-                    occurrences.Add(new BillingOccurrenceDto(s.Id, customerName, title, false, date, amount, false));
-                    date = date.AddMonths(stepMonths);
-                }
+                else net = (s.AgreedMonthlyPrice ?? s.Plan.MonthlyPrice) * step;
+                occurrences.Add(new BillingOccurrenceDto(s.Id, customerName, title, s.IsInstallmentPlan, date, BillingMath.Gross(net, taxMode), s.IsInstallmentPlan && index >= count - 1, null, true));
+                index++;
+                periodStart = BillingMath.NextPeriodStart(anchor, periodStart, step);
             }
         }
 
         occurrences = occurrences.OrderBy(o => o.Date).ToList();
-        var in30 = DateTimeOffset.UtcNow.Date.AddDays(30);
-        var in90 = DateTimeOffset.UtcNow.Date.AddDays(90);
+        var in30 = today.AddDays(31);
+        var in90 = today.AddDays(91);
         return new BillingCalendarDto(
             occurrences,
-            occurrences.Where(o => o.Date <= in30).Sum(o => o.Amount),
-            occurrences.Where(o => o.Date <= in90).Sum(o => o.Amount));
+            occurrences.Where(o => o.Date < in30).Sum(o => o.Amount),
+            occurrences.Where(o => o.Date < in90).Sum(o => o.Amount));
     }
     public async Task<List<EligibleSubscriptionQuoteDto>> GetEligibleQuotesAsync(Guid customerId, CancellationToken ct) => await _db.Quotes
         .AsNoTracking()
@@ -746,7 +810,16 @@ public class SubscriptionServiceImpl : ISubscriptionService
             AgreedMonthlyPrice = agreedMonthlyPrice,
             ContractBillingCycle = BillingCycle.Monthly,
             BusinessCustomerConfirmed = true,
-            BusinessCustomerConfirmedAt = DateTimeOffset.UtcNow
+            BusinessCustomerConfirmedAt = DateTimeOffset.UtcNow,
+            // Freigabe-Regel: Normalerweise gibt erst die ausgestellte Rechnung zum Angebot (ConvertToInvoiceAsync →
+            // AuthorizeSubscriptionBillingAsync) die Abrechnung frei. Enthält das Angebot aber keine einmaligen
+            // Positionen, kann es diese Rechnung nie geben ("Die Serienrechnung startet automatisch") — und ohne
+            // Angebot ist die bewusste Admin-Anlage mit B2B-Bestätigung selbst die Freigabe (analog Ratenplan
+            // "manual"). Gleiches gilt, wenn die Einmal-Positionen per Ratenplan (statt Einmalrechnung) bezahlt
+            // werden. Sonst blieb das Abo trotz gültigem Mandat für immer unabgerechnet.
+            BillingAuthorizedAt = quote == null || !quote.Lines.Any(l => l.LineType == QuoteLineType.OneTime) ||
+                quote.ChosenInstallmentMonths is > 0 || quote.ChosenPaymentPlanOptionKey is "monthly12" or "monthly24" or "hybrid"
+                ? DateTimeOffset.UtcNow : null
         };
         _db.CustomerSubscriptions.Add(subscription);
         await _db.SaveChangesAsync(ct);
@@ -795,7 +868,18 @@ public class SubscriptionServiceImpl : ISubscriptionService
     }
     public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || !s.BusinessCustomerConfirmed)) throw new InvalidOperationException("Das Abonnement kann erst mit bestätigter B2B-Vertragsgrundlage und gültigem Mollie-Mandat aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
     public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || !s.BusinessCustomerConfirmed) throw new InvalidOperationException("Das Abonnement kann erst mit bestätigter B2B-Vertragsgrundlage und gültigem Mollie-Mandat aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
-    public async Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid sid, CancellationToken ct) => await _db.Invoices.Where(i => i.SubscriptionId == sid).OrderByDescending(i => i.InvoiceDate).Select(i => new SubscriptionInvoiceDto(i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate)).ToListAsync(ct);
+    public async Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid sid, CancellationToken ct)
+    {
+        var rows = await _db.Invoices.AsNoTracking().Where(i => i.SubscriptionId == sid).OrderByDescending(i => i.InvoiceDate)
+            .Select(i => new
+            {
+                i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate,
+                i.CollectionAttemptCount, i.PaidAt, i.ChargedBackAt,
+                LastFailure = _db.InvoicePaymentAttempts.Where(a => a.InvoiceId == i.Id).OrderByDescending(a => a.CreatedAt).Select(a => a.FailureReason).FirstOrDefault()
+            }).ToListAsync(ct);
+        return rows.Select(i => new SubscriptionInvoiceDto(i.Id, i.InvoiceNumber, i.InvoiceDate, i.BillingPeriodStart, i.BillingPeriodEnd, i.GrossTotal, i.Status,
+            i.PaymentCollectionStatus, i.PaymentCollectionDueDate, i.CollectionAttemptCount, i.PaidAt, i.ChargedBackAt != null, i.LastFailure)).ToList();
+    }
 
     // === Ratenzahlung (installment plans) ===
     public async Task<CustomerSubscriptionDto> CreateInstallmentPlanFromQuoteAsync(Guid customerId, Guid quoteId, int months, CancellationToken ct)
@@ -821,7 +905,7 @@ public class SubscriptionServiceImpl : ISubscriptionService
         var plan = await _db.SubscriptionPlans.FirstOrDefaultAsync(p => p.Name == "Ratenzahlung (Systemtarif)", ct)
             ?? throw new InvalidOperationException("Der Systemtarif für Ratenzahlungen wurde nicht gefunden.");
 
-        var perInstallment = Math.Floor(total / months * 100m) / 100m;
+        var perInstallment = BillingMath.InstallmentAmount(total, months);
         var title = !string.IsNullOrWhiteSpace(quote.Subject)
             ? quote.Subject!
             : string.Join(", ", quote.Lines.Where(l => l.LineType == QuoteLineType.OneTime).Select(l => l.Title));
@@ -833,6 +917,10 @@ public class SubscriptionServiceImpl : ISubscriptionService
             PlanId = plan.Id,
             Status = SubscriptionStatus.PendingConfirmation,
             StartDate = start,
+            // Der unterschriebene B2B-Ratenvertrag ersetzt hier die einmalige Rechnung (die Raten SIND die
+            // Abrechnung der Einmal-Positionen) — es gibt also keinen späteren Rechnungs-Schritt, der freigeben
+            // könnte. Ohne diese Freigabe wurde der Plan nach gültigem Mandat nie abgerechnet.
+            BillingAuthorizedAt = DateTimeOffset.UtcNow,
             // Unlike a normal subscription (where month 1 is bundled into ConvertToInvoiceAsync and
             // NextBillingDate already points at month 2), an installment plan has no separate first-invoice
             // step — the first invoice ever issued for it (via BillNowAsync/the daily job) IS installment 1,
@@ -883,7 +971,9 @@ public class SubscriptionServiceImpl : ISubscriptionService
             ?? throw new InvalidOperationException("Der Systemtarif für Ratenzahlungen wurde nicht gefunden.");
 
         var total = Math.Round(financedAmount, 2);
-        var perInstallment = Math.Floor(total / months * 100m) / 100m;
+        // Gleiche Rundung wie im Preisangebot (PaymentPlanCalculator) — der Kunde zahlt exakt die angezeigte
+        // Monatsrate, der Rundungsrest landet auf der letzten Rate.
+        var perInstallment = BillingMath.InstallmentAmount(total, months);
         var title = !string.IsNullOrWhiteSpace(quote.Subject)
             ? quote.Subject!
             : string.Join(", ", quote.Lines.Where(l => l.LineType == QuoteLineType.OneTime).Select(l => l.Title));

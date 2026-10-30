@@ -105,6 +105,17 @@ public class CustomerSubscription : BaseEntity
     /// Defaults true for new subscriptions; backfilled to false for all subscriptions existing before this
     /// feature shipped, so no in-flight billing is retroactively blocked.</summary>
     public bool RequiresAgencyContract { get; set; } = true;
+
+    // Mollie-Überarbeitung: dauerhafter Einrichtungslink statt ablaufender Checkout-URL, echte Mandatsart,
+    // stabiler Abrechnungsanker gegen Datumsdrift (31.01. -> 28.02. -> 28.03.).
+    /// <summary>Random URL-safe token for the public setup page {FrontendBaseUrl}/payment/setup/{token}; never expires.</summary>
+    public string? MandateSetupToken { get; set; }
+    /// <summary>Mollie mandate method: directdebit | creditcard | paypal.</summary>
+    public string? MollieMandateMethod { get; set; }
+    /// <summary>Last 4 IBAN/card digits of the mandate account — never the full IBAN.</summary>
+    public string? MandateAccountLast4 { get; set; }
+    /// <summary>Billing periods are computed as BillingAnchorDate + n months; set on the first billing (or on a backlog reschedule).</summary>
+    public DateTimeOffset? BillingAnchorDate { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity

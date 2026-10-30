@@ -25,15 +25,61 @@ public class InvoiceServiceImpl : IInvoiceService
     public InvoiceServiceImpl(AppDbContext db, IMapper mapper, IPdfService pdf, IEmailService email, IActivityLogService activity, INumberSequenceService seq)
     { _db = db; _mapper = mapper; _pdf = pdf; _email = email; _activity = activity; _seq = seq; }
 
-    public async Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(PaginationParams p, InvoiceStatus? status, Guid? customerId, CancellationToken ct)
+    public async Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(PaginationParams p, InvoiceStatus? status, Guid? customerId, CancellationToken ct, string? kind = null)
     {
-        var q = _db.Invoices.Include(i => i.Customer).Include(i => i.Lines).AsQueryable();
+        var q = _db.Invoices.Include(i => i.Customer).Include(i => i.Lines).Include(i => i.Subscription).AsQueryable();
         if (status.HasValue) q = q.Where(i => i.Status == status.Value);
         if (customerId.HasValue) q = q.Where(i => i.CustomerId == customerId.Value);
+        if (!string.IsNullOrWhiteSpace(kind)) q = ApplyKindFilter(q, _db, kind);
         if (!string.IsNullOrWhiteSpace(p.Search)) q = q.Where(i => i.InvoiceNumber.Contains(p.Search) || i.Customer.CompanyName.ToLower().Contains(p.Search.ToLower()));
         var total = await q.CountAsync(ct);
         var items = await q.OrderByDescending(i => i.InvoiceDate).Skip((p.Page-1)*p.PageSize).Take(p.PageSize).ToListAsync(ct);
-        return new PagedResult<InvoiceListDto>(_mapper.Map<List<InvoiceListDto>>(items), total, p.Page, p.PageSize);
+
+        // Anzahlungsrechnungen der aktuellen Seite (Verknüpfung liegt am Ratenplan, nicht an der Rechnung).
+        var pageIds = items.Select(i => i.Id).ToList();
+        var downPaymentIds = (await _db.CustomerSubscriptions
+                .Where(s => s.DownPaymentInvoiceId != null && pageIds.Contains(s.DownPaymentInvoiceId!.Value))
+                .Select(s => s.DownPaymentInvoiceId!.Value)
+                .ToListAsync(ct))
+            .ToHashSet();
+
+        var dtos = items.Select(i => _mapper.Map<InvoiceListDto>(i) with { Kind = KindOf(i, downPaymentIds.Contains(i.Id)) }).ToList();
+        return new PagedResult<InvoiceListDto>(dtos, total, p.Page, p.PageSize);
+    }
+
+    /// <summary>Rechnungsart einer geladenen Rechnung (Subscription muss mitgeladen sein). Muss exakt zu
+    /// <see cref="ApplyKindFilter"/> passen.</summary>
+    public static string KindOf(Invoice i, bool isDownPayment)
+    {
+        if (i.Type == DomainInvoiceType.Cancellation) return InvoiceKinds.Cancellation;
+        if (i.Type == DomainInvoiceType.CreditNote) return InvoiceKinds.CreditNote;
+        if (i.Subscription != null && i.Subscription.IsInstallmentPlan) return InvoiceKinds.Installment;
+        if (i.SubscriptionId != null || i.Type == DomainInvoiceType.Recurring) return InvoiceKinds.Recurring;
+        if (isDownPayment) return InvoiceKinds.DownPayment;
+        return InvoiceKinds.Standard;
+    }
+
+    /// <summary>Serverseitiger Filter nach abgeleiteter Rechnungsart, damit Paging/TotalCount stimmen.
+    /// Die Arten schließen sich gegenseitig aus (gleiche Reihenfolge wie <see cref="KindOf"/>).</summary>
+    public static IQueryable<Invoice> ApplyKindFilter(IQueryable<Invoice> q, AppDbContext db, string kind)
+    {
+        var downPaymentIds = db.CustomerSubscriptions.Where(s => s.DownPaymentInvoiceId != null).Select(s => s.DownPaymentInvoiceId!.Value);
+        var notCorrection = (System.Linq.Expressions.Expression<Func<Invoice, bool>>)(i => i.Type != DomainInvoiceType.Cancellation && i.Type != DomainInvoiceType.CreditNote);
+        q = kind.Trim().ToLowerInvariant() switch
+        {
+            InvoiceKinds.Cancellation => q.Where(i => i.Type == DomainInvoiceType.Cancellation),
+            InvoiceKinds.CreditNote => q.Where(i => i.Type == DomainInvoiceType.CreditNote),
+            InvoiceKinds.Installment => q.Where(notCorrection).Where(i => i.Subscription != null && i.Subscription.IsInstallmentPlan),
+            InvoiceKinds.Recurring => q.Where(notCorrection)
+                .Where(i => !(i.Subscription != null && i.Subscription.IsInstallmentPlan))
+                .Where(i => i.SubscriptionId != null || i.Type == DomainInvoiceType.Recurring),
+            InvoiceKinds.DownPayment => q.Where(notCorrection)
+                .Where(i => i.SubscriptionId == null && i.Type != DomainInvoiceType.Recurring && downPaymentIds.Contains(i.Id)),
+            InvoiceKinds.Standard => q.Where(notCorrection)
+                .Where(i => i.SubscriptionId == null && i.Type != DomainInvoiceType.Recurring && !downPaymentIds.Contains(i.Id)),
+            _ => throw new ArgumentException($"Unbekannte Rechnungsart '{kind}'."),
+        };
+        return q;
     }
 
     public async Task<InvoiceDetailDto?> GetByIdAsync(Guid id, CancellationToken ct)

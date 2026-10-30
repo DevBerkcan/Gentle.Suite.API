@@ -2,6 +2,7 @@
 using GentleSuite.Domain.Enums;
 using GentleSuite.Infrastructure.Data;
 using GentleSuite.Application.Interfaces;
+using GentleSuite.Infrastructure.Services;
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
@@ -45,34 +46,103 @@ public class SubscriptionBillingJob
         }
     }
 
+    private int PreNotificationDays => Math.Max(1, _configuration.GetValue<int?>("Mollie:PreNotificationDays") ?? 14);
+    private static readonly string[] OpenCollectionStatuses = { "scheduled", "open", "pending", "authorized" };
+
+    /// <summary>Subscription incl. plan/customer/contacts/locations — ignoring the soft-delete filter on the
+    /// plan, so deleting a plan can never silently hide a running subscription from billing.</summary>
+    private IQueryable<CustomerSubscription> BillableSubscriptions() => _db.CustomerSubscriptions.IgnoreQueryFilters()
+        .Where(s => !s.IsDeleted && !s.Customer.IsDeleted)
+        .Include(s => s.Plan)
+        .Include(s => s.Customer).ThenInclude(c => c.Contacts.Where(x => !x.IsDeleted))
+        .Include(s => s.Customer).ThenInclude(c => c.Locations.Where(x => !x.IsDeleted));
+
     [DisableConcurrentExecution(timeoutInSeconds: 3600)]
     public async Task RunAsync()
     {
-        var today = DateTimeOffset.UtcNow.Date;
-        var preNotificationDays = Math.Max(1, _configuration.GetValue<int?>("Mollie:PreNotificationDays") ?? 14);
+        var run = new JobRunLog { JobName = "subscription-billing", StartedAt = DateTimeOffset.UtcNow };
+        _db.JobRunLogs.Add(run);
+        await _db.SaveChangesAsync();
 
-        var dueSubs = await _db.CustomerSubscriptions
-            .Include(s => s.Plan)
-            .Include(s => s.Customer)
-            .ThenInclude(c => c.Contacts)
-            .Include(s => s.Customer)
-            .ThenInclude(c => c.Locations)
-            .Where(s =>
-                s.Status == SubscriptionStatus.Active &&
-                s.MollieMandateStatus == "valid" &&
-                s.BusinessCustomerConfirmed &&
-                s.AgreedMonthlyPrice > 0 &&
-                s.BillingAuthorizedAt != null &&
-                s.NextBillingDate.Date <= today.AddDays(preNotificationDays))
-            .ToListAsync();
-
-        var co = await _db.CompanySettings.FirstOrDefaultAsync()
+        var today = BerlinTime.Today;
+        var preNotificationDays = PreNotificationDays;
+        var horizon = today.AddDays(preNotificationDays + 1);
+        var errors = new List<string>();
+        var invoicesCreated = 0;
+        var collectionsStarted = 0;
+        var co = await _db.CompanySettings.AsNoTracking().FirstOrDefaultAsync()
             ?? new CompanySettings { CompanyName = "GentleSuite" };
 
-        foreach (var sub in dueSubs)
-            await BillSubscriptionAsync(sub, co, preNotificationDays, today);
+        try
+        {
+            var dueIds = await _db.CustomerSubscriptions.IgnoreQueryFilters()
+                .Where(s => !s.IsDeleted && !s.Customer.IsDeleted &&
+                    s.Status == SubscriptionStatus.Active &&
+                    s.MollieMandateStatus == "valid" &&
+                    s.BusinessCustomerConfirmed &&
+                    s.AgreedMonthlyPrice > 0 &&
+                    s.BillingAuthorizedAt != null &&
+                    s.NextBillingDate < horizon &&
+                    !(s.IsInstallmentPlan && s.InstallmentsCompleted >= (s.ContractDurationMonths ?? 1)))
+                .OrderBy(s => s.NextBillingDate)
+                .Select(s => s.Id)
+                .ToListAsync();
 
-        await CollectDueInvoicesAsync(co, today);
+            // Jede Subscription isoliert: ein Fehler (z. B. PDF, Nummernkreis, DB) darf weder die übrigen
+            // Abos noch den anschließenden Einzug fälliger Rechnungen verhindern.
+            foreach (var id in dueIds)
+            {
+                try
+                {
+                    _db.ChangeTracker.Clear();
+                    var sub = await BillableSubscriptions().FirstOrDefaultAsync(s => s.Id == id);
+                    if (sub == null) continue;
+                    if (await BillSubscriptionAsync(sub, co, preNotificationDays, today) != null) invoicesCreated++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Billing failed for subscription {SubId}", id);
+                    errors.Add($"Abrechnung Abo {id}: {ex.Message}{(ex.InnerException != null ? " => " + ex.InnerException.Message : "")}");
+                    _db.ChangeTracker.Clear();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Loading due subscriptions failed");
+            errors.Add($"Fällige Abos konnten nicht geladen werden: {ex.Message}");
+        }
+
+        // Always runs, even if billing above failed.
+        try
+        {
+            _db.ChangeTracker.Clear();
+            var (started, collectErrors) = await CollectDueInvoicesAsync(today);
+            collectionsStarted = started;
+            errors.AddRange(collectErrors);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Collecting due invoices failed");
+            errors.Add($"Einzug fälliger Rechnungen abgebrochen: {ex.Message}");
+        }
+
+        if (errors.Count > 0)
+            await NotifyStaffAsync(
+                $"Abrechnungslauf: {errors.Count} Fehler",
+                "Beim täglichen Abrechnungs-/Einzugslauf sind Fehler aufgetreten. Betroffene Vorgänge werden beim nächsten Lauf erneut versucht:<br/>" +
+                string.Join("<br/>", errors.Take(50).Select(System.Net.WebUtility.HtmlEncode)),
+                co, CancellationToken.None);
+
+        _db.ChangeTracker.Clear();
+        var entry = await _db.JobRunLogs.FirstAsync(x => x.Id == run.Id);
+        entry.FinishedAt = DateTimeOffset.UtcNow;
+        entry.Succeeded = errors.Count == 0;
+        entry.InvoicesCreated = invoicesCreated;
+        entry.CollectionsStarted = collectionsStarted;
+        entry.Failures = errors.Count;
+        entry.Error = errors.Count == 0 ? null : string.Join("\n", errors.Take(50));
+        await _db.SaveChangesAsync();
     }
 
     /// <summary>
@@ -83,17 +153,17 @@ public class SubscriptionBillingJob
     /// </summary>
     public async Task<CustomerSubscription> BillNowAsync(Guid subscriptionId)
     {
-        var sub = await _db.CustomerSubscriptions
-            .Include(s => s.Plan)
-            .Include(s => s.Customer).ThenInclude(c => c.Contacts)
-            .Include(s => s.Customer).ThenInclude(c => c.Locations)
-            .FirstOrDefaultAsync(s => s.Id == subscriptionId)
+        var sub = await BillableSubscriptions().FirstOrDefaultAsync(s => s.Id == subscriptionId)
             ?? throw new KeyNotFoundException("Abonnement wurde nicht gefunden.");
 
         if (!string.Equals(sub.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Das SEPA-Mandat wurde noch nicht bestätigt. Die Rechnung kann erst danach versendet werden.");
+            throw new InvalidOperationException("Das Zahlungsmandat wurde noch nicht bestätigt. Die Rechnung kann erst danach versendet werden.");
         if (sub.Status is SubscriptionStatus.Cancelled or SubscriptionStatus.Completed or SubscriptionStatus.Expired)
             throw new InvalidOperationException("Für dieses Abonnement kann keine weitere Rechnung mehr gestellt werden.");
+        if (sub.IsInstallmentPlan && sub.InstallmentsCompleted >= (sub.ContractDurationMonths ?? 1))
+            throw new InvalidOperationException("Alle Raten dieses Ratenplans sind bereits fakturiert.");
+        if (await HasOpenCollectionAsync(sub.Id))
+            throw new InvalidOperationException("Für dieses Abonnement läuft bereits ein offener Einzug. Die nächste Rechnung kann erst danach erstellt werden.");
         if (!await _agencyContracts.IsSubscriptionContractSatisfiedAsync(sub.Id))
             throw new InvalidOperationException("Für dieses Abonnement muss zuerst ein beidseitig unterschriebener Agenturvertrag vorliegen, bevor eine Rechnung erstellt werden kann.");
 
@@ -101,28 +171,53 @@ public class SubscriptionBillingJob
         if (sub.Status == SubscriptionStatus.PendingConfirmation) sub.Status = SubscriptionStatus.Active;
         await _db.SaveChangesAsync();
 
-        var co = await _db.CompanySettings.FirstOrDefaultAsync() ?? new CompanySettings { CompanyName = "GentleSuite" };
-        var today = DateTimeOffset.UtcNow.Date;
-        var preNotificationDays = Math.Max(1, _configuration.GetValue<int?>("Mollie:PreNotificationDays") ?? 14);
+        var co = await _db.CompanySettings.AsNoTracking().FirstOrDefaultAsync() ?? new CompanySettings { CompanyName = "GentleSuite" };
+        var today = BerlinTime.Today;
 
-        await BillSubscriptionAsync(sub, co, preNotificationDays, today);
+        await BillSubscriptionAsync(sub, co, PreNotificationDays, today);
 
         // Attempt collection scheduling immediately too (still respects PaymentCollectionDueDate — the
         // actual SEPA debit only fires once that legally required date is reached).
-        await CollectDueInvoicesAsync(co, today);
+        var (_, errors) = await CollectDueInvoicesAsync(today);
+        if (errors.Count > 0)
+            await NotifyStaffAsync("Mollie-Einzug fehlgeschlagen", string.Join("<br/>", errors.Select(System.Net.WebUtility.HtmlEncode)), co, CancellationToken.None);
 
         return sub;
     }
 
+    private Task<bool> HasOpenCollectionAsync(Guid subscriptionId) => _db.Invoices.AnyAsync(i =>
+        i.SubscriptionId == subscriptionId &&
+        i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Cancelled &&
+        i.PaymentCollectionStatus != null && OpenCollectionStatuses.Contains(i.PaymentCollectionStatus));
+
     private async Task<Invoice?> BillSubscriptionAsync(CustomerSubscription sub, CompanySettings co, int preNotificationDays, DateTimeOffset today)
     {
+        var installmentCount = sub.ContractDurationMonths ?? 1;
+        if (sub.IsInstallmentPlan && sub.InstallmentsCompleted >= installmentCount)
+            return null;
+
+        // Never more than one open (unpaid, not yet settled) collection per subscription — otherwise a
+        // backlog produces several debits on consecutive days.
+        if (await HasOpenCollectionAsync(sub.Id))
+        {
+            _logger.LogInformation("Subscription {SubId} still has an open collection; next invoice postponed", sub.Id);
+            return null;
+        }
+
         var periodStart = sub.NextBillingDate;
-            var periodEnd = sub.ContractBillingCycle switch
-            {
-                BillingCycle.Quarterly => periodStart.AddMonths(3),
-                BillingCycle.Yearly => periodStart.AddYears(1),
-                _ => periodStart.AddMonths(1)
-            };
+        // Rückstand (Mandat/Freigabe kam später als der geplante Termin, oder der Job lief nicht): verpasste
+        // Perioden werden NICHT nachträglich an aufeinanderfolgenden Tagen eingezogen — der Plan startet ab
+        // heute neu (Anker = Aktivierungstag).
+        if (periodStart < today)
+        {
+            _logger.LogInformation("Subscription {SubId}: billing date {Date:yyyy-MM-dd} lies in the past; schedule restarts today", sub.Id, periodStart);
+            periodStart = today;
+            sub.BillingAnchorDate = today;
+            sub.NextBillingDate = today;
+        }
+        var anchor = sub.BillingAnchorDate ??= periodStart;
+        var stepMonths = BillingMath.CycleMonths(sub.ContractBillingCycle);
+        var periodEnd = BillingMath.NextPeriodStart(anchor, periodStart, stepMonths);
 
             var alreadyExists = await _db.Invoices.AnyAsync(i =>
                 i.SubscriptionId == sub.Id &&
@@ -141,33 +236,26 @@ public class SubscriptionBillingJob
                 ? await _seq.NextNumberAsync("InstallmentInvoice", year, "RA", 4, CancellationToken.None, includeYear: false)
                 : await _seq.NextNumberAsync("SubscriptionInvoice", year, "AB", 4, CancellationToken.None, includeYear: false);
 
-            var billingMonths = sub.ContractBillingCycle switch
-            {
-                BillingCycle.Quarterly => 3,
-                BillingCycle.Yearly => 12,
-                _ => 1
-            };
-            var vatPercent = co.DefaultTaxMode == TaxMode.Standard ? 19 : 0;
+            var billingMonths = stepMonths;
+            var vatPercent = BillingMath.VatPercent(co.DefaultTaxMode);
 
             bool isLastInstallment = false;
             decimal netPrice;
             if (sub.IsInstallmentPlan)
             {
                 var total = sub.TotalInstallmentAmount ?? 0m;
-                var count = sub.ContractDurationMonths ?? 1;
-                var baseAmount = sub.AgreedMonthlyPrice ?? Math.Floor(total / count * 100m) / 100m;
-                isLastInstallment = sub.InstallmentsCompleted >= count - 1;
-                netPrice = isLastInstallment ? total - baseAmount * (count - 1) : baseAmount;
+                var baseAmount = sub.AgreedMonthlyPrice ?? BillingMath.InstallmentAmount(total, installmentCount);
+                isLastInstallment = sub.InstallmentsCompleted >= installmentCount - 1;
+                netPrice = BillingMath.InstallmentNet(total, installmentCount, baseAmount, sub.InstallmentsCompleted);
             }
             else
             {
                 netPrice = (sub.AgreedMonthlyPrice ?? sub.Plan.MonthlyPrice) * billingMonths;
             }
-            var vatAmount = Math.Round(netPrice * (vatPercent / 100m), 2);
-            var grossTotal = netPrice + vatAmount;
-            var collectionDueDate = periodStart.Date < today.AddDays(preNotificationDays)
-                ? today.AddDays(preNotificationDays)
-                : periodStart.Date;
+            var grossTotal = BillingMath.Gross(netPrice, co.DefaultTaxMode);
+            // Einzugstag = Periodenbeginn, frühestens aber nach Ablauf der SEPA-Vorabankündigung (Berliner Datum).
+            var earliestCollection = today.AddDays(preNotificationDays);
+            var collectionDueDate = periodStart < earliestCollection ? earliestCollection : BerlinTime.StartOfDay(periodStart);
 
             var inv = new Invoice
             {
@@ -191,7 +279,7 @@ public class SubscriptionBillingJob
                 RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears),
                 PaymentCollectionStatus = "scheduled",
                 PaymentCollectionDueDate = collectionDueDate,
-                PaymentTerms = $"Der Rechnungsbetrag von {grossTotal:N2} € wird am {collectionDueDate:dd.MM.yyyy} auf Grundlage des erteilten SEPA-Lastschriftmandats automatisch über Mollie eingezogen. Vertragsgrundlage: {sub.ContractReference}, Version {sub.ContractVersion}. Mollie-Mandat: {sub.MollieMandateId}."
+                PaymentTerms = $"{MandateLabels.CollectionSentence(sub.MollieMandateMethod, grossTotal, collectionDueDate)} Vertragsgrundlage: {sub.ContractReference ?? "-"}, Version {sub.ContractVersion?.ToString() ?? "-"}. Mollie-Mandat: {sub.MollieMandateId}."
             };
 
             inv.Lines.Add(new InvoiceLine
@@ -222,40 +310,17 @@ public class SubscriptionBillingJob
 
             _db.Invoices.Add(inv);
 
+            // Nächster Termin immer vom Anker aus (keine Monatsende-Drift). Ein Ratenplan wird hier nur noch
+            // "vollständig fakturiert" (InstallmentsCompleted == Anzahl) — Completed setzt erst der Zahlungseingang
+            // der letzten offenen Rate (MolliePaymentService.CompleteInstallmentPlanIfFullyPaidAsync).
             if (sub.IsInstallmentPlan)
-            {
                 sub.InstallmentsCompleted++;
-                if (isLastInstallment)
-                {
-                    sub.Status = SubscriptionStatus.Completed;
-                    sub.EndDate = DateTimeOffset.UtcNow;
-                }
-                else
-                {
-                    sub.NextBillingDate = sub.NextBillingDate.AddMonths(1);
-                }
-            }
-            else
-            {
-                var nextBilling = sub.Plan.BillingCycle switch
-                {
-                    BillingCycle.Quarterly => sub.NextBillingDate.AddMonths(3),
-                    BillingCycle.Yearly => sub.NextBillingDate.AddYears(1),
-                    _ => sub.NextBillingDate.AddMonths(1)
-                };
-                sub.NextBillingDate = nextBilling;
-            }
+            sub.NextBillingDate = periodEnd;
 
             await _db.SaveChangesAsync();
 
             if (sub.IsInstallmentPlan && isLastInstallment)
-            {
-                await NotifyStaffAsync(
-                    "Ratenzahlung abgeschlossen – Wartungsvertrag anbieten",
-                    $"{sub.Customer.CompanyName} hat die letzte Rate ({sub.ContractDurationMonths} von {sub.ContractDurationMonths}, {sub.InstallmentSourceTitle ?? sub.Plan.Name}) mit Rechnung {inv.InvoiceNumber} erhalten. Gesamtbetrag {sub.TotalInstallmentAmount:N2} € vollständig abgerechnet (Angebot {sub.ContractReference}). Jetzt Wartungsvertrag/Folgeangebot anbieten.",
-                    co,
-                    CancellationToken.None);
-            }
+                _logger.LogInformation("Installment plan {SubId} fully invoiced with {Nr}; completes once all installments are paid", sub.Id, inv.InvoiceNumber);
 
             var contact = sub.Customer.Contacts.FirstOrDefault(c => c.IsPrimary)
                 ?? sub.Customer.Contacts.FirstOrDefault();
@@ -304,8 +369,9 @@ public class SubscriptionBillingJob
         return inv;
     }
 
-    private async Task CollectDueInvoicesAsync(CompanySettings co, DateTimeOffset today)
+    private async Task<(int Started, List<string> Errors)> CollectDueInvoicesAsync(DateTimeOffset today)
     {
+        var tomorrow = today.AddDays(1);
         var invoicesToCollect = await _db.Invoices
             .Where(i => i.SubscriptionId != null &&
                         (i.PaymentCollectionStatus == "scheduled" ||
@@ -313,29 +379,42 @@ public class SubscriptionBillingJob
                          i.PaymentCollectionStatus == "pending" ||
                          i.PaymentCollectionStatus == "authorized") &&
                         i.PaymentCollectionDueDate != null &&
-                        i.PaymentCollectionDueDate.Value.Date <= today &&
+                        i.PaymentCollectionDueDate < tomorrow &&
                         i.Status != InvoiceStatus.Paid &&
                         i.Status != InvoiceStatus.Cancelled)
-            .Select(i => i.Id)
+            .Select(i => new { i.Id, i.InvoiceNumber, i.PaymentCollectionStatus })
             .ToListAsync();
 
-        foreach (var invoiceId in invoicesToCollect)
+        var started = 0;
+        var errors = new List<string>();
+        foreach (var invoice in invoicesToCollect)
         {
             try
             {
-                await _mollie.CollectInvoiceAsync(invoiceId, CancellationToken.None);
+                _db.ChangeTracker.Clear();
+                await _mollie.CollectInvoiceAsync(invoice.Id, CancellationToken.None);
+                if (invoice.PaymentCollectionStatus == "scheduled") started++;
             }
             catch (Exception ex)
             {
                 // Keep it scheduled. The next run first searches Mollie by invoice metadata,
                 // so a timeout can be retried without creating a second charge.
-                _logger.LogError(ex, "Mollie collection failed for invoice {InvoiceId}", invoiceId);
-                await NotifyStaffAsync(
-                    "Mollie-Einzug fehlgeschlagen",
-                    $"Der Einzugsversuch für Rechnung-ID {invoiceId} ist mit einem Fehler abgebrochen: {ex.Message}. Das System versucht es beim nächsten Lauf erneut.",
-                    co,
-                    CancellationToken.None);
+                _logger.LogError(ex, "Mollie collection failed for invoice {InvoiceId}", invoice.Id);
+                errors.Add($"Einzug Rechnung {invoice.InvoiceNumber}: {ex.Message}");
+                _db.ChangeTracker.Clear();
             }
         }
+        return (started, errors);
     }
+}
+
+/// <summary>Täglicher Mandats-Abgleich mit Mollie (verpasste Webhooks, direkt bei Mollie angelegte Mandate,
+/// Mandate aus anderen Verträgen desselben Kunden).</summary>
+public class MandateReconcileJob
+{
+    private readonly IMolliePaymentService _mollie;
+    public MandateReconcileJob(IMolliePaymentService mollie) { _mollie = mollie; }
+
+    [DisableConcurrentExecution(timeoutInSeconds: 1800)]
+    public Task RunAsync() => _mollie.ReconcileMandatesAsync(CancellationToken.None);
 }

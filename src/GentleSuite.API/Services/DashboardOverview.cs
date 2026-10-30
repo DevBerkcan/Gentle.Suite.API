@@ -99,7 +99,7 @@ public partial class DashboardServiceImpl
                     BillingStages.First(s => s.Key == stage).Label,
                     sub.InstallmentSourceTitle ?? sub.Plan.Name,
                     sub.IsInstallmentPlan ? "/installments" : "/subscriptions", "warning", null));
-            if (sub.MandateEmailStatus == "failed" && stage is not ("closed" or "completed"))
+            if (string.Equals(sub.MandateEmailStatus, "failed", StringComparison.OrdinalIgnoreCase) && stage is not ("closed" or "completed"))
                 attention.Add(new($"email-{sub.Id}", sub.Customer.CompanyName, "Mandats-E-Mail fehlgeschlagen",
                     "Zustellung prüfen und erneut senden", sub.IsInstallmentPlan ? "/installments" : "/subscriptions", "danger", null));
             if (sub.IsInstallmentPlan && stage != "closed" && sub.TotalInstallmentAmount is not > 0)

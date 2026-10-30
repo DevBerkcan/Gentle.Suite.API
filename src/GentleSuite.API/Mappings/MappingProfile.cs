@@ -79,7 +79,8 @@ public class MappingProfile : Profile
 
         CreateMap<Invoice, InvoiceListDto>()
             .ConstructUsing(s => new InvoiceListDto(
-                s.Id, s.InvoiceNumber, s.Type, s.Customer.CompanyName, s.Status, s.GrossTotal, s.InvoiceDate, s.DueDate, s.PaidAt
+                s.Id, s.InvoiceNumber, s.Type, s.Customer.CompanyName, s.Status, s.GrossTotal, s.InvoiceDate, s.DueDate, s.PaidAt,
+                InvoiceKinds.Standard // echte Art setzt InvoiceServiceImpl.GetInvoicesAsync (braucht Ratenplan-Daten)
             ));
         CreateMap<Invoice, InvoiceDetailDto>()
             .ForMember(d => d.CustomerName, o => o.MapFrom(s => s.Customer.CompanyName))
@@ -166,7 +167,9 @@ public class MappingProfile : Profile
                 s.DownPaymentInvoiceId,
                 s.PaymentPlanOptionKey,
                 "review",
-                s.RequiresAgencyContract
+                s.RequiresAgencyContract,
+                null, null, null, false, null,
+                s.MollieMandateMethod, s.MandateAccountLast4, null, 0, 0, 0m
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()

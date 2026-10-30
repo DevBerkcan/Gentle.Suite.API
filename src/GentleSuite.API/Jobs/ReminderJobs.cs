@@ -11,16 +11,19 @@ public class ReminderJobs
     private readonly AppDbContext _db; private readonly IEmailService _email; private readonly ILogger<ReminderJobs> _log; private readonly string _frontendBaseUrl; private readonly INumberSequenceService _seq; private readonly IMolliePaymentService _mollie;
     public ReminderJobs(AppDbContext db, IEmailService email, ILogger<ReminderJobs> log, IConfiguration config, INumberSequenceService seq, IMolliePaymentService mollie) { _db = db; _email = email; _log = log; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _mollie = mollie; }
 
+    private static readonly string[] CollectionInFlight = { "scheduled", "open", "pending", "authorized" };
+
     public async Task CheckOverdueInvoicesAsync()
     {
         var overdue = await _db.Invoices
             .Where(i => (i.Status == InvoiceStatus.Sent || i.Status == InvoiceStatus.Open)
                         && i.DueDate < DateTimeOffset.UtcNow
-                        // Recurring invoices still being auto-collected via Mollie are owned by
+                        // Recurring invoices still being auto-collected via Mollie (scheduled incl. planned
+                        // retry, or a SEPA debit still open/pending/authorized at the bank) are owned by
                         // SubscriptionBillingJob's own retry/escalation logic (see
                         // MolliePaymentService.ApplyPaymentStatusAsync) until it gives up and
                         // sets Status=Overdue itself — don't race it here.
-                        && (i.SubscriptionId == null || i.PaymentCollectionStatus != "scheduled"))
+                        && (i.SubscriptionId == null || i.PaymentCollectionStatus == null || !CollectionInFlight.Contains(i.PaymentCollectionStatus)))
             .ToListAsync();
         foreach (var inv in overdue)
             inv.Status = InvoiceStatus.Overdue;
@@ -32,7 +35,9 @@ public class ReminderJobs
         var settings = await _db.ReminderSettings.FirstOrDefaultAsync() ?? new ReminderSettings();
         var overdue = await _db.Invoices
             .Include(i => i.Customer).ThenInclude(c => c.Contacts)
-            .Where(i => i.Status == InvoiceStatus.Overdue && !i.ReminderStop && !i.Customer.ReminderStop)
+            .Where(i => i.Status == InvoiceStatus.Overdue && !i.ReminderStop && !i.Customer.ReminderStop
+                        // Keine Mahnung, solange ein Mollie-Einzug geplant ist oder bei der Bank noch läuft.
+                        && (i.SubscriptionId == null || i.PaymentCollectionStatus == null || !CollectionInFlight.Contains(i.PaymentCollectionStatus)))
             .ToListAsync();
 
         foreach (var inv in overdue)

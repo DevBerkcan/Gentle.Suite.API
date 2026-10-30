@@ -8,4 +8,6 @@ public class AppUser : IdentityUser
     public string LastName { get; set; } = string.Empty;
     public string FullName => $"{FirstName} {LastName}";
     public bool IsActive { get; set; } = true;
+    /// <summary>Profilbild: Pfad im IFileStorageService (wie CompanySettings.LogoPath). Null = Initialen anzeigen.</summary>
+    public string? AvatarPath { get; set; }
 }
