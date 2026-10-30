@@ -180,7 +180,7 @@ public class PdfService : IPdfService
                         if (!string.IsNullOrEmpty(sub)) og.Item().PaddingTop(2).PaddingLeft(singleOption ? 0 : 14).Text(sub).FontSize(8).FontColor(Brand.Muted);
                     }
                 }
-                if (legal?.Any() == true) foreach (var b in legal) { col.Item().PaddingTop(12).Text(b.Title).Bold().FontSize(9).FontColor(Brand.Navy); col.Item().PaddingTop(3).Text(b.Content).FontSize(7.5f).FontColor(Brand.Muted); }
+                if (legal?.Any() == true) foreach (var b in legal) { LegalBlock(col, b.Title, b.Content); }
                 BuildSignatureArea(col, co, quote.SignatureData, quote.SignedByName, quote.SignedByEmail, quote.SignedAt, quote.Customer.CompanyName);
             });
             p.Footer().Element(f => BuildDocFooter(f, co));
@@ -724,7 +724,8 @@ public class PdfService : IPdfService
         {
             p.Size(PageSizes.A4); p.MarginTop(30); p.MarginBottom(30); p.MarginHorizontal(45);
             p.DefaultTextStyle(x => x.FontFamily(Brand.Body).FontSize(9.5f).FontColor(Brand.Text));
-            p.Header().Element(h => BuildDocHeader(h, co, logo, "AGENTURVERTRAG", $"Nr. {contract.ContractNumber}", headerCustomer, contact, loc, $"Vertragsart: {contract.ContractTypeName}", contract.TotalContractValue.HasValue ? $"Vertragswert: {contract.TotalContractValue:N2} €" : null));
+            var docType = contract.ContractTypeName.StartsWith("AV-Vertrag", StringComparison.OrdinalIgnoreCase) ? "AV-VERTRAG" : "AGENTURVERTRAG";
+            p.Header().Element(h => BuildDocHeader(h, co, logo, docType, $"Nr. {contract.ContractNumber}", headerCustomer, contact, loc, $"Vertragsart: {contract.ContractTypeName}", contract.TotalContractValue.HasValue ? $"Vertragswert: {contract.TotalContractValue:N2} €" : null));
             p.Content().PaddingTop(16).Column(col =>
             {
                 foreach (var s in sections)
@@ -733,7 +734,7 @@ public class PdfService : IPdfService
                     Brand.Section(sec, s.Title);
                     sec.Item().PaddingTop(6).Text(s.Content).FontSize(9);
                 }
-                if (legal?.Any() == true) foreach (var b in legal) { col.Item().PaddingTop(12).Text(b.Title).Bold().FontSize(9).FontColor(Brand.Navy); col.Item().PaddingTop(3).Text(b.Content).FontSize(7.5f).FontColor(Brand.Muted); }
+                if (legal?.Any() == true) foreach (var b in legal) { LegalBlock(col, b.Title, b.Content); }
                 BuildBilateralSignatureArea(col, co, contract);
             });
             p.Footer().Element(f => BuildDocFooter(f, co));
@@ -795,6 +796,23 @@ public class PdfService : IPdfService
                 }
             });
         });
+    }
+
+    /// <summary>Legal text (AGB etc.) under the quote: "§ …", "TEIL …" and "Anlage …" lines become small bold subheadings,
+    /// so long AGB stay readable instead of one undivided block of grey text.</summary>
+    private static void LegalBlock(ColumnDescriptor col, string title, string content)
+    {
+        col.Item().PaddingTop(12).Text(title).Bold().FontSize(9).FontColor(Brand.Navy);
+        var para = new System.Text.StringBuilder();
+        void Flush() { if (para.Length > 0) { var t = para.ToString().TrimEnd(); col.Item().PaddingTop(3).Text(t).FontSize(7.5f).FontColor(Brand.Muted); para.Clear(); } }
+        foreach (var raw in content.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = raw.TrimEnd();
+            var heading = line.StartsWith("§ ") || line.StartsWith("TEIL ") || line.StartsWith("Anlage ");
+            if (heading) { Flush(); col.Item().PaddingTop(line.StartsWith("TEIL ") ? 9 : 6).Text(line).Bold().FontSize(line.StartsWith("TEIL ") ? 8.5f : 8f).FontColor(Brand.Navy); }
+            else para.AppendLine(line);
+        }
+        Flush();
     }
 
     // === Aufwandsschätzung ("01 — Aufwandsschätzung" Word template) ===

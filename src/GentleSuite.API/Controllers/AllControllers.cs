@@ -658,6 +658,7 @@ public class EstimatesController(IEstimateService svc) : ControllerBase
     [HttpPost("{id}/duplicate")] public async Task<ActionResult<EstimateDto>> Duplicate(Guid id) => Ok(await svc.DuplicateAsync(id));
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
     [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) { var (pdf, name) = await svc.GeneratePdfAsync(id); return File(pdf, "application/pdf", name); }
+    [HttpPost("{id}/create-quote")] public async Task<ActionResult<QuoteDetailDto>> CreateQuote(Guid id, CreateQuoteFromEstimateRequest req) => Ok(await svc.CreateQuoteAsync(id, req));
 }
 
 [ApiController, Route("api/contractclauseblocks"), Authorize]

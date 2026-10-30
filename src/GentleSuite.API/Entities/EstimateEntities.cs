@@ -44,4 +44,7 @@ public class Estimate : BaseEntity
     /// <summary>JSON of EstimateContentDto: Basis, Decisions, Architecture, Implementation, Pilot, Modules, Extensions,
     /// Assumptions, Exclusions, Risks, OpenQuestions, Timeline, NextSteps.</summary>
     public string ContentJson { get; set; } = "{}";
+
+    /// <summary>Quote created from this estimate via "Angebot erstellen" (one quote per estimate version).</summary>
+    public Guid? QuoteId { get; set; }
 }

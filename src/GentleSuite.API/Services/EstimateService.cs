@@ -60,9 +60,83 @@ public class EstimateServiceImpl : IEstimateService
     private readonly INumberSequenceService _seq;
     private readonly IPdfService _pdf;
     private readonly IActivityLogService _activity;
+    private readonly IQuoteService _quotes;
 
-    public EstimateServiceImpl(AppDbContext db, INumberSequenceService seq, IPdfService pdf, IActivityLogService activity)
-    { _db = db; _seq = seq; _pdf = pdf; _activity = activity; }
+    public EstimateServiceImpl(AppDbContext db, INumberSequenceService seq, IPdfService pdf, IActivityLogService activity, IQuoteService quotes)
+    { _db = db; _seq = seq; _pdf = pdf; _activity = activity; _quotes = quotes; }
+
+    /// <summary>Module prices for the chosen mode. "fixed" spreads the Festpreis over the modules in proportion to their
+    /// range midpoints (whole euros, rounding remainder on the last line) so the quote total equals the agreed price.</summary>
+    public static List<decimal> PriceModules(IReadOnlyList<EstimateModuleDto> modules, string mode, decimal? fixedPrice)
+    {
+        decimal Lo(EstimateModuleDto m) => m.PriceFrom ?? m.PriceTo ?? 0;
+        decimal Hi(EstimateModuleDto m) => m.PriceTo ?? m.PriceFrom ?? 0;
+        switch (mode)
+        {
+            case "lower": return modules.Select(Lo).ToList();
+            case "upper": return modules.Select(Hi).ToList();
+            case "middle": return modules.Select(m => Math.Round((Lo(m) + Hi(m)) / 2, 0, MidpointRounding.AwayFromZero)).ToList();
+            case "fixed":
+                if (fixedPrice is not > 0) throw new ArgumentException("Für \"Festpreis\" muss in der Schätzung ein Zielpreis/Festpreis eingetragen sein.");
+                var weights = modules.Select(m => (Lo(m) + Hi(m)) / 2).ToList();
+                if (weights.Sum() <= 0) weights = modules.Select(_ => 1m).ToList();
+                var sum = weights.Sum();
+                var prices = weights.Select(w => Math.Round(fixedPrice.Value * w / sum, 0, MidpointRounding.AwayFromZero)).ToList();
+                prices[^1] += fixedPrice.Value - prices.Sum();
+                return prices;
+            default: throw new ArgumentException("Unbekannte Preisbasis.");
+        }
+    }
+
+    static string Bullet(EstimateItemDto x) => "– " + (string.IsNullOrWhiteSpace(x.Label) ? x.Text : $"{x.Label}: {x.Text}");
+
+    public async Task<QuoteDetailDto> CreateQuoteAsync(Guid id, CreateQuoteFromEstimateRequest req, CancellationToken ct)
+    {
+        var e = await _db.Estimates.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException();
+        if (e.CustomerId == null) throw new ArgumentException("Bitte der Schätzung zuerst einen Kunden zuordnen – ein Angebot braucht einen Kunden.");
+        if (e.QuoteId != null)
+        {
+            var existing = await _db.Quotes.Where(q => q.Id == e.QuoteId).Select(q => q.QuoteNumber).FirstOrDefaultAsync(ct);
+            if (existing != null) throw new InvalidOperationException($"Aus dieser Schätzung wurde bereits das Angebot {existing} erstellt. Für eine neue Variante die Schätzung duplizieren.");
+        }
+        var content = EstimateJson.Parse(e.ContentJson);
+        var modules = content.Modules.Where(m => !string.IsNullOrWhiteSpace(m.Title)).ToList();
+        if (modules.Count == 0) throw new ArgumentException("Die Schätzung enthält keine Module mit Titel.");
+        var prices = PriceModules(modules, req.PriceMode, e.FixedPrice);
+        if (prices.Any(p => p <= 0)) throw new ArgumentException("Jedes Modul braucht einen Preis (von/bis) – bitte in der Schätzung ergänzen.");
+
+        var lines = modules.Select((m, i) => new CreateQuoteLineRequest(null, m.Title.Trim(), string.IsNullOrWhiteSpace(m.Description) ? null : m.Description!.Trim(), 1, prices[i], SortOrder: i)).ToList();
+
+        // Scope boundaries travel with the quote, so "nicht enthalten" from the estimate stays part of the offer.
+        var notes = new List<string> { $"Grundlage: Aufwandsschätzung {e.EstimateNumber} (Version {e.Version}) vom {BerlinTime.LocalDate(e.Date):dd.MM.yyyy}." };
+        if (content.Exclusions.Count > 0) notes.Add("Nicht im Umfang enthalten:\n" + string.Join("\n", content.Exclusions.Select(Bullet)));
+        if (content.Assumptions.Count > 0) notes.Add("Annahmen:\n" + string.Join("\n", content.Assumptions.Select(Bullet)));
+        var ext = content.Extensions.Where(x => !string.IsNullOrWhiteSpace(x.Title)).ToList();
+        if (ext.Count > 0) notes.Add("Optionale Ausbaustufen (nicht im Preis enthalten, auf Wunsch separat):\n" + string.Join("\n", ext.Select(x =>
+        {
+            var (f, t) = EstimateJson.Range(new List<EstimateModuleDto> { x });
+            return $"– {x.Title}" + (f > 0 || t > 0 ? (f == t ? $" ({f:N0} €)" : $" ({f:N0} – {t:N0} €)") : "");
+        })));
+
+        var subject = string.IsNullOrWhiteSpace(e.Subtitle) ? e.Title : $"{e.Title} – {e.Subtitle}";
+        // Notes are internal; the scope text goes into the customer-visible closing text, above the usual outro.
+        var outroTemplate = await _db.CompanySettings.Select(c => c.QuoteOutroTemplate).FirstOrDefaultAsync(ct);
+        var outro = string.Join("\n\n", notes.Skip(1).Append(outroTemplate ?? "").Where(x => !string.IsNullOrWhiteSpace(x)));
+        var quote = await _quotes.CreateAsync(new CreateQuoteRequest(e.CustomerId.Value, null, subject, null, string.IsNullOrWhiteSpace(outro) ? null : outro, notes[0], Lines: lines), ct);
+
+        e.QuoteId = quote.Id;
+        e.UpdatedAt = DateTimeOffset.UtcNow;
+        // The estimate is the natural "Anlage" of the quote in the Projekt-Ablauf.
+        var wf = await _db.ProjectLegalWorkflows.FirstOrDefaultAsync(w => w.QuoteGroupId == quote.Id, ct);
+        if (wf == null) { wf = new ProjectLegalWorkflow { QuoteGroupId = quote.Id, CustomerId = e.CustomerId.Value }; _db.ProjectLegalWorkflows.Add(wf); }
+        wf.ManualStepsJson = JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["offer-attachment"] = new { State = "done", Note = $"Schätzung {e.EstimateNumber} v{e.Version}", UpdatedAt = DateTimeOffset.UtcNow }
+        });
+        await _db.SaveChangesAsync(ct);
+        await _activity.LogAsync(e.CustomerId, "Estimate", e.Id, "QuoteCreated", $"Angebot {quote.QuoteNumber} aus Schätzung {e.EstimateNumber} erstellt", ct: ct);
+        return quote;
+    }
 
     private static string? DisplayCustomer(Estimate e) =>
         !string.IsNullOrWhiteSpace(e.CustomerDisplayName) ? e.CustomerDisplayName : e.Customer?.CompanyName;
@@ -76,7 +150,7 @@ public class EstimateServiceImpl : IEstimateService
             e.Title, e.Subtitle, e.Version, e.Date, e.PreparedBy, e.ApprovedBy, e.Responsible,
             e.Classification, e.Status, e.FixedPrice, e.FixedPriceLabel,
             e.SituationText, e.ProposalText, e.CostNote, e.OperationText, e.TimelineNote,
-            content, mf, mt, xf, xt, e.CreatedAt, e.UpdatedAt);
+            content, mf, mt, xf, xt, e.CreatedAt, e.UpdatedAt, e.QuoteId);
     }
 
     public async Task<PagedResult<EstimateListDto>> GetPagedAsync(PaginationParams p, Guid? customerId, EstimateStatus? status, CancellationToken ct)
