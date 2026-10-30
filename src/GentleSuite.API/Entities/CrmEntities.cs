@@ -94,6 +94,11 @@ public class Customer : BaseEntity
     public DateTimeOffset? PrivacyNoticeSentAt { get; set; }
     public string? PrivacyNoticeVersion { get; set; }
 
+    // Mollie: ein Mollie-Kunde + ein gültiges Mandat je Kunde, damit weitere Abos/Ratenpläne desselben Kunden
+    // das bestehende Mandat wiederverwenden statt eine neue Zahlungseinrichtung zu verlangen.
+    public string? MollieCustomerId { get; set; }
+    public string? MollieMandateId { get; set; }
+
     public List<Contact> Contacts { get; set; } = new();
     public List<Location> Locations { get; set; } = new();
     public List<CustomerService> DesiredServices { get; set; } = new();

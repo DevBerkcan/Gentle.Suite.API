@@ -4,7 +4,7 @@ namespace GentleSuite.Application.DTOs;
 
 // === Auth ===
 public record LoginRequest(string Email, string Password);
-public record LoginResponse(string Token, string Email, string FullName, List<string> Roles, DateTimeOffset Expiry);
+public record LoginResponse(string Token, string Email, string FullName, List<string> Roles, DateTimeOffset Expiry, string? UserId = null, string? AvatarUrl = null);
 
 // === Pagination ===
 public record PaginationParams(int Page = 1, int PageSize = 25, string? Search = null, string? SortBy = null, bool SortDesc = false);
@@ -169,7 +169,21 @@ public record QuoteTemplateDto(Guid Id, string Name, string? Description, List<Q
 public record QuoteTemplateLineDto(Guid Id, string Title, string? Description, decimal Quantity, decimal UnitPrice, QuoteLineType LineType, int SortOrder);
 
 // === Invoice (GoBD) ===
-public record InvoiceListDto(Guid Id, string InvoiceNumber, InvoiceType Type, string CustomerName, InvoiceStatus Status, decimal GrossTotal, DateTimeOffset InvoiceDate, DateTimeOffset DueDate, DateTimeOffset? PaidAt);
+public record InvoiceListDto(Guid Id, string InvoiceNumber, InvoiceType Type, string CustomerName, InvoiceStatus Status, decimal GrossTotal, DateTimeOffset InvoiceDate, DateTimeOffset DueDate, DateTimeOffset? PaidAt, string Kind = InvoiceKinds.Standard);
+
+/// <summary>Abgeleitete Rechnungsart für Listen-Filter/Badge. Wird nicht gespeichert, sondern aus
+/// Invoice.Type, SubscriptionId (+ CustomerSubscription.IsInstallmentPlan) und
+/// CustomerSubscription.DownPaymentInvoiceId berechnet. Die Arten schließen sich gegenseitig aus.</summary>
+public static class InvoiceKinds
+{
+    public const string Standard = "standard";        // normale Einzelrechnung
+    public const string Installment = "installment";  // Ratenzahlung (Rate eines Ratenplans)
+    public const string DownPayment = "downpayment";  // Anzahlung zu einem Ratenplan
+    public const string Recurring = "recurring";      // Serienrechnung (Abo)
+    public const string Cancellation = "cancellation"; // Stornorechnung
+    public const string CreditNote = "creditnote";    // Gutschrift
+    public static readonly string[] All = { Standard, Installment, DownPayment, Recurring, Cancellation, CreditNote };
+}
 public class InvoiceDetailDto
 {
     public Guid Id { get; set; }
@@ -267,14 +281,18 @@ public record ConfirmBankRequest(string RequisitionId);
 public record SubscriptionPlanDto(Guid Id, string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category, bool IsActive, WorkScopeRuleDto? WorkScopeRule, SupportPolicyDto? SupportPolicy);
 public record WorkScopeRuleDto(string? FairUseDescription, List<string> IncludedItems, List<string> ExcludedItems, int? MaxHoursPerMonth);
 public record SupportPolicyDto(string? S0ResponseTarget, string? S1ResponseTarget, string? S2ResponseTarget, string? S3ResponseTarget);
-public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Guid CustomerId, string? CustomerName, SubscriptionStatus Status, DateTimeOffset StartDate, DateTimeOffset NextBillingDate, decimal MonthlyPrice, BillingCycle ContractBillingCycle, int? ContractDurationMonths, Guid? ContractQuoteId, Guid? QuoteLineId, string? ContractReference, int? ContractVersion, DateTimeOffset? ContractAcceptedAt, string? ContractAcceptedByName, string? ContractAcceptedByEmail, bool BusinessCustomerConfirmed, DateTimeOffset? BusinessCustomerConfirmedAt, DateTimeOffset? ConfirmedAt, string? MollieMandateStatus, DateTimeOffset? MandateEmailSentAt, string? MandateEmailRecipient, string? MandateEmailStatus, string? MandateEmailLastError, int MandateEmailAttemptCount, DateTimeOffset? BillingAuthorizedAt, bool IsInstallmentPlan, decimal? TotalInstallmentAmount, int InstallmentsCompleted, string? InstallmentSourceTitle, decimal PaidAmount = 0, decimal? InstallmentSurchargePercent = null, decimal? DownPaymentPercent = null, Guid? DownPaymentInvoiceId = null, string? PaymentPlanOptionKey = null, string BillingStage = "review", bool RequiresAgencyContract = true);
-public record BillingOccurrenceDto(Guid SubscriptionId, string CustomerName, string Title, bool IsInstallmentPlan, DateTimeOffset Date, decimal Amount, bool IsLastInstallment);
+public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Guid CustomerId, string? CustomerName, SubscriptionStatus Status, DateTimeOffset StartDate, DateTimeOffset NextBillingDate, decimal MonthlyPrice, BillingCycle ContractBillingCycle, int? ContractDurationMonths, Guid? ContractQuoteId, Guid? QuoteLineId, string? ContractReference, int? ContractVersion, DateTimeOffset? ContractAcceptedAt, string? ContractAcceptedByName, string? ContractAcceptedByEmail, bool BusinessCustomerConfirmed, DateTimeOffset? BusinessCustomerConfirmedAt, DateTimeOffset? ConfirmedAt, string? MollieMandateStatus, DateTimeOffset? MandateEmailSentAt, string? MandateEmailRecipient, string? MandateEmailStatus, string? MandateEmailLastError, int MandateEmailAttemptCount, DateTimeOffset? BillingAuthorizedAt, bool IsInstallmentPlan, decimal? TotalInstallmentAmount, int InstallmentsCompleted, string? InstallmentSourceTitle, decimal PaidAmount = 0, decimal? InstallmentSurchargePercent = null, decimal? DownPaymentPercent = null, Guid? DownPaymentInvoiceId = null, string? PaymentPlanOptionKey = null, string BillingStage = "review", bool RequiresAgencyContract = true,
+    // Mollie-Überarbeitung (docs/mollie-api-contract.md §2)
+    DateTimeOffset? NextCollectionDate = null, decimal? NextCollectionAmount = null, string? NextCollectionInvoiceNumber = null, bool NextCollectionIsForecast = false, string? NextCollectionBlockedReason = null,
+    string? MandateMethod = null, string? MandateAccountLast4 = null, string? MandateSetupUrl = null, int InvoicesPaid = 0, int InvoicesTotal = 0, decimal OutstandingAmount = 0);
+/// <summary>Date = actual collection day (PaymentCollectionDueDate of an issued invoice, else forecast); Amount = gross.</summary>
+public record BillingOccurrenceDto(Guid SubscriptionId, string CustomerName, string Title, bool IsInstallmentPlan, DateTimeOffset Date, decimal Amount, bool IsLastInstallment, string? InvoiceNumber = null, bool IsForecast = true);
 public record BillingCalendarDto(List<BillingOccurrenceDto> Occurrences, decimal TotalNext30Days, decimal TotalNext90Days);
 public record CreateSubscriptionRequest(Guid CustomerId, Guid PlanId, Guid? ContractQuoteId, bool BusinessCustomerConfirmed, DateTimeOffset? StartDate, int? ContractDurationMonths = null);
 public record CreateInstallmentPlanRequest(Guid CustomerId, Guid QuoteId, int Months);
 public record CreateManualInstallmentPlanRequest(Guid CustomerId, string Title, decimal TotalAmount, decimal? DownPaymentAmount, decimal MonthlyAmount, bool BusinessCustomerConfirmed, DateTimeOffset? FirstInstallmentDate = null);
 public record EligibleSubscriptionQuoteDto(Guid Id, string QuoteNumber, int Version, string? Subject, decimal MonthlyPrice, DateTimeOffset AcceptedAt, string? SignedByName, string? SignedByEmail);
-public record SubscriptionInvoiceDto(Guid Id, string InvoiceNumber, DateTimeOffset InvoiceDate, DateTimeOffset? BillingPeriodStart, DateTimeOffset? BillingPeriodEnd, decimal GrossTotal, InvoiceStatus Status, string? PaymentCollectionStatus, DateTimeOffset? PaymentCollectionDueDate);
+public record SubscriptionInvoiceDto(Guid Id, string InvoiceNumber, DateTimeOffset InvoiceDate, DateTimeOffset? BillingPeriodStart, DateTimeOffset? BillingPeriodEnd, decimal GrossTotal, InvoiceStatus Status, string? PaymentCollectionStatus, DateTimeOffset? PaymentCollectionDueDate, int CollectionAttemptCount = 0, DateTimeOffset? PaidAt = null, bool ChargedBack = false, string? LastFailureReason = null);
 public record UpdateSubscriptionStatusRequest(SubscriptionStatus Status, string? Reason = null);
 public record MollieMandateCheckoutDto(string CheckoutUrl, string PaymentId, string Status);
 public record MandateEmailResultDto(bool Sent, string? Recipient, DateTimeOffset? SentAt, string Status, string? Error);
@@ -282,6 +300,19 @@ public record MandateEmailResultDto(bool Sent, string? Recipient, DateTimeOffset
 /// "valid": a usable recurring mandate now exists. "pending": Mollie/the bank is still processing.
 /// "failed": the payment/mandate did not go through (FailureMessage has the reason where Mollie provides one).</summary>
 public record MollieMandateStatusDto(string Status, string? FailureMessage);
+// Öffentliche Mandats-Einrichtung (docs/mollie-api-contract.md §1)
+public record MandateSetupMethodsDto(bool Iban, bool Card);
+public record MandateSetupExistingDto(string Method, string? AccountLast4);
+public record MandateSetupInfoDto(string Status, string CustomerName, string? ContactName, string CreditorName, string? CreditorId, string? Description, string? AmountText, MandateSetupMethodsDto Methods, string? MandateText, MandateSetupExistingDto? ExistingMandate, DateTimeOffset? NextCollectionDate = null, decimal? NextCollectionAmount = null);
+public record MandateSetupIbanRequest(string? AccountHolder, string? Iban, bool Confirm);
+public record MandateSetupStatusDto(string Status);
+public record MandateSetupCheckoutDto(string CheckoutUrl);
+// Zahlungs-Monitoring (docs/mollie-api-contract.md §3)
+public record BillingRunDto(DateTimeOffset StartedAt, DateTimeOffset? FinishedAt, bool Succeeded, int InvoicesCreated, int CollectionsStarted, int Failures, string? Error);
+public record MandateReconcileRunDto(DateTimeOffset StartedAt, DateTimeOffset? FinishedAt, bool Succeeded, int Updated, string? Error);
+public record PaymentIssueDto(string Severity, string Kind, string Title, string? Detail, string? CustomerName, Guid? SubscriptionId, Guid? InvoiceId, DateTimeOffset? Since);
+public record PaymentIssueCountsDto(int Critical, int Warning, int Info);
+public record PaymentMonitoringDto(BillingRunDto? LastBillingRun, MandateReconcileRunDto? LastMandateReconcile, List<PaymentIssueDto> Issues, PaymentIssueCountsDto Counts);
 public record CreatePlanRequest(string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category);
 public record UpdatePlanRequest(string Name, string? Description, decimal MonthlyPrice, BillingCycle BillingCycle, SubscriptionPlanCategory Category, bool IsActive);
 
@@ -370,7 +401,10 @@ public record FileUploadDto(Guid Id, string FileName, string ContentType, long F
 public record ChartOfAccountDto(Guid Id, string AccountNumber, string Name, AccountType Type, bool IsSystem, bool IsActive);
 
 // === User Management ===
-public record UserListDto(string Id, string Email, string FirstName, string LastName, bool IsActive, List<string> Roles);
+public record UserListDto(string Id, string Email, string FirstName, string LastName, bool IsActive, List<string> Roles, string? AvatarUrl = null)
+{
+    public string FullName => $"{FirstName} {LastName}".Trim();
+}
 public record CreateUserRequest(string Email, string FirstName, string LastName, string Password, List<string> Roles);
 public record UpdateUserRequest(string FirstName, string LastName, bool IsActive, List<string> Roles);
 public record ResetPasswordRequest(string NewPassword);

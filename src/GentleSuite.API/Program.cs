@@ -114,6 +114,8 @@ builder.Services.Configure<SmtpSettings>(builder.Configuration.GetSection("Smtp"
 builder.Services.AddScoped<IEmailService, EmailServiceImpl>();
 builder.Services.AddScoped<ReminderJobs>();
 builder.Services.AddScoped<SubscriptionBillingJob>();
+builder.Services.AddScoped<MandateReconcileJob>();
+builder.Services.AddScoped<IPaymentMonitoringService, PaymentMonitoringService>();
 builder.Services.AddHangfire(c => c.UseSqlServerStorage(connStr));
 builder.Services.AddHangfireServer();
 builder.Services.AddSignalR();
@@ -145,6 +147,12 @@ builder.Services.AddRateLimiter(o =>
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0
             }));
+    // Öffentliche Mandats-Einrichtung: zusätzlich deutlich enger begrenzt (POSTs erzeugen Mollie-Objekte).
+    static string Ip(HttpContext ctx) => ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    o.AddPolicy("public-mandate-read", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(Ip(ctx),
+        _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    o.AddPolicy("public-mandate-write", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(Ip(ctx),
+        _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
 });
 
 var app = builder.Build();
@@ -167,6 +175,70 @@ try
         var efExists = Convert.ToInt32(await chk.ExecuteScalarAsync()) > 0;
         if (!efExists) await efCreator.CreateTablesAsync();
     }
+    // Profilbilder: purely additive — one new nullable column on AspNetUsers, no default, no data update.
+    // Deliberately the FIRST schema statement: every AspNetUsers query (incl. login) selects this column,
+    // so it must not be skipped if a later statement in this try-block throws.
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('AspNetUsers','AvatarPath') IS NULL ALTER TABLE "AspNetUsers" ADD "AvatarPath" NVARCHAR(512) NULL;""");
+    // Mollie-Überarbeitung: purely additive — new nullable columns + two new tables, no data update. Placed
+    // early for the same reason as AvatarPath: every CustomerSubscriptions/Customers/Invoices query selects
+    // these columns, so a later failing statement must not leave them missing.
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','MandateSetupToken') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "MandateSetupToken" NVARCHAR(64) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','MollieMandateMethod') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "MollieMandateMethod" NVARCHAR(32) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','MandateAccountLast4') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "MandateAccountLast4" NVARCHAR(8) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','BillingAnchorDate') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "BillingAnchorDate" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_MandateSetupToken' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_MandateSetupToken" ON "CustomerSubscriptions" ("MandateSetupToken") WHERE "MandateSetupToken" IS NOT NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Customers','MollieCustomerId') IS NULL ALTER TABLE "Customers" ADD "MollieCustomerId" NVARCHAR(64) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Customers','MollieMandateId') IS NULL ALTER TABLE "Customers" ADD "MollieMandateId" NVARCHAR(64) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Invoices','ChargedBackAt') IS NULL ALTER TABLE "Invoices" ADD "ChargedBackAt" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Invoices','ChargebackAmount') IS NULL ALTER TABLE "Invoices" ADD "ChargebackAmount" DECIMAL(18,2) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='InvoicePaymentAttempts')
+    BEGIN
+        CREATE TABLE "InvoicePaymentAttempts" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "InvoiceId" UNIQUEIDENTIFIER NOT NULL,
+            "MolliePaymentId" NVARCHAR(64) NOT NULL,
+            "Status" NVARCHAR(32) NOT NULL,
+            "FailureReason" NVARCHAR(1000) NULL,
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_InvoicePaymentAttempts" PRIMARY KEY ("Id"),
+            CONSTRAINT "FK_InvoicePaymentAttempts_Invoices_InvoiceId" FOREIGN KEY ("InvoiceId") REFERENCES "Invoices" ("Id") ON DELETE CASCADE
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_InvoicePaymentAttempts_MolliePaymentId' AND object_id=OBJECT_ID('InvoicePaymentAttempts')) CREATE UNIQUE INDEX "IX_InvoicePaymentAttempts_MolliePaymentId" ON "InvoicePaymentAttempts" ("MolliePaymentId");""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_InvoicePaymentAttempts_InvoiceId' AND object_id=OBJECT_ID('InvoicePaymentAttempts')) CREATE INDEX "IX_InvoicePaymentAttempts_InvoiceId" ON "InvoicePaymentAttempts" ("InvoiceId");""");
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='JobRunLogs')
+    BEGIN
+        CREATE TABLE "JobRunLogs" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "JobName" NVARCHAR(64) NOT NULL,
+            "StartedAt" DATETIMEOFFSET(7) NOT NULL,
+            "FinishedAt" DATETIMEOFFSET(7) NULL,
+            "Succeeded" BIT NOT NULL DEFAULT 0,
+            "InvoicesCreated" INT NOT NULL DEFAULT 0,
+            "CollectionsStarted" INT NOT NULL DEFAULT 0,
+            "Failures" INT NOT NULL DEFAULT 0,
+            "Updated" INT NOT NULL DEFAULT 0,
+            "Reference" NVARCHAR(128) NULL,
+            "Error" NVARCHAR(MAX) NULL,
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_JobRunLogs" PRIMARY KEY ("Id")
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_JobRunLogs_JobName_StartedAt' AND object_id=OBJECT_ID('JobRunLogs')) CREATE INDEX "IX_JobRunLogs_JobName_StartedAt" ON "JobRunLogs" ("JobName", "StartedAt");""");
     // Lightweight schema evolution for existing volumes without migrations.
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='OnboardingWorkflows' AND COLUMN_NAME='ProjectId') ALTER TABLE "OnboardingWorkflows" ADD "ProjectId" UNIQUEIDENTIFIER NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_OnboardingWorkflows_ProjectId' AND object_id=OBJECT_ID('OnboardingWorkflows')) CREATE INDEX "IX_OnboardingWorkflows_ProjectId" ON "OnboardingWorkflows" ("ProjectId");""");
@@ -624,6 +696,7 @@ await db.Database.ExecuteSqlRawAsync("""
     """);
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Estimates_CustomerId' AND object_id=OBJECT_ID('Estimates')) CREATE INDEX "IX_Estimates_CustomerId" ON "Estimates" ("CustomerId");""");
 
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)
@@ -684,7 +757,10 @@ RecurringJob.AddOrUpdate<ReminderJobs>("expire-quotes", j => j.ExpireQuotesAsync
 RecurringJob.RemoveIfExists("generate-recurring-expenses");
 RecurringJob.RemoveIfExists("generate-subscription-invoices");
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
-RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6));
+// Abrechnung/Abgleich nach Berliner Zeit (Fälligkeiten werden ebenfalls in Europe/Berlin berechnet).
+var berlinJobOptions = new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin") };
+RecurringJob.AddOrUpdate<MandateReconcileJob>("mandate-reconcile", j => j.RunAsync(), Cron.Daily(5), berlinJobOptions);
+RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6), berlinJobOptions);
 RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOverdueInvoicesAsync(), Cron.Daily(7));
 RecurringJob.AddOrUpdate<ReminderJobs>("send-overdue-reminders", j => j.SendOverdueRemindersAsync(), Cron.Daily(8));
 RecurringJob.AddOrUpdate<ReminderJobs>("send-mandate-reminders", j => j.SendMandateRemindersAsync(), Cron.Daily(9));

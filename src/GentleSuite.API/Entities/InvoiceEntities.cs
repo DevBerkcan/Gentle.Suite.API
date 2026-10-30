@@ -72,6 +72,9 @@ public class Invoice : GobdEntity
     // collection. Once MaxCollectionAttempts is reached, the invoice stops being retried
     // automatically and is escalated to InvoiceStatus.Overdue for manual follow-up.
     public int CollectionAttemptCount { get; set; }
+    // Mollie meldet Rücklastschriften nicht als eigenen Status, sondern über amountChargedBack einer "paid"-Zahlung.
+    public DateTimeOffset? ChargedBackAt { get; set; }
+    public decimal? ChargebackAmount { get; set; }
 
     public List<InvoiceLine> Lines { get; set; } = new();
     public List<InvoicePayment> Payments { get; set; } = new();
@@ -131,4 +134,30 @@ public class InvoiceVatSummary
     public decimal NetAmount { get; set; }
     public decimal VatAmount { get; set; }
     public decimal GrossAmount { get; set; }
+}
+
+/// <summary>One row per Mollie payment that ended in failed/expired/canceled for an invoice — makes the
+/// CollectionAttemptCount increment idempotent when Mollie delivers the same webhook more than once.</summary>
+public class InvoicePaymentAttempt : BaseEntity
+{
+    public Guid InvoiceId { get; set; }
+    public Invoice Invoice { get; set; } = null!;
+    public string MolliePaymentId { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string? FailureReason { get; set; }
+}
+
+/// <summary>Protocol of background runs (billing, mandate reconcile) and webhook errors for the payment monitoring.</summary>
+public class JobRunLog : BaseEntity
+{
+    public string JobName { get; set; } = string.Empty;
+    public DateTimeOffset StartedAt { get; set; }
+    public DateTimeOffset? FinishedAt { get; set; }
+    public bool Succeeded { get; set; }
+    public int InvoicesCreated { get; set; }
+    public int CollectionsStarted { get; set; }
+    public int Failures { get; set; }
+    public int Updated { get; set; }
+    public string? Reference { get; set; }
+    public string? Error { get; set; }
 }

@@ -535,6 +535,15 @@ public class QuoteServiceImpl : IQuoteService
             sub.BillingAuthorizedAt ??= DateTimeOffset.UtcNow;
             authorizedSubscriptionIds.Add(sub.Id);
         }
+        // Serienrechnungen, die manuell mit diesem Angebot als Vertragsgrundlage angelegt wurden (ohne Positionsbezug).
+        var quoteLevelSubs = await _db.CustomerSubscriptions
+            .Where(s => s.ContractQuoteId == quote.Id && s.QuoteLineId == null && !s.IsInstallmentPlan && s.BillingAuthorizedAt == null)
+            .ToListAsync(ct);
+        foreach (var sub in quoteLevelSubs)
+        {
+            sub.BillingAuthorizedAt = DateTimeOffset.UtcNow;
+            authorizedSubscriptionIds.Add(sub.Id);
+        }
         if (authorizedSubscriptionIds.Count == 1)
             inv.SubscriptionId = authorizedSubscriptionIds[0];
         await _db.SaveChangesAsync(ct);

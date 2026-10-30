@@ -80,7 +80,7 @@ public interface IQuoteService
 
 public interface IInvoiceService
 {
-    Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(PaginationParams p, InvoiceStatus? status = null, Guid? customerId = null, CancellationToken ct = default);
+    Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(PaginationParams p, InvoiceStatus? status = null, Guid? customerId = null, CancellationToken ct = default, string? kind = null);
     Task<InvoiceDetailDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<InvoiceDetailDto> CreateAsync(CreateInvoiceRequest req, CancellationToken ct = default);
     Task<InvoiceDetailDto> UpdateAsync(Guid id, UpdateInvoiceRequest req, CancellationToken ct = default);
@@ -185,6 +185,21 @@ public interface IMolliePaymentService
     /// state from Mollie directly (not just the cached DB value) so the customer sees an honest result even
     /// if a webhook was delayed or missed.</summary>
     Task<MollieMandateStatusDto> GetMandateStatusAsync(Guid subscriptionId, CancellationToken ct = default);
+    // Öffentliche Mandats-Einrichtung über den dauerhaften Token-Link
+    Task<MandateSetupInfoDto> GetSetupInfoAsync(string token, CancellationToken ct = default);
+    Task<MandateSetupStatusDto> CreateIbanMandateAsync(string token, MandateSetupIbanRequest req, CancellationToken ct = default);
+    Task<MandateSetupCheckoutDto> CreateSetupCheckoutAsync(string token, CancellationToken ct = default);
+    /// <summary>Returns (creating it if needed) the stable public setup URL of a subscription.</summary>
+    Task<string> EnsureSetupUrlAsync(Guid subscriptionId, CancellationToken ct = default);
+    /// <summary>Daily/admin reconcile: adopts valid Mollie mandates for subscriptions not (yet) marked valid.</summary>
+    Task<MandateReconcileRunDto> ReconcileMandatesAsync(CancellationToken ct = default);
+    /// <summary>Reconciles one subscription with Mollie (incl. already-valid ones); true if anything changed.</summary>
+    Task<bool> ReconcileSubscriptionAsync(Guid subscriptionId, CancellationToken ct = default);
+}
+
+public interface IPaymentMonitoringService
+{
+    Task<PaymentMonitoringDto> GetPaymentMonitoringAsync(CancellationToken ct = default);
 }
 
 public interface ITimeTrackingService
@@ -350,6 +365,11 @@ public interface IUserService
     Task<UserListDto> UpdateAsync(string id, UpdateUserRequest req, CancellationToken ct = default);
     Task DeleteAsync(string id, CancellationToken ct = default);
     Task ResetPasswordAsync(string id, ResetPasswordRequest req, CancellationToken ct = default);
+    Task<UserListDto> GetByIdAsync(string id, CancellationToken ct = default);
+    /// <summary>Validiert (jpg/png/webp, max. 2 MB, Magic Bytes) und speichert das Profilbild.</summary>
+    Task<UserListDto> SetAvatarAsync(string id, Stream stream, long length, CancellationToken ct = default);
+    Task<UserListDto> RemoveAvatarAsync(string id, CancellationToken ct = default);
+    Task<(Stream Stream, string ContentType)?> GetAvatarAsync(string id, CancellationToken ct = default);
 }
 
 public interface ITeamMemberService

@@ -37,7 +37,7 @@ public class AuthController(UserManager<AppUser> userManager, SignInManager<AppU
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key ist nicht konfiguriert.")));
         var expiry = DateTimeOffset.UtcNow.AddDays(7);
         var token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(claims: claims, expires: expiry.UtcDateTime, signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
-        return Ok(new LoginResponse(token, user.Email!, user.FullName, roles.ToList(), expiry));
+        return Ok(new LoginResponse(token, user.Email!, user.FullName, roles.ToList(), expiry, user.Id, GentleSuite.Infrastructure.Services.UserServiceImpl.AvatarUrlFor(user)));
     }
 
     [HttpPost("forgot-password"), AllowAnonymous]
@@ -299,7 +299,12 @@ public class ApprovalController(IQuoteService svc) : ControllerBase
 [ApiController, Route("api/[controller]"), Authorize]
 public class InvoicesController(IInvoiceService svc) : ControllerBase
 {
-    [HttpGet] public async Task<ActionResult<PagedResult<InvoiceListDto>>> List([FromQuery] PaginationParams p, [FromQuery] InvoiceStatus? status, [FromQuery] Guid? customerId) => Ok(await svc.GetInvoicesAsync(p, status, customerId));
+    [HttpGet] public async Task<ActionResult<PagedResult<InvoiceListDto>>> List([FromQuery] PaginationParams p, [FromQuery] InvoiceStatus? status, [FromQuery] Guid? customerId, [FromQuery] string? kind)
+    {
+        if (!string.IsNullOrWhiteSpace(kind) && !InvoiceKinds.All.Contains(kind.Trim().ToLowerInvariant()))
+            return BadRequest(new { error = $"Unbekannte Rechnungsart '{kind}'. Erlaubt: {string.Join(", ", InvoiceKinds.All)}" });
+        return Ok(await svc.GetInvoicesAsync(p, status, customerId, kind: kind));
+    }
     [HttpGet("{id}")] public async Task<ActionResult<InvoiceDetailDto>> Get(Guid id) { var r = await svc.GetByIdAsync(id); return r == null ? NotFound() : Ok(r); }
     [HttpPost] public async Task<ActionResult<InvoiceDetailDto>> Create(CreateInvoiceRequest req) => Ok(await svc.CreateAsync(req));
     [HttpPut("{id}")] public async Task<ActionResult<InvoiceDetailDto>> Update(Guid id, UpdateInvoiceRequest req) => Ok(await svc.UpdateAsync(id, req));
@@ -310,10 +315,12 @@ public class InvoicesController(IInvoiceService svc) : ControllerBase
     [HttpPost("from-time-entries")] public async Task<ActionResult<InvoiceDetailDto>> FromTimeEntries(CreateInvoiceFromTimeEntriesRequest req) => Ok(await svc.CreateFromTimeEntriesAsync(req));
     [HttpGet("{id}/pdf")] public async Task<IActionResult> Pdf(Guid id) => File(await svc.GeneratePdfAsync(id), "application/pdf", $"Rechnung.pdf");
     [HttpGet("export.csv")]
-    public async Task<IActionResult> ExportCsv([FromServices] AppDbContext db, [FromQuery] InvoiceStatus? status)
+    public async Task<IActionResult> ExportCsv([FromServices] AppDbContext db, [FromQuery] InvoiceStatus? status, [FromQuery] Guid? customerId, [FromQuery] string? kind)
     {
         var q = db.Invoices.Include(i => i.Customer).AsQueryable();
         if (status.HasValue) q = q.Where(i => i.Status == status.Value);
+        if (customerId.HasValue) q = q.Where(i => i.CustomerId == customerId.Value);
+        if (!string.IsNullOrWhiteSpace(kind)) q = GentleSuite.Infrastructure.Services.InvoiceServiceImpl.ApplyKindFilter(q, db, kind);
         var items = await q.OrderByDescending(i => i.InvoiceDate).ToListAsync();
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("Rechnungsnummer;Kunde;Status;Datum;Faellig;Netto;MwSt;Brutto;Bezahlt");
@@ -445,6 +452,12 @@ public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentSer
     [HttpPost("manual-installment-plan")] public async Task<ActionResult<CustomerSubscriptionDto>> CreateManualInstallmentPlan(CreateManualInstallmentPlanRequest req) => Ok(await svc.CreateManualInstallmentPlanAsync(req));
     [HttpGet("billing-calendar")] public async Task<ActionResult<BillingCalendarDto>> BillingCalendar([FromQuery] int days = 90) => Ok(await svc.GetBillingCalendarAsync(days));
     [HttpGet("{id}/invoices")] public async Task<ActionResult<List<SubscriptionInvoiceDto>>> GetInvoices(Guid id) => Ok(await svc.GetInvoicesAsync(id));
+    [HttpPost("{id}/mandate/check"), Authorize(Policy = "AdminOnly")]
+    public async Task<ActionResult<CustomerSubscriptionDto>> CheckMandate(Guid id)
+    {
+        await mollie.ReconcileSubscriptionAsync(id);
+        return Ok(await svc.GetByIdAsync(id));
+    }
     [HttpPost("{id}/bill-now")]
     public async Task<ActionResult<CustomerSubscriptionDto>> BillNow(Guid id)
     {
@@ -484,6 +497,28 @@ public class MollieWebhookController(IMolliePaymentService mollie, ILogger<Molli
             throw;
         }
     }
+}
+
+/// <summary>Öffentliche Mandats-Einrichtung über den dauerhaften Link aus den Kunden-Mails (kein Login).
+/// Der Token ist zufällig (256 Bit); zusätzlich pro IP rate-limitiert, weil POSTs Mollie-Objekte erzeugen.</summary>
+[ApiController, Route("api/public/mandate-setup"), AllowAnonymous]
+public class PublicMandateSetupController(IMolliePaymentService mollie) : ControllerBase
+{
+    [HttpGet("{token}"), Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("public-mandate-read")]
+    public async Task<ActionResult<MandateSetupInfoDto>> Get(string token) => Ok(await mollie.GetSetupInfoAsync(token));
+
+    [HttpPost("{token}/iban"), Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("public-mandate-write")]
+    public async Task<ActionResult<MandateSetupStatusDto>> Iban(string token, MandateSetupIbanRequest req) => Ok(await mollie.CreateIbanMandateAsync(token, req));
+
+    [HttpPost("{token}/checkout"), Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("public-mandate-write")]
+    public async Task<ActionResult<MandateSetupCheckoutDto>> Checkout(string token) => Ok(await mollie.CreateSetupCheckoutAsync(token));
+}
+
+[ApiController, Route("api/monitoring"), Authorize]
+public class MonitoringController(IPaymentMonitoringService monitoring, IMolliePaymentService mollie) : ControllerBase
+{
+    [HttpGet("payments")] public async Task<ActionResult<PaymentMonitoringDto>> Payments() => Ok(await monitoring.GetPaymentMonitoringAsync());
+    [HttpPost("reconcile-mandates"), Authorize(Policy = "AdminOnly")] public async Task<ActionResult<MandateReconcileRunDto>> Reconcile() => Ok(await mollie.ReconcileMandatesAsync());
 }
 
 [ApiController, Route("api/[controller]"), Authorize]
@@ -729,6 +764,50 @@ public class UsersController(IUserService svc) : ControllerBase
     [HttpPut("{id}")] public async Task<ActionResult<UserListDto>> Update(string id, UpdateUserRequest req) => Ok(await svc.UpdateAsync(id, req));
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(string id) { await svc.DeleteAsync(id); return NoContent(); }
     [HttpPost("{id}/reset-password")] public async Task<IActionResult> ResetPassword(string id, ResetPasswordRequest req) { await svc.ResetPasswordAsync(id, req); return NoContent(); }
+
+    // Profilbild eines anderen Benutzers setzen/entfernen (nur Admin). Abruf: GET api/profile/avatar/{id}.
+    [HttpPost("{id}/avatar"), RequestSizeLimit(ProfileController.AvatarRequestLimit), RequestFormLimits(MultipartBodyLengthLimit = ProfileController.AvatarRequestLimit)]
+    public async Task<ActionResult<UserListDto>> UploadAvatar(string id, IFormFile? file, CancellationToken ct)
+    {
+        if (file == null) return BadRequest(new { error = "Keine Datei übermittelt." });
+        await using var s = file.OpenReadStream();
+        return Ok(await svc.SetAvatarAsync(id, s, file.Length, ct));
+    }
+    [HttpDelete("{id}/avatar")] public async Task<ActionResult<UserListDto>> RemoveAvatar(string id, CancellationToken ct) => Ok(await svc.RemoveAvatarAsync(id, ct));
+}
+
+/// <summary>Eigenes Profil des angemeldeten Benutzers (jede Rolle) + authentifizierter Abruf von Profilbildern.</summary>
+[ApiController, Route("api/profile"), Authorize]
+public class ProfileController(IUserService svc) : ControllerBase
+{
+    /// <summary>2 MB Bild + Multipart-Overhead.</summary>
+    public const long AvatarRequestLimit = 2 * 1024 * 1024 + 64 * 1024;
+
+    private string CurrentUserId =>
+        User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("nameid") ?? User.FindFirstValue("sub")
+        ?? throw new UnauthorizedAccessException("Benutzer nicht ermittelbar.");
+
+    [HttpGet] public async Task<ActionResult<UserListDto>> Me(CancellationToken ct) => Ok(await svc.GetByIdAsync(CurrentUserId, ct));
+
+    [HttpPost("avatar"), RequestSizeLimit(AvatarRequestLimit), RequestFormLimits(MultipartBodyLengthLimit = AvatarRequestLimit)]
+    public async Task<ActionResult<UserListDto>> UploadAvatar(IFormFile? file, CancellationToken ct)
+    {
+        if (file == null) return BadRequest(new { error = "Keine Datei übermittelt." });
+        await using var s = file.OpenReadStream();
+        return Ok(await svc.SetAvatarAsync(CurrentUserId, s, file.Length, ct));
+    }
+
+    [HttpDelete("avatar")] public async Task<ActionResult<UserListDto>> RemoveAvatar(CancellationToken ct) => Ok(await svc.RemoveAvatarAsync(CurrentUserId, ct));
+
+    /// <summary>Profilbild eines beliebigen Benutzers — für alle angemeldeten Benutzer sichtbar (Header, Listen).</summary>
+    [HttpGet("avatar/{userId}")]
+    public async Task<IActionResult> GetAvatar(string userId, CancellationToken ct)
+    {
+        var r = await svc.GetAvatarAsync(userId, ct);
+        if (r == null) return NotFound();
+        Response.Headers.CacheControl = "private, max-age=86400";
+        return File(r.Value.Stream, r.Value.ContentType);
+    }
 }
 
 [ApiController, Route("api/system"), Authorize(Policy = "AdminOnly")]
@@ -739,6 +818,29 @@ public class SystemController : ControllerBase
     {
         RecurringJob.TriggerJob("subscription-billing");
         return Accepted();
+    }
+    /// <summary>Enqueues one of the payment-related background jobs right now (admin only) and returns the
+    /// Hangfire job id; the state can be polled via GET jobs/{id}.</summary>
+    [HttpPost("run-job/{name}")]
+    public IActionResult RunJob(string name)
+    {
+        string jobId = name switch
+        {
+            "subscription-billing" => BackgroundJob.Enqueue<SubscriptionBillingJob>(j => j.RunAsync()),
+            "mandate-reconcile" => BackgroundJob.Enqueue<MandateReconcileJob>(j => j.RunAsync()),
+            "check-overdue-invoices" => BackgroundJob.Enqueue<ReminderJobs>(j => j.CheckOverdueInvoicesAsync()),
+            "send-overdue-reminders" => BackgroundJob.Enqueue<ReminderJobs>(j => j.SendOverdueRemindersAsync()),
+            "send-mandate-reminders" => BackgroundJob.Enqueue<ReminderJobs>(j => j.SendMandateRemindersAsync()),
+            _ => throw new ArgumentException("Unbekannter Job.")
+        };
+        return Accepted(new { jobId });
+    }
+    [HttpGet("jobs/{id}")]
+    public IActionResult JobState(string id)
+    {
+        using var connection = JobStorage.Current.GetConnection();
+        var state = connection.GetStateData(id);
+        return state == null ? NotFound() : Ok(new { state = state.Name, reason = state.Reason });
     }
     [HttpPost("trigger-bank-sync")]
     public IActionResult TriggerBankSync()
