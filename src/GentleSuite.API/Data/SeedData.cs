@@ -1005,7 +1005,7 @@ END;
                 <p style='font-size:13px;line-height:1.6;color:#667085'>Falls es weiterhin nicht funktioniert, antworten Sie gerne auf diese E-Mail — wir helfen Ihnen persönlich weiter.</p>
                 """ + EmailFooter));
 
-        const string mandateSubject = "Zahlungsart für {{ PlanName }} sicher einrichten – {{ ContractReference }}";
+        const string mandateSubject = "Zahlungsart für {{ PlanName }} sicher einrichten{% if ContractReference != \"\" %} – {{ ContractReference }}{% endif %}";
         const string mandateBody = """
                 <div style='margin:0;background:#f4f6f8;padding:32px 16px;font-family:Arial,sans-serif;color:#101828'>
                   <div style='max-width:620px;margin:0 auto'>
@@ -1014,22 +1014,22 @@ END;
                     <div style='background:#ffffff;border:1px solid #eaecf0;border-top:0;border-radius:0 0 12px 12px;padding:36px 32px'>
                       <p style='margin:0 0 18px'>Hallo {{ ContactName }},</p>
                       <h1 style='font-size:24px;line-height:1.3;margin:0 0 18px;color:#101828'>Monatliche Zahlung sicher einrichten</h1>
-                      <p style='line-height:1.65;color:#475467'>für den vereinbarten Tarif <strong>{{ PlanName }}</strong> über <strong>{{ MonthlyPrice }} EUR monatlich</strong> möchten wir bereits jetzt Ihre Zustimmung zur automatischen Zahlungsabwicklung über Mollie einholen.</p>
+                      <p style='line-height:1.65;color:#475467'>für <strong>{{ PlanName }}</strong> über <strong>{{ MonthlyPrice }} EUR monatlich</strong> möchten wir bereits jetzt Ihre Zustimmung zur automatischen Zahlungsabwicklung einholen. Das dauert etwa eine Minute: Sie geben auf einer sicheren Seite Ihre IBAN ein (oder wählen Kartenzahlung) und bestätigen das SEPA-Lastschriftmandat.</p>
                       <div style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:16px 18px;margin:20px 0;color:#065f46;font-size:14px;line-height:1.6'>
                         <strong>Wichtig:</strong> Mit dieser Einrichtung wird jetzt noch <strong>nichts abgebucht</strong>. Die eigentliche Abrechnung beginnt erst, sobald wir die vereinbarte Leistung erbracht und Ihnen die Rechnung dafür gestellt haben. Sie richten hier lediglich vorab die Zahlungsart ein, damit dann alles reibungslos läuft.
                       </div>
                       <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
-                        <div style='margin-bottom:8px'><strong>Vertragsgrundlage:</strong> Angebot {{ ContractReference }}</div>
-                        <div style='margin-bottom:8px'><strong>Angenommen am:</strong> {{ ContractAcceptedAt }}</div>
-                        <div style='margin-bottom:8px'><strong>Tarif:</strong> {{ PlanName }}</div>
+                        {% if ContractReference != "" %}<div style='margin-bottom:8px'><strong>Vertragsgrundlage:</strong> Angebot {{ ContractReference }}</div>{% endif %}
+                        {% if ContractAcceptedAt != "" %}<div style='margin-bottom:8px'><strong>Angenommen am:</strong> {{ ContractAcceptedAt }}</div>{% endif %}
+                        <div style='margin-bottom:8px'><strong>Leistung:</strong> {{ PlanName }}</div>
                         <div style='margin-bottom:8px'><strong>Monatlicher Betrag:</strong> {{ MonthlyPrice }} EUR</div>
                         <div><strong>Vertragsbeginn:</strong> {{ StartDate }}</div>
                       </div>
                       <div style='text-align:center;margin:30px 0'>
                         <a href='{{ CheckoutUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Zahlungsart sicher einrichten</a>
                       </div>
-                      <p style='font-size:13px;line-height:1.6;color:#667085'>Der Vertrag wurde bereits mit dem oben genannten Angebot geschlossen. Dieser Link dient ausschließlich der einmaligen Einrichtung der automatischen Zahlungsabwicklung und begründet keinen neuen Vertrag.</p>
-                      <p style='font-size:13px;line-height:1.6;color:#667085'>Mollie kann dafür eine Autorisierungszahlung über 0,01 EUR durchführen. Danach werden die vertraglich vereinbarten Monatsbeträge automatisch eingezogen. Die jeweilige Rechnung mit dem exakten Betrag und Einzugsdatum erhalten Sie vor dem Einzug.</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Der Vertrag wurde bereits {% if ContractReference != "" %}mit dem oben genannten Angebot {% endif %}geschlossen. Dieser Link dient ausschließlich der einmaligen Einrichtung der automatischen Zahlungsabwicklung und begründet keinen neuen Vertrag.</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>Bei der Einrichtung per IBAN wird nichts abgebucht; nur bei Kartenzahlung kann unser Zahlungsdienstleister Mollie eine Autorisierung über 0,01 EUR durchführen. Danach werden die vereinbarten Beträge automatisch eingezogen. Die jeweilige Rechnung mit dem exakten Betrag und Einzugsdatum erhalten Sie vor dem Einzug.</p>
                       <p style='font-size:13px;line-height:1.6;color:#667085'>Falls Sie diese Vereinbarung nicht kennen, verwenden Sie den Link bitte nicht und antworten Sie auf diese E-Mail.</p>
                       <p style='font-size:13px;line-height:1.6;color:#667085'>Informationen zur Verarbeitung Ihrer Daten durch Gentle Group und den Zahlungsdienstleister Mollie finden Sie in unserer <a href='https://www.gentlegroup.de/datenschutzerklaerung' style='color:#344054'>Datenschutzerklärung</a>.</p>
                       <hr style='border:0;border-top:1px solid #eaecf0;margin:28px 0'/>
@@ -1062,13 +1062,13 @@ END;
                       <div style='background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:18px;margin:24px 0'>
                         <div style='margin-bottom:8px'><strong>So geht's:</strong></div>
                         <div style='margin-bottom:6px'>1. Klicken Sie unten auf "Zahlungsart jetzt einrichten".</div>
-                        <div style='margin-bottom:6px'>2. Bestätigen Sie Ihre SEPA-Lastschrift bei Mollie, unserem Zahlungsdienstleister.</div>
-                        <div>3. Fertig — es wird dabei noch nichts abgebucht, außer einer 0,01 EUR Autorisierungszahlung.</div>
+                        <div style='margin-bottom:6px'>2. Geben Sie Ihre IBAN ein (oder wählen Sie Kartenzahlung) und bestätigen Sie das SEPA-Lastschriftmandat.</div>
+                        <div>3. Fertig — bei der Einrichtung per IBAN wird dabei nichts abgebucht.</div>
                       </div>
                       <div style='text-align:center;margin:30px 0'>
                         <a href='{{ CheckoutUrl }}' style='display:inline-block;background:#344054;color:#ffffff;text-decoration:none;padding:14px 26px;border-radius:8px;font-weight:700'>Zahlungsart jetzt einrichten</a>
                       </div>
-                      <p style='font-size:13px;line-height:1.6;color:#667085'>Vertragsgrundlage: Angebot {{ ContractReference }}. Dies ist Erinnerung Nr. {{ ReminderNumber }} zu dieser Einrichtung.</p>
+                      <p style='font-size:13px;line-height:1.6;color:#667085'>{% if ContractReference != "" %}Vertragsgrundlage: Angebot {{ ContractReference }}. {% endif %}Dies ist Erinnerung Nr. {{ ReminderNumber }} zu dieser Einrichtung.</p>
                       <p style='font-size:13px;line-height:1.6;color:#667085'>Falls es technische Probleme gibt oder Sie Rückfragen haben, antworten Sie einfach auf diese E-Mail — wir helfen gerne weiter.</p>
                       <p style='font-size:13px;line-height:1.6;color:#667085'>Informationen zur Verarbeitung Ihrer Daten durch Gentle Group und den Zahlungsdienstleister Mollie finden Sie in unserer <a href='https://www.gentlegroup.de/datenschutzerklaerung' style='color:#344054'>Datenschutzerklärung</a>.</p>
                       <hr style='border:0;border-top:1px solid #eaecf0;margin:28px 0'/>
