@@ -295,8 +295,9 @@ public sealed class MolliePaymentService : IMolliePaymentService
                     ["PlanName"] = subscription.InstallmentSourceTitle ?? subscription.Plan.Name,
                     ["MonthlyPrice"] = (subscription.AgreedMonthlyPrice ?? subscription.Plan.MonthlyPrice).ToString("0.00", CultureInfo.GetCultureInfo("de-DE")),
                     ["StartDate"] = subscription.StartDate.ToString("dd.MM.yyyy", CultureInfo.GetCultureInfo("de-DE")),
-                    ["ContractReference"] = subscription.ContractReference ?? "-",
-                    ["ContractAcceptedAt"] = subscription.ContractAcceptedAt?.ToString("dd.MM.yyyy", CultureInfo.GetCultureInfo("de-DE")) ?? "-",
+                    // Empty (not "-") when there is no quote: the template then simply omits these lines.
+                    ["ContractReference"] = subscription.ContractReference ?? "",
+                    ["ContractAcceptedAt"] = subscription.ContractAcceptedAt?.ToString("dd.MM.yyyy", CultureInfo.GetCultureInfo("de-DE")) ?? "",
                     ["CheckoutUrl"] = SetupUrl(subscription)
                 },
                 subscription.CustomerId,
@@ -376,7 +377,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 ["CustomerName"] = subscription.Customer.CompanyName,
                 ["PlanName"] = subscription.InstallmentSourceTitle ?? subscription.Plan.Name,
                 ["MonthlyPrice"] = (subscription.AgreedMonthlyPrice ?? subscription.Plan.MonthlyPrice).ToString("0.00", CultureInfo.GetCultureInfo("de-DE")),
-                ["ContractReference"] = subscription.ContractReference ?? "-",
+                ["ContractReference"] = subscription.ContractReference ?? "",
                 ["DaysWaiting"] = daysWaiting,
                 ["ReminderNumber"] = subscription.MandateReminderCount + 1,
                 ["CheckoutUrl"] = SetupUrl(subscription)
