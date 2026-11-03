@@ -56,7 +56,7 @@ public class CustomerServiceImpl : ICustomerService
         return c == null ? null : _m.Map<CustomerDetailDto>(c);
     }
 
-    public async Task<CustomerDetailDto> CreateAsync(CreateCustomerRequest req, CancellationToken ct)
+    public async Task<CustomerDetailDto> CreateAsync(CreateCustomerRequest req, CancellationToken ct, bool sendWelcomeEmail = true)
     {
         var duplicate = await CheckDuplicateAsync(new DuplicateCheckRequest(req.CompanyName, req.PrimaryContact.Email, req.PrimaryContact.Phone), ct);
         if (duplicate.HasDuplicate) throw new ArgumentException($"Dubletten erkannt ({string.Join(", ", duplicate.Matches.Select(m => m.MatchType).Distinct())}).");
@@ -69,7 +69,7 @@ public class CustomerServiceImpl : ICustomerService
         if (req.DesiredServiceIds?.Any() == true) foreach (var sid in req.DesiredServiceIds) cust.DesiredServices.Add(new CustomerService { ServiceCatalogItemId = sid });
         _db.Customers.Add(cust); await _db.SaveChangesAsync(ct);
         await _act.LogAsync(cust.Id, "Customer", cust.Id, "Created", $"Kunde '{cust.CompanyName}' angelegt", ct: ct);
-        try {
+        if (sendWelcomeEmail) try {
             var co = await _db.CompanySettings.FirstOrDefaultAsync(ct);
             await _em.SendTemplatedEmailAsync(req.PrimaryContact.Email, "welcome", new() {
                 ["CustomerName"] = cust.CompanyName, ["ContactName"] = req.PrimaryContact.FirstName,

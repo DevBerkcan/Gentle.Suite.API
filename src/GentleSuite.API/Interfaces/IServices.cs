@@ -8,7 +8,8 @@ public interface ICustomerService
 {
     Task<PagedResult<CustomerListDto>> GetCustomersAsync(PaginationParams p, CustomerStatus? status = null, Guid? serviceId = null, CancellationToken ct = default);
     Task<CustomerDetailDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
-    Task<CustomerDetailDto> CreateAsync(CreateCustomerRequest req, CancellationToken ct = default);
+    /// <param name="sendWelcomeEmail">false for leads created by integrations (an inquiry is not yet a customer relationship).</param>
+    Task<CustomerDetailDto> CreateAsync(CreateCustomerRequest req, CancellationToken ct = default, bool sendWelcomeEmail = true);
     Task<CustomerDetailDto> UpdateAsync(Guid id, UpdateCustomerRequest req, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
     Task<CustomerDetailDto> MarkPrivacyNoticeSentAsync(Guid id, UpdatePrivacyNoticeRequest req, CancellationToken ct = default);
