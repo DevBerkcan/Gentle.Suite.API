@@ -152,6 +152,10 @@ builder.Services.AddRateLimiter(o =>
     static string Ip(HttpContext ctx) => ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
     o.AddPolicy("public-mandate-read", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(Ip(ctx),
         _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    // GentleHub-Integration: großzügig für normalen Betrieb, bremst aber Schleifen in einem fehlerhaften Client.
+    o.AddPolicy("integration-hub", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Request.Headers["X-Api-Key"].FirstOrDefault() is { Length: > 12 } k ? k[..12] : Ip(ctx),
+        _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     o.AddPolicy("public-mandate-write", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(Ip(ctx),
         _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
 });
@@ -776,6 +780,29 @@ await db.Database.ExecuteSqlRawAsync("""
     """);
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_WebsiteLegalProfiles_CustomerId' AND object_id=OBJECT_ID('WebsiteLegalProfiles')) CREATE UNIQUE INDEX "IX_WebsiteLegalProfiles_CustomerId" ON "WebsiteLegalProfiles" ("CustomerId");""");
 
+    // Integrations-API-Schlüssel (GentleHub): purely additive — one new table "IntegrationApiKeys".
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='IntegrationApiKeys')
+    BEGIN
+        CREATE TABLE "IntegrationApiKeys" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "Name" NVARCHAR(100) NOT NULL,
+            "Prefix" NVARCHAR(20) NOT NULL,
+            "KeyHash" NVARCHAR(64) NOT NULL,
+            "LastUsedAt" DATETIMEOFFSET(7) NULL,
+            "RevokedAt" DATETIMEOFFSET(7) NULL,
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_IntegrationApiKeys" PRIMARY KEY ("Id")
+        );
+    END
+    """);
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_IntegrationApiKeys_KeyHash' AND object_id=OBJECT_ID('IntegrationApiKeys')) CREATE UNIQUE INDEX "IX_IntegrationApiKeys_KeyHash" ON "IntegrationApiKeys" ("KeyHash");""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)
@@ -829,6 +856,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 app.UseMiddleware<GentleSuite.API.Middleware.GentleBookApiKeyMiddleware>();
+app.UseMiddleware<GentleSuite.API.Middleware.IntegrationApiKeyMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
