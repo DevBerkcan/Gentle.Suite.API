@@ -154,7 +154,7 @@ builder.Services.AddRateLimiter(o =>
         _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     // GentleHub-Integration: großzügig für normalen Betrieb, bremst aber Schleifen in einem fehlerhaften Client.
     o.AddPolicy("integration-hub", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
-        ctx.Request.Headers["X-Api-Key"].FirstOrDefault() is { Length: > 12 } k ? k[..12] : Ip(ctx),
+        GentleSuite.API.Middleware.IntegrationApiKeyMiddleware.ProvidedKey(ctx) is { Length: > 12 } k ? k[..12] : Ip(ctx),
         _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     o.AddPolicy("public-mandate-write", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(Ip(ctx),
         _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
