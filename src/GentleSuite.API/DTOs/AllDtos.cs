@@ -288,7 +288,9 @@ public record CustomerSubscriptionDto(Guid Id, Guid PlanId, string PlanName, Gui
     // Letzter Einrichtungsversuch des Kunden über /payment/setup/{token} (LastSetupError = null → erfolgreich bzw. kein Fehler)
     DateTimeOffset? LastSetupAttemptAt = null, string? LastSetupAttemptMethod = null, string? LastSetupError = null, int? SetupAttemptCount = null,
     // Fester Abbuchungstag (1–28) als Ausnahme; null = Standard (Einzug zum Periodenbeginn)
-    int? CollectionDayOfMonth = null);
+    int? CollectionDayOfMonth = null,
+    // Vertragsnachweis außerhalb von Gentlesuite (statt unterschriebenem Agenturvertrag)
+    string? ExternalContractReference = null, DateTimeOffset? ExternalContractConfirmedAt = null, string? ExternalContractConfirmedBy = null);
 /// <summary>Date = actual collection day (PaymentCollectionDueDate of an issued invoice, else forecast); Amount = gross.</summary>
 public record BillingOccurrenceDto(Guid SubscriptionId, string CustomerName, string Title, bool IsInstallmentPlan, DateTimeOffset Date, decimal Amount, bool IsLastInstallment, string? InvoiceNumber = null, bool IsForecast = true);
 public record BillingCalendarDto(List<BillingOccurrenceDto> Occurrences, decimal TotalNext30Days, decimal TotalNext90Days);
@@ -302,6 +304,8 @@ public record RescheduleCollectionRequest(DateOnly Date, string? Reason = null, 
 /// <summary>PUT /api/subscriptions/{id}/collection-day — fester Abbuchungstag 1–28 oder null (= Standard, Periodenbeginn). Admin.
 /// Gilt nur für künftig erstellte Rechnungen; bereits erstellte Rechnungen behalten ihren Einzugstermin.</summary>
 public record SetCollectionDayRequest(int? Day);
+/// <summary>PUT /api/subscriptions/{id}/external-contract — Reference null/leer entfernt den Nachweis wieder.</summary>
+public record SetExternalContractRequest(string? Reference);
 public record UpdateSubscriptionStatusRequest(SubscriptionStatus Status, string? Reason = null);
 public record MollieMandateCheckoutDto(string CheckoutUrl, string PaymentId, string Status);
 public record MandateEmailResultDto(bool Sent, string? Recipient, DateTimeOffset? SentAt, string Status, string? Error);
