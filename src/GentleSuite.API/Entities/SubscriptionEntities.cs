@@ -130,6 +130,13 @@ public class CustomerSubscription : BaseEntity
     /// <summary>Fester Abbuchungstag (1–28) als Ausnahme; null = Einzug zum Periodenbeginn. Verschiebt nur den
     /// Einzugstermin neu erstellter Rechnungen (CollectionSchedule), nie Anker oder Leistungs-/Rechnungsperiode.</summary>
     public int? CollectionDayOfMonth { get; set; }
+
+    /// <summary>Vertragsnachweis außerhalb von Gentlesuite (z. B. "Legal-Cockpit-Agenturvertrag vom 17.02.2026"),
+    /// vom Admin bestätigt. Ersetzt den in Gentlesuite unterschriebenen Agenturvertrag als Voraussetzung für die
+    /// Abrechnung (IsSubscriptionContractSatisfiedAsync).</summary>
+    public string? ExternalContractReference { get; set; }
+    public DateTimeOffset? ExternalContractConfirmedAt { get; set; }
+    public string? ExternalContractConfirmedBy { get; set; }
 }
 
 public class WorkScopeRule : BaseEntity

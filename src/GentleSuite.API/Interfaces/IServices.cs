@@ -177,6 +177,8 @@ public interface ISubscriptionService
     Task<CustomerSubscriptionDto> CreateManualInstallmentPlanAsync(CreateManualInstallmentPlanRequest req, CancellationToken ct = default);
     Task<BillingCalendarDto> GetBillingCalendarAsync(int days, CancellationToken ct = default);
     Task<CustomerSubscriptionDto> SetCollectionDayAsync(Guid subscriptionId, SetCollectionDayRequest req, CancellationToken ct = default);
+    /// <summary>Records (or removes) that the contract for this subscription exists outside Gentlesuite.</summary>
+    Task<CustomerSubscriptionDto> SetExternalContractAsync(Guid subscriptionId, SetExternalContractRequest req, CancellationToken ct = default);
 }
 
 public interface IMolliePaymentService

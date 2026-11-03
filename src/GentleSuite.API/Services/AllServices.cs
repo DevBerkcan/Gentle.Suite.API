@@ -581,8 +581,8 @@ public class ProjectServiceImpl : IProjectService
 // === Subscription ===
 public class SubscriptionServiceImpl : ISubscriptionService
 {
-    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IInvoiceService _invoiceSvc; private readonly IMolliePaymentService _mollie; private readonly ILogger<SubscriptionServiceImpl> _logger; private readonly IConfiguration _configuration; private readonly IActivityLogService _activity;
-    public SubscriptionServiceImpl(AppDbContext db, IMapper m, IInvoiceService invoiceSvc, IMolliePaymentService mollie, ILogger<SubscriptionServiceImpl> logger, IConfiguration configuration, IActivityLogService activity) { _db = db; _m = m; _invoiceSvc = invoiceSvc; _mollie = mollie; _logger = logger; _configuration = configuration; _activity = activity; }
+    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IInvoiceService _invoiceSvc; private readonly IMolliePaymentService _mollie; private readonly ILogger<SubscriptionServiceImpl> _logger; private readonly IConfiguration _configuration; private readonly IActivityLogService _activity; private readonly ICurrentUserService _cu;
+    public SubscriptionServiceImpl(AppDbContext db, IMapper m, IInvoiceService invoiceSvc, IMolliePaymentService mollie, ILogger<SubscriptionServiceImpl> logger, IConfiguration configuration, IActivityLogService activity, ICurrentUserService cu) { _db = db; _m = m; _invoiceSvc = invoiceSvc; _mollie = mollie; _logger = logger; _configuration = configuration; _activity = activity; _cu = cu; }
     private int PreNotificationDays => Math.Max(1, _configuration.GetValue<int?>("Mollie:PreNotificationDays") ?? 14);
     /// <summary>Subscriptions incl. plan + customer, ignoring the soft-delete filter on the plan (a deleted plan
     /// must not make a subscription invisible) while still hiding deleted subscriptions/customers.</summary>
@@ -671,7 +671,10 @@ public class SubscriptionServiceImpl : ISubscriptionService
                 LastSetupAttemptAt = s.LastSetupAttemptAt,
                 LastSetupAttemptMethod = s.LastSetupAttemptMethod,
                 LastSetupError = s.LastSetupError,
-                SetupAttemptCount = s.SetupAttemptCount
+                SetupAttemptCount = s.SetupAttemptCount,
+                ExternalContractReference = s.ExternalContractReference,
+                ExternalContractConfirmedAt = s.ExternalContractConfirmedAt,
+                ExternalContractConfirmedBy = s.ExternalContractConfirmedBy
             };
         }).ToList();
     }
@@ -749,6 +752,28 @@ public class SubscriptionServiceImpl : ISubscriptionService
     /// <summary>Admin: fester Abbuchungstag (1–28) bzw. null = Standard (Einzug zum Periodenbeginn). Ändert nur die Spalte
     /// CollectionDayOfMonth — Anker, NextBillingDate und bereits erstellte Rechnungen (inkl. deren Einzugstermin) bleiben
     /// unverändert; der Tag gilt für alle danach erstellten Rechnungen (CollectionSchedule im SubscriptionBillingJob).</summary>
+    public async Task<CustomerSubscriptionDto> SetExternalContractAsync(Guid sid, SetExternalContractRequest req, CancellationToken ct)
+    {
+        var reference = string.IsNullOrWhiteSpace(req.Reference) ? null : req.Reference.Trim();
+        if (reference is { Length: < 5 or > 300 })
+            throw new ArgumentException("Bitte den Vertrag genauer bezeichnen (5–300 Zeichen), z. B. „Agenturvertrag vom 17.02.2026“.");
+        var s = await SubscriptionsQuery().FirstOrDefaultAsync(x => x.Id == sid, ct)
+            ?? throw new KeyNotFoundException("Abonnement wurde nicht gefunden.");
+        if (s.ExternalContractReference == reference) return await GetByIdAsync(sid, ct);
+
+        s.ExternalContractReference = reference;
+        s.ExternalContractConfirmedAt = reference == null ? null : DateTimeOffset.UtcNow;
+        s.ExternalContractConfirmedBy = reference == null ? null : _cu.UserName;
+        await _db.SaveChangesAsync(ct);
+
+        var title = s.IsInstallmentPlan ? (s.InstallmentSourceTitle ?? s.Plan.Name) : s.Plan.Name;
+        await _activity.LogAsync(s.CustomerId, "Subscription", s.Id, reference == null ? "ExternalContractRemoved" : "ExternalContractConfirmed",
+            reference == null
+                ? $"Externer Vertragsnachweis für „{title}“ entfernt"
+                : $"Vertrag für „{title}“ liegt extern vor: {reference} (bestätigt von {_cu.UserName ?? "Admin"})", ct: ct);
+        return await GetByIdAsync(sid, ct);
+    }
+
     public async Task<CustomerSubscriptionDto> SetCollectionDayAsync(Guid sid, SetCollectionDayRequest req, CancellationToken ct)
     {
         if (req.Day != null && !CollectionSchedule.IsValidDay(req.Day))
@@ -1455,7 +1480,7 @@ public class AgencyContractServiceImpl : IAgencyContractService
         }
 
         var subs = await _db.CustomerSubscriptions.Include(s => s.Customer).Include(s => s.Plan)
-            .Where(s => s.RequiresAgencyContract && (s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.PendingConfirmation))
+            .Where(s => s.RequiresAgencyContract && s.ExternalContractReference == null && (s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.PendingConfirmation))
             .ToListAsync(ct);
         var subIds = subs.Select(s => s.Id).ToList();
         var subContracts = await _db.AgencyContracts.Where(c => c.SubscriptionId != null && subIds.Contains(c.SubscriptionId.Value)).ToListAsync(ct);
@@ -1666,8 +1691,8 @@ public class AgencyContractServiceImpl : IAgencyContractService
 
     public async Task<bool> IsSubscriptionContractSatisfiedAsync(Guid subscriptionId, CancellationToken ct)
     {
-        var sub = await _db.CustomerSubscriptions.Where(s => s.Id == subscriptionId).Select(s => new { s.RequiresAgencyContract, s.ContractQuoteId }).FirstOrDefaultAsync(ct);
-        if (sub == null || !sub.RequiresAgencyContract) return true;
+        var sub = await _db.CustomerSubscriptions.Where(s => s.Id == subscriptionId).Select(s => new { s.RequiresAgencyContract, s.ContractQuoteId, s.ExternalContractReference }).FirstOrDefaultAsync(ct);
+        if (sub == null || !sub.RequiresAgencyContract || sub.ExternalContractReference != null) return true;
         var hasDirect = await _db.AgencyContracts.AnyAsync(c => c.SubscriptionId == subscriptionId && c.Status == AgencyContractStatus.FullyExecuted, ct);
         if (hasDirect) return true;
         if (sub.ContractQuoteId != null)

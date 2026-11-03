@@ -171,7 +171,8 @@ public class MappingProfile : Profile
                 null, null, null, false, null,
                 s.MollieMandateMethod, s.MandateAccountLast4, null, 0, 0, 0m,
                 s.LastSetupAttemptAt, s.LastSetupAttemptMethod, s.LastSetupError, s.SetupAttemptCount,
-                s.CollectionDayOfMonth
+                s.CollectionDayOfMonth,
+                s.ExternalContractReference, s.ExternalContractConfirmedAt, s.ExternalContractConfirmedBy
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()
