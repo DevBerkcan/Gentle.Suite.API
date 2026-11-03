@@ -11,8 +11,28 @@ public class NumberSequenceServiceImpl : INumberSequenceService
     private readonly AppDbContext _db;
     public NumberSequenceServiceImpl(AppDbContext db) { _db = db; }
 
+    /// <summary>Belegnummern, die jedes Geschäftsjahr neu bei 1 beginnen. Ab 2027 tragen sie das Jahr in der Nummer
+    /// (RE-2027-0001) — ohne Jahr würde der Neustart Nummern aus dem Vorjahr wiederholen (eindeutige Rechnungsnummer, § 14 UStG).</summary>
+    private static readonly HashSet<string> YearlyDocumentTypes = new(StringComparer.OrdinalIgnoreCase)
+        { "Quote", "Invoice", "SubscriptionInvoice", "InstallmentInvoice", "CancellationInvoice" };
+
+    /// <summary>Vertragsnummern laufen über die Jahre fort (AV-0001, AV-0002, …) — Verträge werden ins neue Jahr übernommen.</summary>
+    private const int ContinuousSequenceYear = 2026;
+    private static readonly HashSet<string> ContinuousTypes = new(StringComparer.OrdinalIgnoreCase) { "AgencyContract" };
+
     public async Task<string> NextNumberAsync(string entityType, int year, string defaultPrefix, int defaultPadding, CancellationToken ct, bool includeYear = true)
     {
+        if (YearlyDocumentTypes.Contains(entityType.Trim()))
+        {
+            // Geschäftsjahr nach Berliner Zeit (in der Silvesternacht ist UTC noch im alten Jahr).
+            year = FiscalYear.Current;
+            includeYear = includeYear || year >= FiscalYear.FirstYearWithYearInNumber;
+        }
+        else if (ContinuousTypes.Contains(entityType.Trim()))
+        {
+            year = ContinuousSequenceYear;
+            includeYear = false;
+        }
         const int maxRetries = 3;
         for (var attempt = 1; attempt <= maxRetries; attempt++)
         {

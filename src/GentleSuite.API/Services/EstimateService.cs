@@ -156,6 +156,7 @@ public class EstimateServiceImpl : IEstimateService
     public async Task<PagedResult<EstimateListDto>> GetPagedAsync(PaginationParams p, Guid? customerId, EstimateStatus? status, CancellationToken ct)
     {
         var q = _db.Estimates.Include(e => e.Customer).AsQueryable();
+        if (p.Year is { } year) { var (from, to) = FiscalYear.Range(year); q = q.Where(e => e.Date >= from && e.Date < to); }
         if (customerId.HasValue) q = q.Where(e => e.CustomerId == customerId.Value);
         if (status.HasValue) q = q.Where(e => e.Status == status.Value);
         if (!string.IsNullOrWhiteSpace(p.Search))
@@ -235,6 +236,7 @@ public class EstimateServiceImpl : IEstimateService
     {
         var e = new Estimate();
         await Apply(e, req, ct);
+        FiscalYear.EnsureOpen(e.Date, "eine Schätzung");
         if (!req.Status.HasValue) e.Status = EstimateStatus.Draft;
         e.EstimateNumber = await _seq.NextNumberAsync("Estimate", DateTime.UtcNow.Year, "SC", 3, ct, includeYear: true);
         _db.Estimates.Add(e);
@@ -246,7 +248,9 @@ public class EstimateServiceImpl : IEstimateService
     public async Task<EstimateDto> UpdateAsync(Guid id, SaveEstimateRequest req, CancellationToken ct)
     {
         var e = await _db.Estimates.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException();
+        FiscalYear.EnsureOpen(e.Date, "die Schätzung");
         await Apply(e, req, ct);
+        FiscalYear.EnsureOpen(e.Date, "eine Schätzung");
         await _db.SaveChangesAsync(ct);
         return (await GetByIdAsync(e.Id, ct))!;
     }
@@ -296,6 +300,7 @@ public class EstimateServiceImpl : IEstimateService
     {
         var e = await _db.Estimates.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException();
         if (e.Status != EstimateStatus.Draft) throw new InvalidOperationException("Nur Schätzungen im Entwurf können gelöscht werden.");
+        FiscalYear.EnsureOpen(e.Date, "die Schätzung");
         e.IsDeleted = true;
         e.DeletedAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync(ct);
