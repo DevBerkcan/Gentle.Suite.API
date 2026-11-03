@@ -121,7 +121,10 @@ public class HubIntegrationController(ICustomerService customers, IActivityLogSe
         var sourceNote = $"{KeyName}: {Opt(req.SourceNote) ?? "Anfrage"}";
         var created = await customers.CreateAsync(new CreateCustomerRequest(company, Opt(req.Industry), Opt(req.Website), null, null,
             new CreateContactRequest(firstName, lastName, email, Opt(req.Phone), Opt(req.Position), true), location, null,
-            OpportunitySource.Inbound, sourceNote.Length > 1000 ? sourceNote[..1000] : sourceNote), ct, sendWelcomeEmail: false);
+            OpportunitySource.Inbound, sourceNote.Length > 1000 ? sourceNote[..1000] : sourceNote), ct, sendWelcomeEmail: false,
+            // Same person (e-mail/phone) and same company were handled above; what is left is e.g. two private
+            // persons with the same name — different people, so both get their own customer record.
+            checkDuplicates: false);
         if (externalRef != null)
             await db.Customers.Where(c => c.Id == created.Id).ExecuteUpdateAsync(s => s.SetProperty(c => c.ExternalRef, externalRef), ct);
         await activity.LogAsync(created.Id, "Customer", created.Id, "Created", $"Angelegt über {KeyName}", ct);

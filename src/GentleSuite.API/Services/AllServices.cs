@@ -56,9 +56,9 @@ public class CustomerServiceImpl : ICustomerService
         return c == null ? null : _m.Map<CustomerDetailDto>(c);
     }
 
-    public async Task<CustomerDetailDto> CreateAsync(CreateCustomerRequest req, CancellationToken ct, bool sendWelcomeEmail = true)
+    public async Task<CustomerDetailDto> CreateAsync(CreateCustomerRequest req, CancellationToken ct, bool sendWelcomeEmail = true, bool checkDuplicates = true)
     {
-        var duplicate = await CheckDuplicateAsync(new DuplicateCheckRequest(req.CompanyName, req.PrimaryContact.Email, req.PrimaryContact.Phone), ct);
+        var duplicate = checkDuplicates ? await CheckDuplicateAsync(new DuplicateCheckRequest(req.CompanyName, req.PrimaryContact.Email, req.PrimaryContact.Phone), ct) : new DuplicateCheckResultDto(false, new());
         if (duplicate.HasDuplicate) throw new ArgumentException($"Dubletten erkannt ({string.Join(", ", duplicate.Matches.Select(m => m.MatchType).Distinct())}).");
 
         var year = DateTime.UtcNow.Year;
