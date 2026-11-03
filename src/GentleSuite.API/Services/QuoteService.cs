@@ -32,6 +32,7 @@ public class QuoteServiceImpl : IQuoteService
     {
         await QuoteLifecycle.ExpireAsync(_db, ct);
         var q = _db.Quotes.Include(x => x.Customer).Include(x => x.Lines).Where(x => x.IsCurrentVersion).AsQueryable();
+        if (p.Year is { } year) { var (from, to) = FiscalYear.Range(year); q = q.Where(x => x.CreatedAt >= from && x.CreatedAt < to); }
         if (status.HasValue) q = q.Where(x => x.Status == status.Value);
         if (customerId.HasValue) q = q.Where(x => x.CustomerId == customerId.Value);
         if (!string.IsNullOrWhiteSpace(p.Search)) q = q.Where(x => x.QuoteNumber.Contains(p.Search) || x.Customer.CompanyName.ToLower().Contains(p.Search.ToLower()));
@@ -158,6 +159,7 @@ public class QuoteServiceImpl : IQuoteService
         var quote = await _db.Quotes
             .AsNoTracking()
             .FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
+        FiscalYear.EnsureOpen(quote.CreatedAt, "das Angebot");
 
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Nur aktuelle Angebotsversionen sind bearbeitbar.");
         if (quote.Status != QuoteStatus.Draft) throw new InvalidOperationException("Only draft quotes can be edited");
@@ -200,6 +202,7 @@ public class QuoteServiceImpl : IQuoteService
             .FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
 
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Nur aktuelle Angebotsversionen koennen versendet werden.");
+        FiscalYear.EnsureOpen(quote.CreatedAt, "das Angebot");
         if (quote.Status is not (QuoteStatus.Draft or QuoteStatus.Sent or QuoteStatus.Viewed)) throw new InvalidOperationException("Bitte eine neue Angebotsversion erstellen.");
         if (req.ExpirationDays < 1 || req.ExpirationDays > 365) throw new ArgumentException("Die Gueltigkeit muss zwischen 1 und 365 Tagen liegen.");
         if (!quote.Lines.Any()) throw new ArgumentException("Ein Angebot ohne Positionen kann nicht versendet werden.");
@@ -278,6 +281,8 @@ public class QuoteServiceImpl : IQuoteService
     public async Task<QuoteDetailDto> DeactivateAsync(Guid id, CancellationToken ct)
     {
         await QuoteLifecycle.ExpireAsync(_db, ct);
+        var createdAt = await _db.Quotes.Where(q => q.Id == id).Select(q => (DateTimeOffset?)q.CreatedAt).FirstOrDefaultAsync(ct) ?? throw new KeyNotFoundException();
+        FiscalYear.EnsureOpen(createdAt, "das Angebot");
         var changed = await _db.Quotes.Where(q => q.Id == id && q.IsCurrentVersion
             && (q.Status == QuoteStatus.Draft || q.Status == QuoteStatus.Sent || q.Status == QuoteStatus.Viewed))
             .ExecuteUpdateAsync(s => s.SetProperty(q => q.Status, QuoteStatus.Inactive)
@@ -664,6 +669,7 @@ public class QuoteServiceImpl : IQuoteService
     {
         var quote = await _db.Quotes.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Nur aktuelle Angebotsversionen sind bearbeitbar.");
+        FiscalYear.EnsureOpen(quote.CreatedAt, "das Angebot");
         if (quote.Status != QuoteStatus.Draft) throw new InvalidOperationException("Only draft quotes can be edited");
         var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
         if (req.Subject != null) quote.Subject = req.Subject;
@@ -685,6 +691,7 @@ public class QuoteServiceImpl : IQuoteService
     {
         var quote = await _db.Quotes.Include(q => q.Lines).FirstOrDefaultAsync(q => q.Id == id, ct) ?? throw new KeyNotFoundException();
         if (!quote.IsCurrentVersion) throw new InvalidOperationException("Historische Versionen koennen nicht geloescht werden.");
+        FiscalYear.EnsureOpen(quote.CreatedAt, "das Angebot");
         if (quote.Status != QuoteStatus.Draft) throw new InvalidOperationException("Only draft quotes can be deleted");
         _db.QuoteLines.RemoveRange(quote.Lines);
         _db.Quotes.Remove(quote);

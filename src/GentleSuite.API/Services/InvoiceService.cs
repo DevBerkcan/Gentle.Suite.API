@@ -29,6 +29,7 @@ public class InvoiceServiceImpl : IInvoiceService
     public async Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(PaginationParams p, InvoiceStatus? status, Guid? customerId, CancellationToken ct, string? kind = null)
     {
         var q = _db.Invoices.Include(i => i.Customer).Include(i => i.Lines).Include(i => i.Subscription).AsQueryable();
+        if (p.Year is { } year) { var (from, to) = FiscalYear.Range(year); q = q.Where(i => i.InvoiceDate >= from && i.InvoiceDate < to); }
         if (status.HasValue) q = q.Where(i => i.Status == status.Value);
         if (customerId.HasValue) q = q.Where(i => i.CustomerId == customerId.Value);
         if (!string.IsNullOrWhiteSpace(kind)) q = ApplyKindFilter(q, _db, kind);
@@ -339,6 +340,8 @@ public class InvoiceServiceImpl : IInvoiceService
     {
         var inv = await _db.Invoices.Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
         if (inv.IsFinalized || inv.Status != InvoiceStatus.Draft) throw new InvalidOperationException("Nur Entwurfsrechnungen koennen bearbeitet werden.");
+        FiscalYear.EnsureOpen(inv.InvoiceDate, "die Rechnung");
+        FiscalYear.EnsureOpen(req.InvoiceDate, "eine Rechnung");
         ValidateUpdateRequest(req);
         var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
         var taxMode = EnforceCompanyTaxMode(companyTaxMode, req.TaxMode);
@@ -421,6 +424,7 @@ public class InvoiceServiceImpl : IInvoiceService
     {
         var inv = await _db.Invoices.Include(i => i.Lines).FirstOrDefaultAsync(i => i.Id == id, ct) ?? throw new KeyNotFoundException();
         if (inv.IsFinalized) throw new InvalidOperationException("Already finalized");
+        FiscalYear.EnsureOpen(inv.InvoiceDate, "die Rechnung");
         var companyTaxMode = await _db.CompanySettings.Select(s => s.DefaultTaxMode).FirstOrDefaultAsync(ct);
         inv.TaxMode = EnforceCompanyTaxMode(companyTaxMode, inv.TaxMode);
         if (inv.TaxMode == TaxMode.SmallBusiness)

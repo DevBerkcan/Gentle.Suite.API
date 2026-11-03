@@ -7,7 +7,8 @@ public record LoginRequest(string Email, string Password);
 public record LoginResponse(string Token, string Email, string FullName, List<string> Roles, DateTimeOffset Expiry, string? UserId = null, string? AvatarUrl = null);
 
 // === Pagination ===
-public record PaginationParams(int Page = 1, int PageSize = 25, string? Search = null, string? SortBy = null, bool SortDesc = false);
+/// <summary>Year: optionaler Geschäftsjahr-Filter (Berliner Kalenderjahr) für Angebote, Rechnungen und Schätzungen.</summary>
+public record PaginationParams(int Page = 1, int PageSize = 25, string? Search = null, string? SortBy = null, bool SortDesc = false, int? Year = null);
 public record PagedResult<T>(List<T> Items, int TotalCount, int Page, int PageSize)
 {
     public int TotalPages => (int)Math.Ceiling(TotalCount / (double)PageSize);

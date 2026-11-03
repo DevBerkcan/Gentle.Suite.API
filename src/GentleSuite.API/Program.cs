@@ -162,6 +162,10 @@ builder.Services.AddRateLimiter(o =>
 
 var app = builder.Build();
 
+// Lokaler Test des Jahreswechsels: Datum für Geschäftsjahr/Nummernkreise simulieren. In Production nie aktiv.
+if (!app.Environment.IsProduction() && DateTimeOffset.TryParse(builder.Configuration["Testing:FiscalYearToday"], out var fiscalTestToday))
+    GentleSuite.Infrastructure.Services.FiscalYear.TestTodayOverride = fiscalTestToday;
+
 // Seed
 using (var scope = app.Services.CreateScope())
 {
