@@ -28,8 +28,8 @@ public class CurrentUserService : ICurrentUserService
 // === Customer ===
 public class CustomerServiceImpl : ICustomerService
 {
-    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IOnboardingService _ob; private readonly IEmailService _em; private readonly IActivityLogService _act; private readonly INumberSequenceService _seq; private readonly string _frontendBaseUrl;
-    public CustomerServiceImpl(AppDbContext db, IMapper m, IOnboardingService ob, IEmailService em, IActivityLogService act, INumberSequenceService seq, Microsoft.Extensions.Configuration.IConfiguration config) { _db = db; _m = m; _ob = ob; _em = em; _act = act; _seq = seq; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; }
+    private readonly AppDbContext _db; private readonly IMapper _m; private readonly IOnboardingService _ob; private readonly IEmailService _em; private readonly IActivityLogService _act; private readonly INumberSequenceService _seq; private readonly string _frontendBaseUrl; private readonly NoteSecretProtector _sec;
+    public CustomerServiceImpl(AppDbContext db, IMapper m, IOnboardingService ob, IEmailService em, IActivityLogService act, INumberSequenceService seq, Microsoft.Extensions.Configuration.IConfiguration config, NoteSecretProtector sec) { _sec = sec; _db = db; _m = m; _ob = ob; _em = em; _act = act; _seq = seq; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; }
 
     public async Task<PagedResult<CustomerListDto>> GetCustomersAsync(PaginationParams p, CustomerStatus? status, Guid? serviceId, CancellationToken ct)
     {
@@ -150,7 +150,7 @@ public class CustomerServiceImpl : ICustomerService
             c.VatId,
             _m.Map<List<ContactDto>>(c.Contacts),
             _m.Map<List<LocationDto>>(c.Locations),
-            _m.Map<List<CustomerNoteDto>>(c.Notes.OrderByDescending(n => n.CreatedAt).ToList()),
+            c.Notes.OrderByDescending(n => n.CreatedAt).Select(n => _m.Map<CustomerNoteDto>(n) with { Content = _sec.Unprotect(n.Content) }).ToList(),
             DateTimeOffset.UtcNow
         );
     }
@@ -280,11 +280,13 @@ public class CustomerServiceImpl : ICustomerService
 // === CustomerNote ===
 public class CustomerNoteServiceImpl : ICustomerNoteService
 {
-    private readonly AppDbContext _db; private readonly IMapper _m;
-    public CustomerNoteServiceImpl(AppDbContext db, IMapper m) { _db = db; _m = m; }
-    public async Task<List<CustomerNoteDto>> GetNotesAsync(Guid cid, CancellationToken ct) => _m.Map<List<CustomerNoteDto>>(await _db.CustomerNotes.Where(n => n.CustomerId == cid).OrderByDescending(n => n.IsPinned).ThenByDescending(n => n.CreatedAt).ToListAsync(ct));
-    public async Task<CustomerNoteDto> CreateAsync(Guid cid, CreateNoteRequest req, CancellationToken ct) { var n = new CustomerNote { CustomerId = cid, Title = req.Title, Content = req.Content, Type = req.Type, IsPinned = req.IsPinned }; _db.CustomerNotes.Add(n); await _db.SaveChangesAsync(ct); return _m.Map<CustomerNoteDto>(n); }
-    public async Task<CustomerNoteDto> UpdateAsync(Guid cid, Guid nid, UpdateNoteRequest req, CancellationToken ct) { var n = await _db.CustomerNotes.FirstOrDefaultAsync(x => x.Id == nid && x.CustomerId == cid, ct) ?? throw new KeyNotFoundException(); n.Title = req.Title; n.Content = req.Content; n.Type = req.Type; n.IsPinned = req.IsPinned; await _db.SaveChangesAsync(ct); return _m.Map<CustomerNoteDto>(n); }
+    private readonly AppDbContext _db; private readonly IMapper _m; private readonly NoteSecretProtector _sec;
+    public CustomerNoteServiceImpl(AppDbContext db, IMapper m, NoteSecretProtector sec) { _db = db; _m = m; _sec = sec; }
+    // Zugangsdaten liegen verschlüsselt in der DB; nach außen geht immer Klartext (nur für angemeldete Nutzer).
+    private CustomerNoteDto ToDto(CustomerNote n) => _m.Map<CustomerNoteDto>(n) with { Content = _sec.Unprotect(n.Content) };
+    public async Task<List<CustomerNoteDto>> GetNotesAsync(Guid cid, CancellationToken ct) => (await _db.CustomerNotes.Where(n => n.CustomerId == cid).OrderByDescending(n => n.IsPinned).ThenByDescending(n => n.CreatedAt).ToListAsync(ct)).Select(ToDto).ToList();
+    public async Task<CustomerNoteDto> CreateAsync(Guid cid, CreateNoteRequest req, CancellationToken ct) { var n = new CustomerNote { CustomerId = cid, Title = req.Title, Content = _sec.ForStorage(req.Type, req.Content), Type = req.Type, IsPinned = req.IsPinned }; _db.CustomerNotes.Add(n); await _db.SaveChangesAsync(ct); return ToDto(n); }
+    public async Task<CustomerNoteDto> UpdateAsync(Guid cid, Guid nid, UpdateNoteRequest req, CancellationToken ct) { var n = await _db.CustomerNotes.FirstOrDefaultAsync(x => x.Id == nid && x.CustomerId == cid, ct) ?? throw new KeyNotFoundException(); n.Title = req.Title; n.Content = _sec.ForStorage(req.Type, req.Content); n.Type = req.Type; n.IsPinned = req.IsPinned; await _db.SaveChangesAsync(ct); return ToDto(n); }
     public async Task DeleteAsync(Guid cid, Guid nid, CancellationToken ct) { var n = await _db.CustomerNotes.FirstOrDefaultAsync(x => x.Id == nid && x.CustomerId == cid, ct) ?? throw new KeyNotFoundException(); n.IsDeleted = true; await _db.SaveChangesAsync(ct); }
 }
 
@@ -1278,6 +1280,15 @@ public class CompanySettingsServiceImpl : ICompanySettingsService
         s.InvoiceIntroTemplate = req.InvoiceIntroTemplate; s.InvoiceOutroTemplate = req.InvoiceOutroTemplate;
         s.QuoteIntroTemplate = req.QuoteIntroTemplate; s.QuoteOutroTemplate = req.QuoteOutroTemplate;
         s.InvoicePaymentTermDays = req.InvoicePaymentTermDays; s.QuoteValidityDays = req.QuoteValidityDays;
+        // null = vom Client nicht gesendet → unverändert lassen; Leerstring = interne Kopie aus.
+        if (req.InternalCopyEmail != null)
+        {
+            var copy = req.InternalCopyEmail.Trim();
+            if (copy.Length > 0 && !System.Text.RegularExpressions.Regex.IsMatch(copy, @"^[^@\s]+@[^@\s]+\.[^@\s]+$")) throw new ArgumentException("Interne Kopie: ungültige E-Mail-Adresse.");
+            s.InternalCopyEmail = copy;
+        }
+        if (req.QuoteFollowUpDays is int d) s.QuoteFollowUpDays = Math.Clamp(d, 1, 60);
+        if (req.QuoteFollowUpEmailToCustomer is bool fe) s.QuoteFollowUpEmailToCustomer = fe;
         if (req.DefaultTaxMode == TaxMode.SmallBusiness)
         {
             var draftInvoices = await _db.Invoices.Include(i => i.Lines)

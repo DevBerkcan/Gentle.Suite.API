@@ -28,13 +28,19 @@ public class EmailServiceImpl : IEmailService
     private readonly SmtpSettings _smtp;
     private readonly ILogger<EmailServiceImpl> _log;
     private static readonly FluidParser _parser = new();
-    private const string HardcodedCc = "berkcan@gentlegroup.de";
 
     public EmailServiceImpl(AppDbContext db, IOptions<SmtpSettings> smtp, ILogger<EmailServiceImpl> log)
     {
         _db = db;
         _smtp = smtp.Value;
         _log = log;
+    }
+
+    /// <summary>Interne Kopie aller Kundenmails als BCC (für Kunden unsichtbar). Adresse in Einstellungen → Firma; leer = aus.</summary>
+    private async Task AddInternalCopyAsync(MimeMessage msg, CancellationToken ct)
+    {
+        var copy = await _db.CompanySettings.AsNoTracking().Select(s => s.InternalCopyEmail).FirstOrDefaultAsync(ct);
+        if (!string.IsNullOrWhiteSpace(copy) && MailboxAddress.TryParse(copy.Trim(), out var addr)) msg.Bcc.Add(addr);
     }
 
     private SecureSocketOptions GetSocketOptions()
@@ -66,7 +72,7 @@ public class EmailServiceImpl : IEmailService
             msg.From.Add(new MailboxAddress(_smtp.FromName, _smtp.FromEmail));
             msg.To.Add(MailboxAddress.Parse(to));
             if (!string.IsNullOrWhiteSpace(cc)) msg.Cc.Add(MailboxAddress.Parse(cc));
-            msg.Cc.Add(MailboxAddress.Parse(HardcodedCc));
+            await AddInternalCopyAsync(msg, ct);
             msg.Subject = subject;
             msg.Body = new BodyBuilder { HtmlBody = body }.ToMessageBody();
 
@@ -124,7 +130,7 @@ public class EmailServiceImpl : IEmailService
             var msg = new MimeMessage();
             msg.From.Add(new MailboxAddress(_smtp.FromName, _smtp.FromEmail));
             msg.To.Add(MailboxAddress.Parse(to));
-            msg.Cc.Add(MailboxAddress.Parse(HardcodedCc));
+            await AddInternalCopyAsync(msg, ct);
             msg.Subject = subject;
 
             var builder = new BodyBuilder { HtmlBody = body };

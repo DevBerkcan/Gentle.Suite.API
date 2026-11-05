@@ -39,6 +39,7 @@ public class Quote : GobdEntity
     public QuoteStatus Status { get; set; } = QuoteStatus.Draft;
     public DateTimeOffset? SentAt { get; set; }
     public DateTimeOffset? ViewedAt { get; set; }
+    public DateTimeOffset? FollowUpCreatedAt { get; set; } // Nachfass-Aufgabe angelegt (einmalig je Angebot)
     public DateTimeOffset? RespondedAt { get; set; }
     public DateTimeOffset? ExpiresAt { get; set; }
     public string? Subject { get; set; }
