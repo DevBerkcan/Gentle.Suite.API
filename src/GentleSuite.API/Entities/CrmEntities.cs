@@ -20,6 +20,8 @@ public class Opportunity : BaseEntity
     public Guid? QuoteId { get; set; }
     public Quote? Quote { get; set; }
     public string? Notes { get; set; }
+    public DateTimeOffset? ClosedAt { get; set; }   // tatsächlicher Abschluss (gewonnen/verloren)
+    public string? ExternalRef { get; set; }        // z. B. "GH-{AnfrageId}" – Idempotenz für GentleHub
 }
 
 public class SupportTicket : BaseEntity

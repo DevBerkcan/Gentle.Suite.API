@@ -429,6 +429,7 @@ public class ProjectsController(IProjectService svc, IHubContext<ProjectBoardHub
 public class SubscriptionsController(ISubscriptionService svc, IMolliePaymentService mollie, SubscriptionBillingJob billingJob) : ControllerBase
 {
     [HttpGet] public async Task<ActionResult<List<CustomerSubscriptionDto>>> All() => Ok(await svc.GetAllAsync());
+    [HttpGet("renewals")] public async Task<ActionResult<List<GentleSuite.Infrastructure.Services.RenewalItemDto>>> Renewals([FromServices] GentleSuite.Infrastructure.Services.RenewalService renewals, [FromQuery] int days = 60) => Ok(await renewals.GetUpcomingAsync(days));
     [HttpGet("plans")] public async Task<ActionResult<List<SubscriptionPlanDto>>> Plans() => Ok(await svc.GetPlansAsync());
     [HttpPost("plans")] public async Task<ActionResult<SubscriptionPlanDto>> CreatePlan(CreatePlanRequest req) => Ok(await svc.CreatePlanAsync(req));
     [HttpPut("plans/{id}")] public async Task<ActionResult<SubscriptionPlanDto>> UpdatePlan(Guid id, UpdatePlanRequest req) => Ok(await svc.UpdatePlanAsync(id, req));
@@ -952,6 +953,7 @@ public class OpportunitiesController(IOpportunityService svc) : ControllerBase
     [HttpGet("{id}")] public async Task<ActionResult<OpportunityDetailDto>> Get(Guid id) => Ok(await svc.GetByIdAsync(id));
     [HttpPost] public async Task<ActionResult<OpportunityDetailDto>> Create(CreateOpportunityRequest req) => Ok(await svc.CreateAsync(req));
     [HttpPut("{id}")] public async Task<ActionResult<OpportunityDetailDto>> Update(Guid id, UpdateOpportunityRequest req) => Ok(await svc.UpdateAsync(id, req));
+    [HttpGet("forecast")] public async Task<ActionResult<OpportunityForecastDto>> Forecast() => Ok(await svc.GetForecastAsync());
     [HttpPut("{id}/stage")] public async Task<ActionResult<OpportunityDetailDto>> UpdateStage(Guid id, UpdateOpportunityStageRequest req) => Ok(await svc.UpdateStageAsync(id, req));
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
 }

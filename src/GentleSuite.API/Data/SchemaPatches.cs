@@ -1,0 +1,692 @@
+﻿using GentleSuite.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
+
+namespace GentleSuite.API;
+
+/// <summary>
+/// Schema-Pflege beim Start: legt fehlende EF-Tabellen an und ergänzt neue Spalten/Tabellen idempotent per
+/// IF NOT EXISTS (nur additiv – es wird nie etwas gelöscht). Aus Program.cs ausgelagert, Inhalt unverändert.
+/// Neue Schemaänderungen bitte unten anhängen.
+/// </summary>
+public static class SchemaPatches
+{
+    public static async Task ApplyAsync(AppDbContext db)
+    {
+
+        // EnsureCreatedAsync() skips creation if ANY tables exist (e.g. Hangfire schema).
+        // Use targeted check: only create EF tables if AspNetUsers is missing.
+        var efCreator = db.Database.GetInfrastructure().GetRequiredService<IRelationalDatabaseCreator>();
+        var dbConn = db.Database.GetDbConnection();
+        if (dbConn.State != System.Data.ConnectionState.Open) await dbConn.OpenAsync();
+        await using (var chk = dbConn.CreateCommand())
+        {
+            chk.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='AspNetUsers' AND TABLE_SCHEMA='dbo'";
+            var efExists = Convert.ToInt32(await chk.ExecuteScalarAsync()) > 0;
+            if (!efExists) await efCreator.CreateTablesAsync();
+        }
+        // Profilbilder: purely additive — one new nullable column on AspNetUsers, no default, no data update.
+        // Deliberately the FIRST schema statement: every AspNetUsers query (incl. login) selects this column,
+        // so it must not be skipped if a later statement in this try-block throws.
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('AspNetUsers','AvatarPath') IS NULL ALTER TABLE "AspNetUsers" ADD "AvatarPath" NVARCHAR(512) NULL;""");
+        // Mollie-Überarbeitung: purely additive — new nullable columns + two new tables, no data update. Placed
+        // early for the same reason as AvatarPath: every CustomerSubscriptions/Customers/Invoices query selects
+        // these columns, so a later failing statement must not leave them missing.
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','MandateSetupToken') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "MandateSetupToken" NVARCHAR(64) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','MollieMandateMethod') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "MollieMandateMethod" NVARCHAR(32) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','MandateAccountLast4') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "MandateAccountLast4" NVARCHAR(8) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','BillingAnchorDate') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "BillingAnchorDate" DATETIMEOFFSET(7) NULL;""");
+        // Fehlgeschlagene Kunden-Einrichtungen sichtbar machen: purely additive — four new nullable columns, no default, no data update.
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','LastSetupAttemptAt') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "LastSetupAttemptAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','LastSetupAttemptMethod') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "LastSetupAttemptMethod" NVARCHAR(32) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','LastSetupError') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "LastSetupError" NVARCHAR(1000) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','SetupAttemptCount') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "SetupAttemptCount" INT NULL;""");
+        // Fester Abbuchungstag je Abo (1–28, Ausnahme): purely additive — one new nullable column, no default, no data update.
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','CollectionDayOfMonth') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "CollectionDayOfMonth" INT NULL;""");
+        // Externer Vertragsnachweis je Abo (rein additiv, nullable).
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','ExternalContractReference') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "ExternalContractReference" NVARCHAR(300) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','ExternalContractConfirmedAt') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "ExternalContractConfirmedAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','ExternalContractConfirmedBy') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "ExternalContractConfirmedBy" NVARCHAR(256) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_MandateSetupToken' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_MandateSetupToken" ON "CustomerSubscriptions" ("MandateSetupToken") WHERE "MandateSetupToken" IS NOT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Customers','MollieCustomerId') IS NULL ALTER TABLE "Customers" ADD "MollieCustomerId" NVARCHAR(64) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Customers','MollieMandateId') IS NULL ALTER TABLE "Customers" ADD "MollieMandateId" NVARCHAR(64) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Invoices','ChargedBackAt') IS NULL ALTER TABLE "Invoices" ADD "ChargedBackAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Invoices','ChargebackAmount') IS NULL ALTER TABLE "Invoices" ADD "ChargebackAmount" DECIMAL(18,2) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='InvoicePaymentAttempts')
+        BEGIN
+            CREATE TABLE "InvoicePaymentAttempts" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "InvoiceId" UNIQUEIDENTIFIER NOT NULL,
+                "MolliePaymentId" NVARCHAR(64) NOT NULL,
+                "Status" NVARCHAR(32) NOT NULL,
+                "FailureReason" NVARCHAR(1000) NULL,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_InvoicePaymentAttempts" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_InvoicePaymentAttempts_Invoices_InvoiceId" FOREIGN KEY ("InvoiceId") REFERENCES "Invoices" ("Id") ON DELETE CASCADE
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_InvoicePaymentAttempts_MolliePaymentId' AND object_id=OBJECT_ID('InvoicePaymentAttempts')) CREATE UNIQUE INDEX "IX_InvoicePaymentAttempts_MolliePaymentId" ON "InvoicePaymentAttempts" ("MolliePaymentId");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_InvoicePaymentAttempts_InvoiceId' AND object_id=OBJECT_ID('InvoicePaymentAttempts')) CREATE INDEX "IX_InvoicePaymentAttempts_InvoiceId" ON "InvoicePaymentAttempts" ("InvoiceId");""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='JobRunLogs')
+        BEGIN
+            CREATE TABLE "JobRunLogs" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "JobName" NVARCHAR(64) NOT NULL,
+                "StartedAt" DATETIMEOFFSET(7) NOT NULL,
+                "FinishedAt" DATETIMEOFFSET(7) NULL,
+                "Succeeded" BIT NOT NULL DEFAULT 0,
+                "InvoicesCreated" INT NOT NULL DEFAULT 0,
+                "CollectionsStarted" INT NOT NULL DEFAULT 0,
+                "Failures" INT NOT NULL DEFAULT 0,
+                "Updated" INT NOT NULL DEFAULT 0,
+                "Reference" NVARCHAR(128) NULL,
+                "Error" NVARCHAR(MAX) NULL,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_JobRunLogs" PRIMARY KEY ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_JobRunLogs_JobName_StartedAt' AND object_id=OBJECT_ID('JobRunLogs')) CREATE INDEX "IX_JobRunLogs_JobName_StartedAt" ON "JobRunLogs" ("JobName", "StartedAt");""");
+        // Lightweight schema evolution for existing volumes without migrations.
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='OnboardingWorkflows' AND COLUMN_NAME='ProjectId') ALTER TABLE "OnboardingWorkflows" ADD "ProjectId" UNIQUEIDENTIFIER NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_OnboardingWorkflows_ProjectId' AND object_id=OBJECT_ID('OnboardingWorkflows')) CREATE INDEX "IX_OnboardingWorkflows_ProjectId" ON "OnboardingWorkflows" ("ProjectId");""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='NumberSequences')
+        BEGIN
+            CREATE TABLE "NumberSequences" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "EntityType" NVARCHAR(MAX) NOT NULL,
+                "Year" INT NOT NULL,
+                "Prefix" NVARCHAR(MAX) NOT NULL,
+                "LastValue" INT NOT NULL DEFAULT 0,
+                "Padding" INT NOT NULL DEFAULT 4,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_NumberSequences" PRIMARY KEY ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_NumberSequences_EntityType_Year' AND object_id=OBJECT_ID('NumberSequences')) CREATE UNIQUE INDEX "IX_NumberSequences_EntityType_Year" ON "NumberSequences" ("EntityType", "Year");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='BillingPeriodStart') ALTER TABLE "Invoices" ADD "BillingPeriodStart" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='BillingPeriodEnd') ALTER TABLE "Invoices" ADD "BillingPeriodEnd" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ReminderStop') ALTER TABLE "Customers" ADD "ReminderStop" BIT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ReminderStop') ALTER TABLE "Invoices" ADD "ReminderStop" BIT NOT NULL DEFAULT 0;""");
+
+        // GentleBook integration: external-payment idempotency + tenant-to-customer mapping
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ExternalPaymentReference') ALTER TABLE "Invoices" ADD "ExternalPaymentReference" NVARCHAR(450) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='ExternalPaymentReference' AND CHARACTER_MAXIMUM_LENGTH=-1) ALTER TABLE "Invoices" ALTER COLUMN "ExternalPaymentReference" NVARCHAR(450) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='PaymentCollectionStatus') ALTER TABLE "Invoices" ADD "PaymentCollectionStatus" NVARCHAR(32) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='PaymentCollectionDueDate') ALTER TABLE "Invoices" ADD "PaymentCollectionDueDate" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieCustomerId') ALTER TABLE "CustomerSubscriptions" ADD "MollieCustomerId" NVARCHAR(64) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieMandateId') ALTER TABLE "CustomerSubscriptions" ADD "MollieMandateId" NVARCHAR(64) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieMandateStatus') ALTER TABLE "CustomerSubscriptions" ADD "MollieMandateStatus" NVARCHAR(32) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieFirstPaymentId') ALTER TABLE "CustomerSubscriptions" ADD "MollieFirstPaymentId" NVARCHAR(64) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieFirstPaymentStatus') ALTER TABLE "CustomerSubscriptions" ADD "MollieFirstPaymentStatus" NVARCHAR(32) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MollieMandateAttempt') ALTER TABLE "CustomerSubscriptions" ADD "MollieMandateAttempt" INT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateEmailSentAt') ALTER TABLE "CustomerSubscriptions" ADD "MandateEmailSentAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateEmailRecipient') ALTER TABLE "CustomerSubscriptions" ADD "MandateEmailRecipient" NVARCHAR(320) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateEmailStatus') ALTER TABLE "CustomerSubscriptions" ADD "MandateEmailStatus" NVARCHAR(32) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateEmailLastError') ALTER TABLE "CustomerSubscriptions" ADD "MandateEmailLastError" NVARCHAR(1000) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateEmailAttemptCount') ALTER TABLE "CustomerSubscriptions" ADD "MandateEmailAttemptCount" INT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractQuoteId') ALTER TABLE "CustomerSubscriptions" ADD "ContractQuoteId" UNIQUEIDENTIFIER NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractReference') ALTER TABLE "CustomerSubscriptions" ADD "ContractReference" NVARCHAR(128) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractVersion') ALTER TABLE "CustomerSubscriptions" ADD "ContractVersion" INT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractAcceptedAt') ALTER TABLE "CustomerSubscriptions" ADD "ContractAcceptedAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractAcceptedByName') ALTER TABLE "CustomerSubscriptions" ADD "ContractAcceptedByName" NVARCHAR(256) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractAcceptedByEmail') ALTER TABLE "CustomerSubscriptions" ADD "ContractAcceptedByEmail" NVARCHAR(320) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractAcceptedIpAddress') ALTER TABLE "CustomerSubscriptions" ADD "ContractAcceptedIpAddress" NVARCHAR(64) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='AgreedMonthlyPrice') ALTER TABLE "CustomerSubscriptions" ADD "AgreedMonthlyPrice" DECIMAL(18,2) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractBillingCycle') ALTER TABLE "CustomerSubscriptions" ADD "ContractBillingCycle" INT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='BusinessCustomerConfirmed') ALTER TABLE "CustomerSubscriptions" ADD "BusinessCustomerConfirmed" BIT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='BusinessCustomerConfirmedAt') ALTER TABLE "CustomerSubscriptions" ADD "BusinessCustomerConfirmedAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='B2bAuthorityConfirmed') ALTER TABLE "Quotes" ADD "B2bAuthorityConfirmed" BIT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_CustomerSubscriptions_Quotes_ContractQuoteId') ALTER TABLE "CustomerSubscriptions" ADD CONSTRAINT "FK_CustomerSubscriptions_Quotes_ContractQuoteId" FOREIGN KEY ("ContractQuoteId") REFERENCES "Quotes" ("Id");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_ContractQuoteId' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_ContractQuoteId" ON "CustomerSubscriptions" ("ContractQuoteId") WHERE "ContractQuoteId" IS NOT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Invoices_ExternalPaymentReference' AND object_id=OBJECT_ID('Invoices')) CREATE UNIQUE INDEX "IX_Invoices_ExternalPaymentReference" ON "Invoices" ("ExternalPaymentReference") WHERE "ExternalPaymentReference" IS NOT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ExternalRef') ALTER TABLE "Customers" ADD "ExternalRef" NVARCHAR(450) NULL;""");
+        // NVARCHAR(MAX) cannot be used as a unique-index key column in SQL Server — this narrows
+        // any column created by an older deploy before the index below is (re-)created.
+        await db.Database.ExecuteSqlRawAsync("""IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='ExternalRef' AND CHARACTER_MAXIMUM_LENGTH=-1) ALTER TABLE "Customers" ALTER COLUMN "ExternalRef" NVARCHAR(450) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Customers_ExternalRef' AND object_id=OBJECT_ID('Customers')) CREATE UNIQUE INDEX "IX_Customers_ExternalRef" ON "Customers" ("ExternalRef") WHERE "ExternalRef" IS NOT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ProjectBoardTasks')
+        BEGIN
+            CREATE TABLE "ProjectBoardTasks" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "ProjectId" UNIQUEIDENTIFIER NOT NULL,
+                "Title" NVARCHAR(MAX) NOT NULL,
+                "Description" NVARCHAR(MAX) NULL,
+                "Status" INT NOT NULL,
+                "SortOrder" INT NOT NULL DEFAULT 0,
+                "AssigneeName" NVARCHAR(MAX) NULL,
+                "DueDate" DATETIMEOFFSET(7) NULL,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_ProjectBoardTasks" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_ProjectBoardTasks_Projects_ProjectId" FOREIGN KEY ("ProjectId") REFERENCES "Projects" ("Id") ON DELETE CASCADE
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectBoardTasks_ProjectId_Status_SortOrder' AND object_id=OBJECT_ID('ProjectBoardTasks')) CREATE INDEX "IX_ProjectBoardTasks_ProjectId_Status_SortOrder" ON "ProjectBoardTasks" ("ProjectId", "Status", "SortOrder");""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ProjectTeamMembers')
+        BEGIN
+            CREATE TABLE "ProjectTeamMembers" (
+                "ProjectId" UNIQUEIDENTIFIER NOT NULL,
+                "TeamMemberId" UNIQUEIDENTIFIER NOT NULL,
+                CONSTRAINT "PK_ProjectTeamMembers" PRIMARY KEY ("ProjectId", "TeamMemberId"),
+                CONSTRAINT "FK_ProjectTeamMembers_Projects_ProjectId" FOREIGN KEY ("ProjectId") REFERENCES "Projects" ("Id") ON DELETE CASCADE,
+                CONSTRAINT "FK_ProjectTeamMembers_TeamMembers_TeamMemberId" FOREIGN KEY ("TeamMemberId") REFERENCES "TeamMembers" ("Id") ON DELETE CASCADE
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectTeamMembers_TeamMemberId' AND object_id=OBJECT_ID('ProjectTeamMembers')) CREATE INDEX "IX_ProjectTeamMembers_TeamMemberId" ON "ProjectTeamMembers" ("TeamMemberId");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='QuoteGroupId') ALTER TABLE "Quotes" ADD "QuoteGroupId" UNIQUEIDENTIFIER NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='IsCurrentVersion') ALTER TABLE "Quotes" ADD "IsCurrentVersion" BIT NOT NULL DEFAULT 1;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='QuoteLines' AND COLUMN_NAME='DiscountPercent') ALTER TABLE "QuoteLines" ADD "DiscountPercent" DECIMAL(18,2) NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""UPDATE "Quotes" SET "QuoteGroupId" = "Id" WHERE "QuoteGroupId" IS NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Quotes_QuoteGroupId_Version' AND object_id=OBJECT_ID('Quotes')) CREATE UNIQUE INDEX "IX_Quotes_QuoteGroupId_Version" ON "Quotes" ("QuoteGroupId", "Version");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Quotes_QuoteGroupId_IsCurrentVersion' AND object_id=OBJECT_ID('Quotes')) CREATE INDEX "IX_Quotes_QuoteGroupId_IsCurrentVersion" ON "Quotes" ("QuoteGroupId", "IsCurrentVersion") WHERE "IsCurrentVersion" = 1;""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Invoices_SubscriptionId_BillingPeriodStart_BillingPeriodEnd' AND object_id=OBJECT_ID('Invoices'))
+            CREATE UNIQUE INDEX "IX_Invoices_SubscriptionId_BillingPeriodStart_BillingPeriodEnd"
+            ON "Invoices" ("SubscriptionId", "BillingPeriodStart", "BillingPeriodEnd")
+            WHERE "SubscriptionId" IS NOT NULL;
+        """);
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ReminderSettings')
+        BEGIN
+            CREATE TABLE "ReminderSettings" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "Level1Days" INT NOT NULL DEFAULT 7,
+                "Level2Days" INT NOT NULL DEFAULT 14,
+                "Level3Days" INT NOT NULL DEFAULT 21,
+                "Level1Fee" DECIMAL(18,2) NOT NULL DEFAULT 0,
+                "Level2Fee" DECIMAL(18,2) NOT NULL DEFAULT 0,
+                "Level3Fee" DECIMAL(18,2) NOT NULL DEFAULT 0,
+                "AnnualInterestPercent" DECIMAL(18,2) NOT NULL DEFAULT 0,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_ReminderSettings" PRIMARY KEY ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM "ReminderSettings")
+            INSERT INTO "ReminderSettings" ("Id","Level1Days","Level2Days","Level3Days","Level1Fee","Level2Fee","Level3Fee","AnnualInterestPercent","CreatedAt","IsDeleted")
+            VALUES ('00000000-0000-0000-0000-000000000001',7,14,21,0,0,0,0,SYSDATETIMEOFFSET(),0);
+        """);
+
+    await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='Type')
+        ALTER TABLE "Invoices" ADD "Type" INT NOT NULL DEFAULT 0;
+    """);
+
+
+            await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='SubscriptionPlans' AND COLUMN_NAME='Category') ALTER TABLE "SubscriptionPlans" ADD "Category" INT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='OnboardingToken') ALTER TABLE "Customers" ADD "OnboardingToken" UNIQUEIDENTIFIER NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='OnboardingIntakeDone') ALTER TABLE "Customers" ADD "OnboardingIntakeDone" BIT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ContractDurationMonths') ALTER TABLE "CustomerSubscriptions" ADD "ContractDurationMonths" INT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='ConfirmedAt') ALTER TABLE "CustomerSubscriptions" ADD "ConfirmedAt" DATETIMEOFFSET NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='IntegrationSettings')
+        CREATE TABLE "IntegrationSettings" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "PayPalClientId" NVARCHAR(512) NULL,
+            "PayPalClientSecret" NVARCHAR(512) NULL,
+            "PayPalEnabled" BIT NOT NULL DEFAULT 0,
+            "PayPalLastSync" DATETIMEOFFSET NULL,
+            "GoCardlessSecretId" NVARCHAR(512) NULL,
+            "GoCardlessSecretKey" NVARCHAR(512) NULL,
+            "BankRequisitionId" NVARCHAR(512) NULL,
+            "BankAccountId" NVARCHAR(512) NULL,
+            "BankEnabled" BIT NOT NULL DEFAULT 0,
+            "BankLastSync" DATETIMEOFFSET NULL,
+            "CreatedAt" DATETIMEOFFSET NOT NULL DEFAULT GETUTCDATE(),
+            "UpdatedAt" DATETIMEOFFSET NOT NULL DEFAULT GETUTCDATE(),
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            CONSTRAINT "PK_IntegrationSettings" PRIMARY KEY ("Id")
+        );
+        """);
+
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='CustomerDocuments')
+        CREATE TABLE "CustomerDocuments" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "CustomerId" UNIQUEIDENTIFIER NOT NULL,
+            "FileName" NVARCHAR(512) NOT NULL,
+            "ContentType" NVARCHAR(256) NOT NULL,
+            "FileSizeBytes" BIGINT NOT NULL DEFAULT 0,
+            "StoragePath" NVARCHAR(1024) NOT NULL,
+            "Notes" NVARCHAR(MAX) NULL,
+            "CreatedAt" DATETIMEOFFSET NOT NULL DEFAULT GETUTCDATE(),
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET NULL,
+            CONSTRAINT "PK_CustomerDocuments" PRIMARY KEY ("Id"),
+            CONSTRAINT "FK_CustomerDocuments_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id") ON DELETE CASCADE
+        );
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerDocuments_CustomerId' AND object_id=OBJECT_ID('CustomerDocuments')) CREATE INDEX "IX_CustomerDocuments_CustomerId" ON "CustomerDocuments" ("CustomerId");""");
+
+        // Feature: Projektbudget
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Projects' AND COLUMN_NAME='BudgetHours') ALTER TABLE "Projects" ADD "BudgetHours" DECIMAL(10,2) NULL;""");
+
+        // Feature: Wiederkehrende Ausgaben
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Expenses' AND COLUMN_NAME='IsRecurring') ALTER TABLE "Expenses" ADD "IsRecurring" BIT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Expenses' AND COLUMN_NAME='RecurringInterval') ALTER TABLE "Expenses" ADD "RecurringInterval" INT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Expenses' AND COLUMN_NAME='RecurringNextDate') ALTER TABLE "Expenses" ADD "RecurringNextDate" DATETIMEOFFSET NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Expenses' AND COLUMN_NAME='RecurringParentId') ALTER TABLE "Expenses" ADD "RecurringParentId" UNIQUEIDENTIFIER NULL;""");
+
+        // Firmendaten aus Referenz-Rechnung immer aktuell halten
+        await db.Database.ExecuteSqlRawAsync("""
+            UPDATE "CompanySettings" SET
+                "CompanyName"       = 'Gentle Group',
+                "LegalName"         = 'Berk-Can Atesoglu',
+                "Street"            = 'Girardetstraße 17',
+                "ZipCode"           = '42109',
+                "City"              = 'Wuppertal',
+                "Country"           = 'Deutschland',
+                "Phone"             = '01754701892',
+                "Email"             = 'office@gentlegroup.de',
+                "Website"           = 'www.gentlegroup.de',
+                "TaxId"             = '133/5008/7238',
+                "BankName"          = 'Postbank Ndl der Deutsche Bank',
+                "Iban"              = 'DE16 1001 0010 0947 7181 03',
+                "ManagingDirector"  = 'Atesoglu'
+            WHERE 1=1
+        """);
+
+        // Feature: robuste Mollie-Einzugswiederholung + Eskalation bei endgültigem Fehlschlag
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Invoices' AND COLUMN_NAME='CollectionAttemptCount') ALTER TABLE "Invoices" ADD "CollectionAttemptCount" INT NOT NULL DEFAULT 0;""");
+
+        // Feature: Serienrechnung direkt aus Angebotsposition (Plan-Link auf QuoteLine, mehrere Abos je Angebot)
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='QuoteLines' AND COLUMN_NAME='SubscriptionPlanId') ALTER TABLE "QuoteLines" ADD "SubscriptionPlanId" UNIQUEIDENTIFIER NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_QuoteLines_SubscriptionPlans_SubscriptionPlanId') ALTER TABLE "QuoteLines" ADD CONSTRAINT "FK_QuoteLines_SubscriptionPlans_SubscriptionPlanId" FOREIGN KEY ("SubscriptionPlanId") REFERENCES "SubscriptionPlans" ("Id");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='QuoteLineId') ALTER TABLE "CustomerSubscriptions" ADD "QuoteLineId" UNIQUEIDENTIFIER NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_CustomerSubscriptions_QuoteLines_QuoteLineId') ALTER TABLE "CustomerSubscriptions" ADD CONSTRAINT "FK_CustomerSubscriptions_QuoteLines_QuoteLineId" FOREIGN KEY ("QuoteLineId") REFERENCES "QuoteLines" ("Id");""");
+        // Alter ContractQuoteId-Unique-Index erlaubte nur 1 Abo pro Angebot -- durch nicht-eindeutigen Index ersetzen,
+        // damit mehrere Plan-Positionen im selben Angebot je eine eigene Serienrechnung bekommen koennen.
+        await db.Database.ExecuteSqlRawAsync("""IF EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_ContractQuoteId' AND object_id=OBJECT_ID('CustomerSubscriptions') AND is_unique = 1) DROP INDEX "IX_CustomerSubscriptions_ContractQuoteId" ON "CustomerSubscriptions";""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_ContractQuoteId' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE INDEX "IX_CustomerSubscriptions_ContractQuoteId" ON "CustomerSubscriptions" ("ContractQuoteId");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_CustomerSubscriptions_QuoteLineId' AND object_id=OBJECT_ID('CustomerSubscriptions')) CREATE UNIQUE INDEX "IX_CustomerSubscriptions_QuoteLineId" ON "CustomerSubscriptions" ("QuoteLineId") WHERE "QuoteLineId" IS NOT NULL;""");
+
+        // Payment terms catalog + selection on quotes
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='PaymentTermOptions')
+        BEGIN
+            CREATE TABLE "PaymentTermOptions" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "Key" NVARCHAR(MAX) NOT NULL,
+                "Title" NVARCHAR(MAX) NOT NULL,
+                "Content" NVARCHAR(MAX) NOT NULL,
+                "IsActive" BIT NOT NULL DEFAULT 1,
+                "SortOrder" INT NOT NULL DEFAULT 0,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_PaymentTermOptions" PRIMARY KEY ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='PaymentTermKeys') ALTER TABLE "Quotes" ADD "PaymentTermKeys" NVARCHAR(MAX) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='ChosenPaymentTermKey') ALTER TABLE "Quotes" ADD "ChosenPaymentTermKey" NVARCHAR(450) NULL;""");
+
+        // Subscriptions may only be billed once the user has actually issued the invoice for them,
+        // not right when the customer signs the quote. Backfill: subscriptions that already have at
+        // least one invoice were clearly already running under the old flow and must keep billing.
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='BillingAuthorizedAt') ALTER TABLE "CustomerSubscriptions" ADD "BillingAuthorizedAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='LegalTextBlocksSnapshot') ALTER TABLE "Quotes" ADD "LegalTextBlocksSnapshot" NVARCHAR(MAX) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='DataSource') ALTER TABLE "Customers" ADD "DataSource" INT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='DataSourceNote') ALTER TABLE "Customers" ADD "DataSourceNote" NVARCHAR(MAX) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='PrivacyNoticeSentAt') ALTER TABLE "Customers" ADD "PrivacyNoticeSentAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Customers' AND COLUMN_NAME='PrivacyNoticeVersion') ALTER TABLE "Customers" ADD "PrivacyNoticeVersion" NVARCHAR(64) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""
+        UPDATE cs SET cs."BillingAuthorizedAt" = cs."ConfirmedAt"
+        FROM "CustomerSubscriptions" cs
+        WHERE cs."BillingAuthorizedAt" IS NULL
+          AND EXISTS (SELECT 1 FROM "Invoices" i WHERE i."SubscriptionId" = cs."Id");
+        """);
+
+        // Ratenzahlung (installment plans): fixed-total payment plans split into a fixed number of
+        // equal monthly installments, distinct from indefinite subscriptions.
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='InstallmentPeriodOptionsMonths') ALTER TABLE "Quotes" ADD "InstallmentPeriodOptionsMonths" NVARCHAR(MAX) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='ChosenInstallmentMonths') ALTER TABLE "Quotes" ADD "ChosenInstallmentMonths" INT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='IsInstallmentPlan') ALTER TABLE "CustomerSubscriptions" ADD "IsInstallmentPlan" BIT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='TotalInstallmentAmount') ALTER TABLE "CustomerSubscriptions" ADD "TotalInstallmentAmount" DECIMAL(18,2) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='InstallmentsCompleted') ALTER TABLE "CustomerSubscriptions" ADD "InstallmentsCompleted" INT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='InstallmentSourceTitle') ALTER TABLE "CustomerSubscriptions" ADD "InstallmentSourceTitle" NVARCHAR(400) NULL;""");
+
+        // Rechtliches: AGB/Datenschutz/Verträge als kategorisierte Rechtsdokumente, optional als Datei-Anhang
+        // statt/zusätzlich zu Text, mit automatischem Anhängen an jedes Angebot (AGB/Datenschutz).
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='Type') ALTER TABLE "LegalTextBlocks" ADD "Type" INT NOT NULL DEFAULT 3;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AutoAttachToQuotes') ALTER TABLE "LegalTextBlocks" ADD "AutoAttachToQuotes" BIT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AttachmentPath') ALTER TABLE "LegalTextBlocks" ADD "AttachmentPath" NVARCHAR(500) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AttachmentFileName') ALTER TABLE "LegalTextBlocks" ADD "AttachmentFileName" NVARCHAR(260) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='LegalTextBlocks' AND COLUMN_NAME='AttachmentContentType') ALTER TABLE "LegalTextBlocks" ADD "AttachmentContentType" NVARCHAR(100) NULL;""");
+
+        // Preisangebot: konfigurierbare Zahlungsoptionen (Einmalzahlung/Hybrid/Monatlich 12/24) im Angebot
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='PaymentPlanConfig') ALTER TABLE "Quotes" ADD "PaymentPlanConfig" NVARCHAR(MAX) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='ChosenPaymentPlanOptionKey') ALTER TABLE "Quotes" ADD "ChosenPaymentPlanOptionKey" NVARCHAR(32) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='PaymentPlanTransferredAt') ALTER TABLE "Quotes" ADD "PaymentPlanTransferredAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='InstallmentSurchargePercent') ALTER TABLE "CustomerSubscriptions" ADD "InstallmentSurchargePercent" DECIMAL(18,2) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='DownPaymentPercent') ALTER TABLE "CustomerSubscriptions" ADD "DownPaymentPercent" DECIMAL(18,2) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='DownPaymentInvoiceId') ALTER TABLE "CustomerSubscriptions" ADD "DownPaymentInvoiceId" UNIQUEIDENTIFIER NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='PaymentPlanOptionKey') ALTER TABLE "CustomerSubscriptions" ADD "PaymentPlanOptionKey" NVARCHAR(32) NULL;""");
+
+        // Mandats-Erinnerungsmail (separat von MandateEmailSentAt/-Status/-AttemptCount der Erst-Mail)
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateReminderSentAt') ALTER TABLE "CustomerSubscriptions" ADD "MandateReminderSentAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateReminderCount') ALTER TABLE "CustomerSubscriptions" ADD "MandateReminderCount" INT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='MandateFailureNotifiedAt') ALTER TABLE "CustomerSubscriptions" ADD "MandateFailureNotifiedAt" DATETIMEOFFSET(7) NULL;""");
+
+        // Agenturvertrag: neue Vertragspflicht gilt nur für ab jetzt neu entstehende Angebote/Abos.
+        // Spalte zunächst NULLable anlegen (SQL Server löst Spaltennamen im selben Batch schon beim Parsen auf,
+        // ein direktes "ADD ...; UPDATE ..." in einem einzigen ExecuteSqlRawAsync-Aufruf schlägt daher fehl) —
+        // Bestandszeilen werden in einem separaten Aufruf auf 0 zurückgesetzt, neue Zeilen schreibt EF ab hier
+        // immer explizit (C#-Default true), sodass am Ende nie NULL übrig bleibt.
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='RequiresAgencyContract') ALTER TABLE "Quotes" ADD "RequiresAgencyContract" BIT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""UPDATE "Quotes" SET "RequiresAgencyContract" = 0 WHERE "RequiresAgencyContract" IS NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "Quotes" ALTER COLUMN "RequiresAgencyContract" BIT NOT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CustomerSubscriptions' AND COLUMN_NAME='RequiresAgencyContract') ALTER TABLE "CustomerSubscriptions" ADD "RequiresAgencyContract" BIT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""UPDATE "CustomerSubscriptions" SET "RequiresAgencyContract" = 0 WHERE "RequiresAgencyContract" IS NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""ALTER TABLE "CustomerSubscriptions" ALTER COLUMN "RequiresAgencyContract" BIT NOT NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ContractTemplates')
+        BEGIN
+            CREATE TABLE "ContractTemplates" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "Key" NVARCHAR(64) NOT NULL,
+                "Name" NVARCHAR(200) NOT NULL,
+                "IsActive" BIT NOT NULL DEFAULT 1,
+                "SortOrder" INT NOT NULL DEFAULT 0,
+                "SectionsJson" NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_ContractTemplates" PRIMARY KEY ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='AgencyContracts')
+        BEGIN
+            CREATE TABLE "AgencyContracts" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "ContractNumber" NVARCHAR(64) NOT NULL,
+                "CustomerId" UNIQUEIDENTIFIER NOT NULL,
+                "QuoteId" UNIQUEIDENTIFIER NULL,
+                "SubscriptionId" UNIQUEIDENTIFIER NULL,
+                "ContractTemplateId" UNIQUEIDENTIFIER NULL,
+                "ContractTypeName" NVARCHAR(200) NOT NULL DEFAULT '',
+                "Status" INT NOT NULL DEFAULT 0,
+                "SectionsJson" NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+                "LegalTextBlocks" NVARCHAR(MAX) NULL,
+                "LegalTextBlocksSnapshot" NVARCHAR(MAX) NULL,
+                "TotalContractValue" DECIMAL(18,2) NULL,
+                "RepSignedByName" NVARCHAR(256) NULL,
+                "RepSignedByUserId" UNIQUEIDENTIFIER NULL,
+                "RepSignedAt" DATETIMEOFFSET(7) NULL,
+                "ApprovalToken" NVARCHAR(200) NULL,
+                "ApprovalTokenHash" NVARCHAR(200) NULL,
+                "ApprovalTokenExpiry" DATETIMEOFFSET(7) NULL,
+                "SentAt" DATETIMEOFFSET(7) NULL,
+                "CustomerSignedByName" NVARCHAR(256) NULL,
+                "CustomerSignedByEmail" NVARCHAR(320) NULL,
+                "CustomerSignatureData" NVARCHAR(MAX) NULL,
+                "CustomerSignedAt" DATETIMEOFFSET(7) NULL,
+                "CustomerSignedIpAddress" NVARCHAR(64) NULL,
+                "DeclineReason" NVARCHAR(MAX) NULL,
+                "DocumentHash" NVARCHAR(MAX) NULL,
+                "PreviousDocumentHash" NVARCHAR(MAX) NULL,
+                "IsFinalized" BIT NOT NULL DEFAULT 0,
+                "FinalizedAt" DATETIMEOFFSET(7) NULL,
+                "IsArchived" BIT NOT NULL DEFAULT 0,
+                "ArchivedAt" DATETIMEOFFSET(7) NULL,
+                "RetentionUntil" DATETIMEOFFSET(7) NULL,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_AgencyContracts" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_AgencyContracts_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id"),
+                CONSTRAINT "FK_AgencyContracts_Quotes_QuoteId" FOREIGN KEY ("QuoteId") REFERENCES "Quotes" ("Id"),
+                CONSTRAINT "FK_AgencyContracts_CustomerSubscriptions_SubscriptionId" FOREIGN KEY ("SubscriptionId") REFERENCES "CustomerSubscriptions" ("Id"),
+                CONSTRAINT "FK_AgencyContracts_ContractTemplates_ContractTemplateId" FOREIGN KEY ("ContractTemplateId") REFERENCES "ContractTemplates" ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_QuoteId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_QuoteId" ON "AgencyContracts" ("QuoteId");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_SubscriptionId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_SubscriptionId" ON "AgencyContracts" ("SubscriptionId");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_AgencyContracts_CustomerId' AND object_id=OBJECT_ID('AgencyContracts')) CREATE INDEX "IX_AgencyContracts_CustomerId" ON "AgencyContracts" ("CustomerId");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='AgencyContracts' AND COLUMN_NAME='CustomerAddressSnapshot') ALTER TABLE "AgencyContracts" ADD "CustomerAddressSnapshot" NVARCHAR(MAX) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='ContractTemplates' AND COLUMN_NAME='DefaultBlockKeysJson') ALTER TABLE "ContractTemplates" ADD "DefaultBlockKeysJson" NVARCHAR(MAX) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ContractClauseBlocks')
+        BEGIN
+            CREATE TABLE "ContractClauseBlocks" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "Key" NVARCHAR(64) NOT NULL,
+                "Category" NVARCHAR(32) NOT NULL,
+                "Title" NVARCHAR(200) NOT NULL,
+                "Content" NVARCHAR(MAX) NOT NULL DEFAULT '',
+                "IsActive" BIT NOT NULL DEFAULT 1,
+                "SortOrder" INT NOT NULL DEFAULT 0,
+                "IsCreativeWork" BIT NOT NULL DEFAULT 0,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_ContractClauseBlocks" PRIMARY KEY ("Id")
+            );
+        END
+        """);
+
+        // Schätzungen (Aufwandsschätzungen): purely additive — creates only the new "Estimates" table + index, touches no existing table/data.
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='Estimates')
+        BEGIN
+            CREATE TABLE "Estimates" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "EstimateNumber" NVARCHAR(64) NOT NULL,
+                "CustomerId" UNIQUEIDENTIFIER NULL,
+                "CustomerDisplayName" NVARCHAR(300) NULL,
+                "Title" NVARCHAR(300) NOT NULL DEFAULT '',
+                "Subtitle" NVARCHAR(500) NULL,
+                "Version" NVARCHAR(32) NOT NULL DEFAULT '1.0',
+                "Date" DATETIMEOFFSET(7) NOT NULL,
+                "PreparedBy" NVARCHAR(200) NULL,
+                "ApprovedBy" NVARCHAR(200) NULL,
+                "Responsible" NVARCHAR(200) NULL,
+                "Classification" NVARCHAR(32) NOT NULL DEFAULT 'vertraulich',
+                "Status" INT NOT NULL DEFAULT 0,
+                "FixedPrice" DECIMAL(18,2) NULL,
+                "FixedPriceLabel" NVARCHAR(200) NULL,
+                "SituationText" NVARCHAR(MAX) NULL,
+                "ProposalText" NVARCHAR(MAX) NULL,
+                "CostNote" NVARCHAR(MAX) NULL,
+                "OperationText" NVARCHAR(MAX) NULL,
+                "TimelineNote" NVARCHAR(MAX) NULL,
+                "ContentJson" NVARCHAR(MAX) NOT NULL DEFAULT '{{}}', -- braces doubled: ExecuteSqlRaw runs string.Format
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_Estimates" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_Estimates_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id")
+            );
+        END
+        """);
+        // Schätzung → Angebot: additive nullable link column.
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('Estimates','QuoteId') IS NULL ALTER TABLE "Estimates" ADD "QuoteId" UNIQUEIDENTIFIER NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_Estimates_CustomerId' AND object_id=OBJECT_ID('Estimates')) CREATE INDEX "IX_Estimates_CustomerId" ON "Estimates" ("CustomerId");""");
+
+        // Rechts-Ablauf pro Projekt: purely additive — creates only the new "ProjectLegalWorkflows" table + index, touches no existing table/data.
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ProjectLegalWorkflows')
+        BEGIN
+            CREATE TABLE "ProjectLegalWorkflows" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "QuoteGroupId" UNIQUEIDENTIFIER NOT NULL,
+                "CustomerId" UNIQUEIDENTIFIER NOT NULL,
+                "ManualStepsJson" NVARCHAR(MAX) NOT NULL DEFAULT '{{}}', -- braces doubled: ExecuteSqlRaw runs string.Format
+                "RightsTokenHash" NVARCHAR(128) NULL,
+                "RightsTokenExpiry" DATETIMEOFFSET(7) NULL,
+                "RightsRequestedAt" DATETIMEOFFSET(7) NULL,
+                "RightsRequestedTo" NVARCHAR(320) NULL,
+                "RightsGrantedAt" DATETIMEOFFSET(7) NULL,
+                "RightsGrantedByName" NVARCHAR(300) NULL,
+                "RightsGrantedByEmail" NVARCHAR(320) NULL,
+                "RightsGrantedIp" NVARCHAR(64) NULL,
+                "RightsReferenceConsent" BIT NOT NULL DEFAULT 0,
+                "RightsTextSnapshot" NVARCHAR(MAX) NULL,
+                "AcceptanceTokenHash" NVARCHAR(128) NULL,
+                "AcceptanceTokenExpiry" DATETIMEOFFSET(7) NULL,
+                "AcceptanceRequestedAt" DATETIMEOFFSET(7) NULL,
+                "AcceptanceRequestedTo" NVARCHAR(320) NULL,
+                "AcceptanceDeadline" DATETIMEOFFSET(7) NULL,
+                "AcceptanceScope" NVARCHAR(MAX) NULL,
+                "AcceptanceResult" NVARCHAR(64) NULL,
+                "AcceptanceRespondedAt" DATETIMEOFFSET(7) NULL,
+                "AcceptanceByName" NVARCHAR(300) NULL,
+                "AcceptanceByEmail" NVARCHAR(320) NULL,
+                "AcceptanceIp" NVARCHAR(64) NULL,
+                "AcceptanceRemarks" NVARCHAR(MAX) NULL,
+                "AcceptanceSignatureData" NVARCHAR(MAX) NULL,
+                "AcceptanceTextSnapshot" NVARCHAR(MAX) NULL,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_ProjectLegalWorkflows" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_ProjectLegalWorkflows_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectLegalWorkflows_QuoteGroupId' AND object_id=OBJECT_ID('ProjectLegalWorkflows')) CREATE UNIQUE INDEX "IX_ProjectLegalWorkflows_QuoteGroupId" ON "ProjectLegalWorkflows" ("QuoteGroupId");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectLegalWorkflows_RightsTokenHash' AND object_id=OBJECT_ID('ProjectLegalWorkflows')) CREATE INDEX "IX_ProjectLegalWorkflows_RightsTokenHash" ON "ProjectLegalWorkflows" ("RightsTokenHash");""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_ProjectLegalWorkflows_AcceptanceTokenHash' AND object_id=OBJECT_ID('ProjectLegalWorkflows')) CREATE INDEX "IX_ProjectLegalWorkflows_AcceptanceTokenHash" ON "ProjectLegalWorkflows" ("AcceptanceTokenHash");""");
+
+
+        // Website-Rechtstexte-Generator: purely additive — one new table "WebsiteLegalProfiles" (Konfiguration je Kunde).
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='WebsiteLegalProfiles')
+        BEGIN
+            CREATE TABLE "WebsiteLegalProfiles" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "CustomerId" UNIQUEIDENTIFIER NOT NULL,
+                "ConfigJson" NVARCHAR(MAX) NOT NULL DEFAULT '{{}}', -- braces doubled: ExecuteSqlRaw runs string.Format
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_WebsiteLegalProfiles" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_WebsiteLegalProfiles_Customers_CustomerId" FOREIGN KEY ("CustomerId") REFERENCES "Customers" ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_WebsiteLegalProfiles_CustomerId' AND object_id=OBJECT_ID('WebsiteLegalProfiles')) CREATE UNIQUE INDEX "IX_WebsiteLegalProfiles_CustomerId" ON "WebsiteLegalProfiles" ("CustomerId");""");
+
+        // Integrations-API-Schlüssel (GentleHub): purely additive — one new table "IntegrationApiKeys".
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='IntegrationApiKeys')
+        BEGIN
+            CREATE TABLE "IntegrationApiKeys" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "Name" NVARCHAR(100) NOT NULL,
+                "Prefix" NVARCHAR(20) NOT NULL,
+                "KeyHash" NVARCHAR(64) NOT NULL,
+                "LastUsedAt" DATETIMEOFFSET(7) NULL,
+                "RevokedAt" DATETIMEOFFSET(7) NULL,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_IntegrationApiKeys" PRIMARY KEY ("Id")
+            );
+        END
+        """);
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_IntegrationApiKeys_KeyHash' AND object_id=OBJECT_ID('IntegrationApiKeys')) CREATE UNIQUE INDEX "IX_IntegrationApiKeys_KeyHash" ON "IntegrationApiKeys" ("KeyHash");""");
+
+        // Interne Mail-Kopie (BCC) pflegbar in den Einstellungen statt fest im Code. Bisheriges Verhalten bleibt erhalten:
+        // leere Spalte wird mit der bisherigen Adresse befüllt; „aus“ speichert die Oberfläche als Leerstring, nicht NULL.
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CompanySettings' AND COLUMN_NAME='InternalCopyEmail') ALTER TABLE "CompanySettings" ADD "InternalCopyEmail" NVARCHAR(320) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""UPDATE "CompanySettings" SET "InternalCopyEmail" = 'berkcan@gentlegroup.de' WHERE "InternalCopyEmail" IS NULL;""");
+        // Angebots-Nachfass: interne Aufgabe nach X Tagen, optional zusätzlich Erinnerungsmail an den Kunden (Standard: aus).
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CompanySettings' AND COLUMN_NAME='QuoteFollowUpDays') ALTER TABLE "CompanySettings" ADD "QuoteFollowUpDays" INT NOT NULL DEFAULT 7;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CompanySettings' AND COLUMN_NAME='QuoteFollowUpEmailToCustomer') ALTER TABLE "CompanySettings" ADD "QuoteFollowUpEmailToCustomer" BIT NOT NULL DEFAULT 0;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='FollowUpCreatedAt') ALTER TABLE "Quotes" ADD "FollowUpCreatedAt" DATETIMEOFFSET(7) NULL;""");
+        // Pipeline: tatsächliches Abschlussdatum + GentleHub-Idempotenz für automatisch angelegte Opportunities
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Opportunities' AND COLUMN_NAME='ClosedAt') ALTER TABLE "Opportunities" ADD "ClosedAt" DATETIMEOFFSET(7) NULL;""");
+        await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Opportunities' AND COLUMN_NAME='ExternalRef') ALTER TABLE "Opportunities" ADD "ExternalRef" NVARCHAR(220) NULL;""");
+        // In-App-Benachrichtigungen
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='AppNotifications')
+        BEGIN
+            CREATE TABLE "AppNotifications" (
+                "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+                "UserId" NVARCHAR(450) NOT NULL,
+                "Kind" NVARCHAR(50) NOT NULL,
+                "Title" NVARCHAR(200) NOT NULL,
+                "Body" NVARCHAR(1000) NULL,
+                "Href" NVARCHAR(300) NULL,
+                "ReadAt" DATETIMEOFFSET(7) NULL,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                "CreatedBy" NVARCHAR(MAX) NULL,
+                "UpdatedAt" DATETIMEOFFSET(7) NULL,
+                "UpdatedBy" NVARCHAR(MAX) NULL,
+                "IsDeleted" BIT NOT NULL DEFAULT 0,
+                "DeletedAt" DATETIMEOFFSET(7) NULL,
+                CONSTRAINT "PK_AppNotifications" PRIMARY KEY ("Id")
+            );
+            CREATE INDEX "IX_AppNotifications_UserId_CreatedAt" ON "AppNotifications" ("UserId", "CreatedAt");
+        END
+        """);
+
+    }
+}

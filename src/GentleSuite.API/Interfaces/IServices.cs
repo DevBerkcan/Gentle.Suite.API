@@ -422,6 +422,7 @@ public interface IOpportunityService
     Task<OpportunityDetailDto> CreateAsync(CreateOpportunityRequest req, CancellationToken ct = default);
     Task<OpportunityDetailDto> UpdateAsync(Guid id, UpdateOpportunityRequest req, CancellationToken ct = default);
     Task<OpportunityDetailDto> UpdateStageAsync(Guid id, UpdateOpportunityStageRequest req, CancellationToken ct = default);
+    Task<OpportunityForecastDto> GetForecastAsync(CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 

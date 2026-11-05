@@ -1966,21 +1966,71 @@ public class OpportunityServiceImpl : IOpportunityService
     private readonly AppDbContext _db;
     public OpportunityServiceImpl(AppDbContext db) { _db = db; }
     private IQueryable<Opportunity> Query() => _db.Opportunities.Include(o => o.Customer).Include(o => o.Contact).Include(o => o.AssignedTo);
-    private static OpportunityListDto ToListDto(Opportunity o) => new(o.Id, o.CustomerId, o.Customer?.CompanyName ?? "", o.Title, o.Stage, o.Probability, o.ExpectedRevenue, o.CloseDate, o.AssignedTo?.FullName, o.CreatedAt);
+    private static OpportunityListDto ToListDto(Opportunity o) => new(o.Id, o.CustomerId, o.Customer?.CompanyName ?? "", o.Title, o.Stage, o.Probability, o.ExpectedRevenue, o.CloseDate, o.AssignedTo?.FullName, o.CreatedAt, o.LostReason, o.ClosedAt);
     private static OpportunityDetailDto ToDetailDto(Opportunity o) => new(o.Id, o.CustomerId, o.Customer?.CompanyName ?? "", o.ContactId, o.Contact != null ? $"{o.Contact.FirstName} {o.Contact.LastName}" : null, o.Title, o.Stage, o.Probability, o.ExpectedRevenue, o.CloseDate, o.AssignedToTeamMemberId, o.AssignedTo?.FullName, o.Source, o.LostReason, o.QuoteId, o.Notes, o.CreatedAt);
     public async Task<List<OpportunityListDto>> GetAllAsync(Guid? customerId, OpportunityStage? stage, CancellationToken ct) { var q = Query().AsQueryable(); if (customerId.HasValue) q = q.Where(o => o.CustomerId == customerId.Value); if (stage.HasValue) q = q.Where(o => o.Stage == stage.Value); return (await q.OrderByDescending(o => o.CreatedAt).ToListAsync(ct)).Select(ToListDto).ToList(); }
     public async Task<OpportunityDetailDto?> GetByIdAsync(Guid id, CancellationToken ct) { var o = await Query().FirstOrDefaultAsync(x => x.Id == id, ct); return o == null ? null : ToDetailDto(o); }
     public async Task<OpportunityDetailDto> CreateAsync(CreateOpportunityRequest req, CancellationToken ct) { var o = new Opportunity { CustomerId = req.CustomerId, ContactId = req.ContactId, Title = req.Title, Stage = req.Stage, Probability = req.Probability, ExpectedRevenue = req.ExpectedRevenue, CloseDate = req.CloseDate, AssignedToTeamMemberId = req.AssignedToTeamMemberId, Source = req.Source, Notes = req.Notes }; _db.Opportunities.Add(o); await _db.SaveChangesAsync(ct); return ToDetailDto(await Query().FirstAsync(x => x.Id == o.Id, ct)); }
     public async Task<OpportunityDetailDto> UpdateAsync(Guid id, UpdateOpportunityRequest req, CancellationToken ct) { var o = await Query().FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException(); o.ContactId = req.ContactId; o.Title = req.Title; o.Probability = req.Probability; o.ExpectedRevenue = req.ExpectedRevenue; o.CloseDate = req.CloseDate; o.AssignedToTeamMemberId = req.AssignedToTeamMemberId; o.Source = req.Source; o.LostReason = req.LostReason; o.QuoteId = req.QuoteId; o.Notes = req.Notes; await _db.SaveChangesAsync(ct); return ToDetailDto(await Query().FirstAsync(x => x.Id == id, ct)); }
-    public async Task<OpportunityDetailDto> UpdateStageAsync(Guid id, UpdateOpportunityStageRequest req, CancellationToken ct) { var o = await _db.Opportunities.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); o.Stage = req.Stage; if (req.LostReason != null) o.LostReason = req.LostReason; await _db.SaveChangesAsync(ct); return ToDetailDto(await Query().FirstAsync(x => x.Id == id, ct)); }
+    public async Task<OpportunityDetailDto> UpdateStageAsync(Guid id, UpdateOpportunityStageRequest req, CancellationToken ct)
+    {
+        var o = await _db.Opportunities.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException();
+        var reason = req.LostReason?.Trim();
+        // Verlustgrund ist Pflicht – nur so lässt sich später auswerten, woran Aufträge scheitern.
+        if (req.Stage == OpportunityStage.ClosedLost && string.IsNullOrEmpty(reason) && string.IsNullOrWhiteSpace(o.LostReason))
+            throw new ArgumentException("Bitte einen Verlustgrund angeben.");
+        if (!string.IsNullOrEmpty(reason)) o.LostReason = reason.Length > 200 ? reason[..200] : reason;
+        var wasClosed = o.Stage is OpportunityStage.ClosedWon or OpportunityStage.ClosedLost;
+        o.Stage = req.Stage;
+        if (req.Stage == OpportunityStage.ClosedWon) { o.Probability = 100; if (!wasClosed) o.ClosedAt = DateTimeOffset.UtcNow; }
+        else if (req.Stage == OpportunityStage.ClosedLost) { o.Probability = 0; if (!wasClosed) o.ClosedAt = DateTimeOffset.UtcNow; }
+        else if (wasClosed) { o.ClosedAt = null; if (o.Probability is 0 or 100) o.Probability = DefaultProbability(req.Stage); }
+        await _db.SaveChangesAsync(ct);
+        return ToDetailDto(await Query().FirstAsync(x => x.Id == id, ct));
+    }
+    private static int DefaultProbability(OpportunityStage s) => s switch { OpportunityStage.Qualification => 10, OpportunityStage.Proposal => 40, OpportunityStage.Negotiation => 70, _ => 50 };
+
+    /// <summary>Gewichteter Forecast (Wert × Wahrscheinlichkeit) offener Opportunities nach erwartetem Abschlussmonat
+    /// (Europe/Berlin, laufender Monat + 5 Folgemonate) sowie Gewonnen/Verloren und Verlustgründe der letzten 12 Monate.</summary>
+    public async Task<OpportunityForecastDto> GetForecastAsync(CancellationToken ct)
+    {
+        var berlin = TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin");
+        var now = DateTimeOffset.UtcNow;
+        var local = TimeZoneInfo.ConvertTime(now, berlin);
+        var open = await _db.Opportunities.AsNoTracking()
+            .Where(o => o.Stage != OpportunityStage.ClosedWon && o.Stage != OpportunityStage.ClosedLost)
+            .Select(o => new { o.ExpectedRevenue, o.Probability, o.CloseDate }).ToListAsync(ct);
+        static decimal W(decimal value, int p) => Math.Round(value * Math.Clamp(p, 0, 100) / 100m, 2);
+        var firstOfMonth = new DateTime(local.Year, local.Month, 1);
+        var months = Enumerable.Range(0, 6).Select(i => firstOfMonth.AddMonths(i)).Select(m =>
+        {
+            var inMonth = open.Where(o => o.CloseDate.HasValue && TimeZoneInfo.ConvertTime(o.CloseDate.Value, berlin) is var d && d.Year == m.Year && d.Month == m.Month).ToList();
+            return new ForecastMonthDto(m.Year, m.Month, inMonth.Sum(o => o.ExpectedRevenue), inMonth.Sum(o => W(o.ExpectedRevenue, o.Probability)), inMonth.Count);
+        }).ToList();
+        var monthStart = new DateTimeOffset(firstOfMonth, berlin.GetUtcOffset(firstOfMonth));
+        var undated = open.Where(o => !o.CloseDate.HasValue).ToList();
+        var overdue = open.Where(o => o.CloseDate.HasValue && o.CloseDate.Value < monthStart).ToList();
+        var since = now.AddMonths(-12);
+        var closed = await _db.Opportunities.AsNoTracking()
+            .Where(o => (o.Stage == OpportunityStage.ClosedWon || o.Stage == OpportunityStage.ClosedLost) && (o.ClosedAt ?? o.UpdatedAt ?? o.CreatedAt) >= since)
+            .Select(o => new { o.Stage, o.ExpectedRevenue, o.LostReason }).ToListAsync(ct);
+        var won = closed.Where(o => o.Stage == OpportunityStage.ClosedWon).ToList();
+        var lost = closed.Where(o => o.Stage == OpportunityStage.ClosedLost).ToList();
+        var reasons = lost.GroupBy(o => string.IsNullOrWhiteSpace(o.LostReason) ? "Ohne Angabe" : o.LostReason!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(g => new LostReasonDto(g.Key, g.Count(), g.Sum(o => o.ExpectedRevenue)))
+            .OrderByDescending(r => r.Count).ThenByDescending(r => r.Value).Take(10).ToList();
+        return new OpportunityForecastDto(open.Sum(o => o.ExpectedRevenue), open.Sum(o => W(o.ExpectedRevenue, o.Probability)), open.Count,
+            undated.Sum(o => W(o.ExpectedRevenue, o.Probability)), undated.Count, overdue.Sum(o => W(o.ExpectedRevenue, o.Probability)), overdue.Count,
+            months, won.Count, lost.Count, won.Sum(o => o.ExpectedRevenue), reasons);
+    }
     public async Task DeleteAsync(Guid id, CancellationToken ct) { var o = await _db.Opportunities.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); o.IsDeleted = true; o.DeletedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
 }
 
 // === Support Tickets ===
 public class SupportTicketServiceImpl : ISupportTicketService
 {
-    private readonly AppDbContext _db;
-    public SupportTicketServiceImpl(AppDbContext db) { _db = db; }
+    private readonly AppDbContext _db; private readonly GentleSuite.API.Hubs.AppNotifier _notifier; private readonly ICurrentUserService _cu;
+    public SupportTicketServiceImpl(AppDbContext db, GentleSuite.API.Hubs.AppNotifier notifier, ICurrentUserService cu) { _db = db; _notifier = notifier; _cu = cu; }
     private IQueryable<SupportTicket> Query() => _db.SupportTickets.Include(t => t.Customer).Include(t => t.AssignedTo).Include(t => t.Comments);
     private static TicketListDto ToListDto(SupportTicket t) => new(t.Id, t.CustomerId, t.Customer?.CompanyName ?? "", t.Title, t.Priority, t.Status, t.Category, t.AssignedTo?.FullName, t.SlaDueDate, t.CreatedAt, t.Comments.Count);
     private static TicketDetailDto ToDetailDto(SupportTicket t) => new(t.Id, t.CustomerId, t.Customer?.CompanyName ?? "", t.SubscriptionId, t.Title, t.Description, t.Priority, t.Status, t.Category, t.AssignedToTeamMemberId, t.AssignedTo?.FullName, t.SlaDueDate, t.ResolvedAt, t.CreatedAt, t.Comments.OrderBy(c => c.CreatedAt).Select(c => new TicketCommentDto(c.Id, c.Content, c.AuthorName, c.IsInternal, c.CreatedAt)).ToList());
@@ -2006,7 +2056,9 @@ public class SupportTicketServiceImpl : ISupportTicketService
             }
         }
         _db.SupportTickets.Add(t); await _db.SaveChangesAsync(ct);
-        return ToDetailDto(await Query().FirstAsync(x => x.Id == t.Id, ct));
+        var created = await Query().FirstAsync(x => x.Id == t.Id, ct);
+        await _notifier.NotifyAsync("ticket-created", $"Neues Ticket: {t.Title}", $"{created.Customer?.CompanyName} · Priorität {t.Priority}", "/tickets", _cu.UserId);
+        return ToDetailDto(created);
     }
     public async Task<TicketDetailDto> UpdateAsync(Guid id, UpdateTicketRequest req, CancellationToken ct) { var t = await Query().FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException(); t.Title = req.Title; t.Description = req.Description; t.Priority = req.Priority; t.Category = req.Category; t.AssignedToTeamMemberId = req.AssignedToTeamMemberId; t.SubscriptionId = req.SubscriptionId; await _db.SaveChangesAsync(ct); return ToDetailDto(await Query().FirstAsync(x => x.Id == id, ct)); }
     public async Task<TicketDetailDto> UpdateStatusAsync(Guid id, UpdateTicketStatusRequest req, CancellationToken ct) { var t = await _db.SupportTickets.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); t.Status = req.Status; if (req.Status == TicketStatus.Resolved || req.Status == TicketStatus.Closed) t.ResolvedAt ??= DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); return ToDetailDto(await Query().FirstAsync(x => x.Id == id, ct)); }
