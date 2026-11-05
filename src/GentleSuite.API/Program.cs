@@ -71,6 +71,7 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<ICustomerService, CustomerServiceImpl>();
 builder.Services.AddScoped<ICustomerNoteService, CustomerNoteServiceImpl>();
 builder.Services.AddSingleton<NoteSecretProtector>();
+builder.Services.AddScoped<RenewalService>();
 builder.Services.AddScoped<IOnboardingService, OnboardingServiceImpl>();
 builder.Services.AddScoped<IQuoteService, QuoteServiceImpl>();
 builder.Services.AddScoped<IInvoiceService, InvoiceServiceImpl>();
