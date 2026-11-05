@@ -112,17 +112,50 @@ public class ReminderJobs
 
     public Task ExpireQuotesAsync() => GentleSuite.Infrastructure.Services.QuoteLifecycle.ExpireAsync(_db);
 
-    public async Task CheckOpenQuotesAsync()
+    /// <summary>
+    /// Angebots-Nachfass (täglich): für jedes versendete, noch offene Angebot wird nach CompanySettings.QuoteFollowUpDays
+    /// genau EINMAL eine interne Aufgabe „Angebot … nachfassen“ angelegt (zugewiesen an den Ersteller, falls als Teammitglied
+    /// verknüpft). Nur wenn QuoteFollowUpEmailToCustomer aktiv ist, geht zusätzlich die Vorlage „quote-reminder“ an den Kunden.
+    /// FollowUpCreatedAt verhindert Wiederholungen (der alte Job „check-open-quotes“ hatte keinen solchen Merker).
+    /// </summary>
+    private static readonly TimeZoneInfo Berlin = TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin");
+    public async Task CreateQuoteFollowUpsAsync()
     {
         await ExpireQuotesAsync();
-        var open = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts)
-            .Where(q => (q.Status == QuoteStatus.Sent || q.Status == QuoteStatus.Viewed) && q.SentAt.HasValue && q.SentAt.Value.AddDays(7) < DateTimeOffset.UtcNow).ToListAsync();
-        foreach (var q in open)
+        var settings = await _db.CompanySettings.AsNoTracking().FirstOrDefaultAsync();
+        var days = Math.Clamp(settings?.QuoteFollowUpDays ?? 7, 1, 60);
+        var now = DateTimeOffset.UtcNow;
+        var dueBefore = now.AddDays(-days);
+        var notOlderThan = now.AddDays(-(days + 60)); // uralte Angebote nicht mehr anfassen
+        var quotes = await _db.Quotes.Include(q => q.Customer).ThenInclude(c => c.Contacts)
+            .Where(q => q.IsCurrentVersion && (q.Status == QuoteStatus.Sent || q.Status == QuoteStatus.Viewed)
+                        && q.FollowUpCreatedAt == null && q.SentAt.HasValue && q.SentAt <= dueBefore && q.SentAt >= notOlderThan)
+            .ToListAsync();
+        foreach (var q in quotes)
         {
-            var contact = q.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? q.Customer.Contacts.FirstOrDefault();
-            if (contact == null) continue;
-            try { await _email.SendTemplatedEmailAsync(contact.Email, "quote-reminder", new() { ["CustomerName"] = q.Customer.CompanyName, ["ContactName"] = contact.FirstName, ["QuoteNumber"] = q.QuoteNumber, ["ApprovalLink"] = $"{_frontendBaseUrl}/approval/{q.ApprovalToken}" }, q.CustomerId); } catch { }
+            var assignee = string.IsNullOrEmpty(q.CreatedBy) ? null
+                : await _db.TeamMembers.Where(t => t.AppUserId == q.CreatedBy && t.IsActive).Select(t => (Guid?)t.Id).FirstOrDefaultAsync();
+            var opportunityId = await _db.Opportunities.Where(o => o.QuoteId == q.Id).Select(o => (Guid?)o.Id).FirstOrDefaultAsync();
+            var viewed = q.ViewedAt.HasValue ? $"vom Kunden am {TimeZoneInfo.ConvertTime(q.ViewedAt.Value, Berlin):dd.MM.yyyy} geöffnet" : "vom Kunden noch nicht geöffnet";
+            _db.CrmActivities.Add(new CrmActivity
+            {
+                CustomerId = q.CustomerId, OpportunityId = opportunityId, Type = CrmActivityType.Task,
+                Subject = $"Angebot {q.QuoteNumber} nachfassen",
+                Description = $"Angebot an {q.Customer.CompanyName} wurde am {TimeZoneInfo.ConvertTime(q.SentAt!.Value, Berlin):dd.MM.yyyy} versendet und ist {viewed}. Kurz anrufen oder nachhaken.",
+                DueDate = now, AssignedToTeamMemberId = assignee
+            });
+            q.FollowUpCreatedAt = now;
+            await _db.SaveChangesAsync(); // je Angebot speichern: ein Fehler beim nächsten wiederholt nichts doppelt
+
+            if (settings?.QuoteFollowUpEmailToCustomer == true && !q.Customer.ReminderStop && !string.IsNullOrEmpty(q.ApprovalToken))
+            {
+                var contact = q.Customer.Contacts.FirstOrDefault(c => c.IsPrimary) ?? q.Customer.Contacts.FirstOrDefault();
+                if (contact == null) continue;
+                try { await _email.SendTemplatedEmailAsync(contact.Email, "quote-reminder", new() { ["CustomerName"] = q.Customer.CompanyName, ["ContactName"] = contact.FirstName, ["QuoteNumber"] = q.QuoteNumber, ["ApprovalLink"] = $"{_frontendBaseUrl}/approval/{q.ApprovalToken}" }, q.CustomerId); }
+                catch (Exception ex) { _log.LogError(ex, "Nachfass-Mail für Angebot {QuoteNumber} fehlgeschlagen", q.QuoteNumber); }
+            }
         }
+        if (quotes.Count > 0) _log.LogInformation("Angebots-Nachfass: {Count} Aufgaben angelegt", quotes.Count);
     }
 
     public async Task GenerateSubscriptionInvoicesAsync()

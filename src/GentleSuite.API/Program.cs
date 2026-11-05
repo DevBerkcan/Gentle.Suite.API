@@ -70,6 +70,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<ICustomerService, CustomerServiceImpl>();
 builder.Services.AddScoped<ICustomerNoteService, CustomerNoteServiceImpl>();
+builder.Services.AddSingleton<NoteSecretProtector>();
 builder.Services.AddScoped<IOnboardingService, OnboardingServiceImpl>();
 builder.Services.AddScoped<IQuoteService, QuoteServiceImpl>();
 builder.Services.AddScoped<IInvoiceService, InvoiceServiceImpl>();
@@ -811,12 +812,33 @@ await db.Database.ExecuteSqlRawAsync("""
     """);
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_IntegrationApiKeys_KeyHash' AND object_id=OBJECT_ID('IntegrationApiKeys')) CREATE UNIQUE INDEX "IX_IntegrationApiKeys_KeyHash" ON "IntegrationApiKeys" ("KeyHash");""");
 
+    // Interne Mail-Kopie (BCC) pflegbar in den Einstellungen statt fest im Code. Bisheriges Verhalten bleibt erhalten:
+    // leere Spalte wird mit der bisherigen Adresse befüllt; „aus“ speichert die Oberfläche als Leerstring, nicht NULL.
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CompanySettings' AND COLUMN_NAME='InternalCopyEmail') ALTER TABLE "CompanySettings" ADD "InternalCopyEmail" NVARCHAR(320) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""UPDATE "CompanySettings" SET "InternalCopyEmail" = 'berkcan@gentlegroup.de' WHERE "InternalCopyEmail" IS NULL;""");
+    // Angebots-Nachfass: interne Aufgabe nach X Tagen, optional zusätzlich Erinnerungsmail an den Kunden (Standard: aus).
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CompanySettings' AND COLUMN_NAME='QuoteFollowUpDays') ALTER TABLE "CompanySettings" ADD "QuoteFollowUpDays" INT NOT NULL DEFAULT 7;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CompanySettings' AND COLUMN_NAME='QuoteFollowUpEmailToCustomer') ALTER TABLE "CompanySettings" ADD "QuoteFollowUpEmailToCustomer" BIT NOT NULL DEFAULT 0;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='FollowUpCreatedAt') ALTER TABLE "Quotes" ADD "FollowUpCreatedAt" DATETIMEOFFSET(7) NULL;""");
+
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 catch (Exception ex)
 {
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     logger.LogError(ex, "DB-Initialisierung fehlgeschlagen: {Message}", ex.Message);
+}
+// Bestehende Zugangsdaten-Notizen nachverschlüsseln (nur wenn Security:NotesEncryptionKey gesetzt ist; idempotent).
+try
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    var n = await scope.ServiceProvider.GetRequiredService<NoteSecretProtector>().EncryptExistingAsync(db, logger);
+    if (n > 0) logger.LogInformation("{Count} Zugangsdaten-Notizen nachverschlüsselt.", n);
+}
+catch (Exception ex)
+{
+    scope.ServiceProvider.GetRequiredService<ILogger<Program>>().LogError(ex, "Nachverschlüsselung der Zugangsdaten-Notizen fehlgeschlagen");
 }
 }
 
@@ -880,6 +902,7 @@ RecurringJob.RemoveIfExists("generate-subscription-invoices");
 RecurringJob.AddOrUpdate<BankSyncJob>("sync-bank-transactions", j => j.SyncAllAsync(), "*/30 * * * *");
 // Abrechnung/Abgleich nach Berliner Zeit (Fälligkeiten werden ebenfalls in Europe/Berlin berechnet).
 var berlinJobOptions = new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin") };
+RecurringJob.AddOrUpdate<ReminderJobs>("quote-follow-up", j => j.CreateQuoteFollowUpsAsync(), Cron.Daily(8, 30), berlinJobOptions);
 RecurringJob.AddOrUpdate<MandateReconcileJob>("mandate-reconcile", j => j.RunAsync(), Cron.Daily(5), berlinJobOptions);
 RecurringJob.AddOrUpdate<SubscriptionBillingJob>("subscription-billing", j => j.RunAsync(), Cron.Daily(6), berlinJobOptions);
 RecurringJob.AddOrUpdate<ReminderJobs>("check-overdue-invoices", j => j.CheckOverdueInvoicesAsync(), Cron.Daily(7));

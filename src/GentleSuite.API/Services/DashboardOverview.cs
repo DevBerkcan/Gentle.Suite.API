@@ -124,6 +124,16 @@ public partial class DashboardServiceImpl
                     $"/invoices/{inv.Id}", failed || late || partialCollection ? "danger" : "warning", balance.Remaining));
             }
         }
+        // Fällige CRM-Aufgaben (u. a. automatisch angelegte „Angebot … nachfassen“), sonst nur auf der Kundenseite sichtbar.
+        var nowUtc = DateTimeOffset.UtcNow;
+        var dueTasks = await _db.CrmActivities.AsNoTracking()
+            .Where(a => a.Type == CrmActivityType.Task && a.Status == CrmActivityStatus.Open && a.DueDate != null && a.DueDate <= nowUtc)
+            .OrderBy(a => a.DueDate).Take(50)
+            .Select(a => new { a.Id, a.CustomerId, CustomerName = a.Customer != null ? a.Customer.CompanyName : "", a.Subject, Assignee = a.AssignedTo != null ? a.AssignedTo.FirstName + " " + a.AssignedTo.LastName : null })
+            .ToListAsync(ct);
+        foreach (var t in dueTasks)
+            attention.Add(new($"task-{t.Id}", t.CustomerName, t.Subject, t.Assignee != null ? $"Aufgabe · {t.Assignee}" : "Aufgabe · nicht zugewiesen",
+                t.CustomerId != null ? $"/customers/{t.CustomerId}" : "/customers", "warning", null));
         attention = attention.OrderBy(a => a.Severity == "danger" ? 0 : 1).ThenByDescending(a => a.Amount ?? 0).ThenBy(a => a.CustomerName).ToList();
         var collections = open.Where(b => b.Invoice.SubscriptionId != null).ToList();
         var upcoming = collections.Where(b => b.Invoice.PaymentCollectionDueDate.HasValue
