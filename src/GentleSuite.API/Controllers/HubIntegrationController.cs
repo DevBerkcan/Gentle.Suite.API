@@ -31,7 +31,11 @@ public record HubCustomerRequest(
     /// <summary>Where the lead came from, e.g. "Outlook-Anfrage vom 03.11.2026: Website-Relaunch". Stored as Datenherkunft.</summary>
     [MaxLength(1000)] string? SourceNote,
     /// <summary>Stable id of the inquiry in GentleHub. Retrying the same request with the same id never creates a second customer.</summary>
-    [MaxLength(200)] string? ExternalId);
+    [MaxLength(200)] string? ExternalId,
+    /// <summary>Short subject of the inquiry, used as opportunity title (falls back to SourceNote).</summary>
+    [MaxLength(200)] string? InquirySubject = null,
+    /// <summary>Default true: each inquiry also lands in the sales pipeline as an opportunity in stage "Qualifizierung".</summary>
+    bool CreateOpportunity = true);
 
 public record HubContactRequest(
     [Required, MaxLength(100)] string FirstName,
@@ -43,7 +47,7 @@ public record HubContactRequest(
 
 /// <summary>Result of a create call. <c>Outcome</c>: "created" (new customer), "existing" (same person already
 /// in the CRM, nothing changed), "contact-added" (company existed, the person was added as a new contact).</summary>
-public record HubCustomerResult(string Outcome, Guid CustomerId, string? CustomerNumber, string CompanyName, Guid? ContactId, string? MatchedBy, string CrmUrl);
+public record HubCustomerResult(string Outcome, Guid CustomerId, string? CustomerNumber, string CompanyName, Guid? ContactId, string? MatchedBy, string CrmUrl, Guid? OpportunityId = null);
 public record HubContactResult(string Outcome, Guid CustomerId, Guid ContactId, string CrmUrl);
 public record HubLookupMatch(Guid CustomerId, string? CustomerNumber, string CompanyName, string? ContactName, string? Email, string? Phone, string MatchedBy, string CrmUrl);
 
@@ -93,7 +97,10 @@ public class HubIntegrationController(ICustomerService customers, IActivityLogSe
         {
             var known = await db.Customers.Include(c => c.Contacts).FirstOrDefaultAsync(c => c.ExternalRef == externalRef, ct);
             if (known != null)
-                return Ok(Result("existing", known, known.Contacts.FirstOrDefault(x => string.Equals(x.Email, email, StringComparison.OrdinalIgnoreCase))?.Id, "ExternalId"));
+            {
+                var knownContact = known.Contacts.FirstOrDefault(x => string.Equals(x.Email, email, StringComparison.OrdinalIgnoreCase))?.Id;
+                return Ok(Result("existing", known, knownContact, "ExternalId") with { OpportunityId = await EnsureOpportunityAsync(req, known.Id, knownContact, externalRef, ct) });
+            }
         }
 
         // 2) Duplicates: same person (e-mail/phone) → return existing; same company only → add as contact.
@@ -103,7 +110,9 @@ public class HubIntegrationController(ICustomerService customers, IActivityLogSe
         {
             var existing = await db.Customers.Include(c => c.Contacts).FirstAsync(c => c.Id == person.CustomerId, ct);
             var contact = existing.Contacts.FirstOrDefault(x => string.Equals(x.Email, email, StringComparison.OrdinalIgnoreCase));
-            return Ok(Result("existing", existing, contact?.Id, person.MatchType));
+            // Bekannte Person mit neuer Anfrage → neue Opportunity (nur mit ExternalId, sonst wären Wiederholungen Dubletten).
+            var oppId = externalRef != null ? await EnsureOpportunityAsync(req, existing.Id, contact?.Id, externalRef, ct) : null;
+            return Ok(Result("existing", existing, contact?.Id, person.MatchType) with { OpportunityId = oppId });
         }
         var sameCompany = Opt(req.CompanyName) != null ? dup.Matches.FirstOrDefault(m => m.MatchType == "CompanyName") : null;
         if (sameCompany != null)
@@ -111,7 +120,7 @@ public class HubIntegrationController(ICustomerService customers, IActivityLogSe
             var target = await db.Customers.FirstAsync(c => c.Id == sameCompany.CustomerId, ct);
             var added = await customers.AddContactAsync(target.Id, new CreateContactRequest(firstName, lastName, email, Opt(req.Phone), Opt(req.Position), false), ct);
             await activity.LogAsync(target.Id, "Contact", added.Id, "Created", $"Kontakt {firstName} {lastName} über {KeyName} hinzugefügt{(Opt(req.SourceNote) is { } n ? $" ({n})" : "")}", ct);
-            return Ok(Result("contact-added", target, added.Id, "CompanyName"));
+            return Ok(Result("contact-added", target, added.Id, "CompanyName") with { OpportunityId = await EnsureOpportunityAsync(req, target.Id, added.Id, externalRef, ct) });
         }
 
         // 3) New customer.
@@ -130,7 +139,32 @@ public class HubIntegrationController(ICustomerService customers, IActivityLogSe
         await activity.LogAsync(created.Id, "Customer", created.Id, "Created", $"Angelegt über {KeyName}", ct);
 
         var fresh = await db.Customers.Include(c => c.Contacts).FirstAsync(c => c.Id == created.Id, ct);
-        return StatusCode(StatusCodes.Status201Created, Result("created", fresh, fresh.Contacts.FirstOrDefault(x => x.IsPrimary)?.Id, null));
+        var primary = fresh.Contacts.FirstOrDefault(x => x.IsPrimary)?.Id;
+        return StatusCode(StatusCodes.Status201Created, Result("created", fresh, primary, null) with { OpportunityId = await EnsureOpportunityAsync(req, fresh.Id, primary, externalRef, ct) });
+    }
+
+    /// <summary>Legt zur Anfrage eine Opportunity „Qualifizierung“ an (Quelle Inbound). Mit ExternalId idempotent:
+    /// dieselbe Anfrage erzeugt nie eine zweite Opportunity.</summary>
+    async Task<Guid?> EnsureOpportunityAsync(HubCustomerRequest req, Guid customerId, Guid? contactId, string? externalRef, CancellationToken ct)
+    {
+        if (!req.CreateOpportunity) return null;
+        if (externalRef != null)
+        {
+            var existing = await db.Opportunities.Where(o => o.ExternalRef == externalRef).Select(o => (Guid?)o.Id).FirstOrDefaultAsync(ct);
+            if (existing != null) return existing;
+        }
+        var title = Opt(req.InquirySubject) ?? Opt(req.SourceNote) ?? $"Anfrage über {KeyName}";
+        if (title.Length > 200) title = title[..197] + "…";
+        var opp = new Opportunity
+        {
+            CustomerId = customerId, ContactId = contactId, Title = title, Stage = OpportunityStage.Qualification, Probability = 10,
+            Source = OpportunitySource.Inbound, Notes = Opt(req.SourceNote), ExternalRef = externalRef,
+            CloseDate = DateTimeOffset.UtcNow.AddDays(30)
+        };
+        db.Opportunities.Add(opp);
+        await db.SaveChangesAsync(ct);
+        await activity.LogAsync(customerId, "Opportunity", opp.Id, "Created", $"Opportunity „{title}“ über {KeyName} angelegt", ct);
+        return opp.Id;
     }
 
     /// <summary>Adds a contact to an existing customer; returns the existing contact if the e-mail is already there.</summary>

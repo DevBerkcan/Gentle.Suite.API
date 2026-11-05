@@ -820,6 +820,9 @@ await db.Database.ExecuteSqlRawAsync("""
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CompanySettings' AND COLUMN_NAME='QuoteFollowUpDays') ALTER TABLE "CompanySettings" ADD "QuoteFollowUpDays" INT NOT NULL DEFAULT 7;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='CompanySettings' AND COLUMN_NAME='QuoteFollowUpEmailToCustomer') ALTER TABLE "CompanySettings" ADD "QuoteFollowUpEmailToCustomer" BIT NOT NULL DEFAULT 0;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Quotes' AND COLUMN_NAME='FollowUpCreatedAt') ALTER TABLE "Quotes" ADD "FollowUpCreatedAt" DATETIMEOFFSET(7) NULL;""");
+    // Pipeline: tatsächliches Abschlussdatum + GentleHub-Idempotenz für automatisch angelegte Opportunities
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Opportunities' AND COLUMN_NAME='ClosedAt') ALTER TABLE "Opportunities" ADD "ClosedAt" DATETIMEOFFSET(7) NULL;""");
+    await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Opportunities' AND COLUMN_NAME='ExternalRef') ALTER TABLE "Opportunities" ADD "ExternalRef" NVARCHAR(220) NULL;""");
 
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }

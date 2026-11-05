@@ -952,6 +952,7 @@ public class OpportunitiesController(IOpportunityService svc) : ControllerBase
     [HttpGet("{id}")] public async Task<ActionResult<OpportunityDetailDto>> Get(Guid id) => Ok(await svc.GetByIdAsync(id));
     [HttpPost] public async Task<ActionResult<OpportunityDetailDto>> Create(CreateOpportunityRequest req) => Ok(await svc.CreateAsync(req));
     [HttpPut("{id}")] public async Task<ActionResult<OpportunityDetailDto>> Update(Guid id, UpdateOpportunityRequest req) => Ok(await svc.UpdateAsync(id, req));
+    [HttpGet("forecast")] public async Task<ActionResult<OpportunityForecastDto>> Forecast() => Ok(await svc.GetForecastAsync());
     [HttpPut("{id}/stage")] public async Task<ActionResult<OpportunityDetailDto>> UpdateStage(Guid id, UpdateOpportunityStageRequest req) => Ok(await svc.UpdateStageAsync(id, req));
     [HttpDelete("{id}")] public async Task<IActionResult> Delete(Guid id) { await svc.DeleteAsync(id); return NoContent(); }
 }

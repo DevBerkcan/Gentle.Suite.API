@@ -492,11 +492,14 @@ public record UpsertPriceListItemRequest(string Title, string? Description, stri
 public record ClonePriceListRequest(Guid TemplateId, Guid CustomerId);
 
 // === Opportunities ===
-public record OpportunityListDto(Guid Id, Guid CustomerId, string CustomerName, string Title, OpportunityStage Stage, int Probability, decimal ExpectedRevenue, DateTimeOffset? CloseDate, string? AssignedToName, DateTimeOffset CreatedAt);
+public record OpportunityListDto(Guid Id, Guid CustomerId, string CustomerName, string Title, OpportunityStage Stage, int Probability, decimal ExpectedRevenue, DateTimeOffset? CloseDate, string? AssignedToName, DateTimeOffset CreatedAt, string? LostReason = null, DateTimeOffset? ClosedAt = null);
 public record OpportunityDetailDto(Guid Id, Guid CustomerId, string CustomerName, Guid? ContactId, string? ContactName, string Title, OpportunityStage Stage, int Probability, decimal ExpectedRevenue, DateTimeOffset? CloseDate, Guid? AssignedToTeamMemberId, string? AssignedToName, OpportunitySource? Source, string? LostReason, Guid? QuoteId, string? Notes, DateTimeOffset CreatedAt);
 public record CreateOpportunityRequest(Guid CustomerId, Guid? ContactId, string Title, OpportunityStage Stage = OpportunityStage.Qualification, int Probability = 10, decimal ExpectedRevenue = 0, DateTimeOffset? CloseDate = null, Guid? AssignedToTeamMemberId = null, OpportunitySource? Source = null, string? Notes = null);
 public record UpdateOpportunityRequest(Guid? ContactId, string Title, int Probability, decimal ExpectedRevenue, DateTimeOffset? CloseDate, Guid? AssignedToTeamMemberId, OpportunitySource? Source, string? LostReason, Guid? QuoteId, string? Notes);
 public record UpdateOpportunityStageRequest(OpportunityStage Stage, string? LostReason = null);
+public record ForecastMonthDto(int Year, int Month, decimal Pipeline, decimal Weighted, int Count);
+public record LostReasonDto(string Reason, int Count, decimal Value);
+public record OpportunityForecastDto(decimal OpenPipeline, decimal OpenWeighted, int OpenCount, decimal UndatedWeighted, int UndatedCount, decimal OverdueWeighted, int OverdueCount, List<ForecastMonthDto> Months, int WonLast12Months, int LostLast12Months, decimal WonValueLast12Months, List<LostReasonDto> LostReasons);
 
 // === Support Tickets ===
 public record TicketListDto(Guid Id, Guid CustomerId, string CustomerName, string Title, TicketPriority Priority, TicketStatus Status, TicketCategory Category, string? AssignedToName, DateTimeOffset? SlaDueDate, DateTimeOffset CreatedAt, int CommentCount);
