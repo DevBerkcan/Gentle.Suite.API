@@ -54,7 +54,7 @@ builder.Services.AddAuthentication(o => { o.DefaultAuthenticateScheme = JwtBeare
             {
                 var accessToken = ctx.Request.Query["access_token"];
                 var path = ctx.HttpContext.Request.Path;
-                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs/project-board"))
+                if (!string.IsNullOrEmpty(accessToken) && (path.StartsWithSegments("/hubs/project-board") || path.StartsWithSegments("/hubs/notifications")))
                     ctx.Token = accessToken;
                 return Task.CompletedTask;
             }
@@ -72,6 +72,7 @@ builder.Services.AddScoped<ICustomerService, CustomerServiceImpl>();
 builder.Services.AddScoped<ICustomerNoteService, CustomerNoteServiceImpl>();
 builder.Services.AddSingleton<NoteSecretProtector>();
 builder.Services.AddScoped<RenewalService>();
+builder.Services.AddSingleton<GentleSuite.API.Hubs.AppNotifier>();
 builder.Services.AddScoped<IOnboardingService, OnboardingServiceImpl>();
 builder.Services.AddScoped<IQuoteService, QuoteServiceImpl>();
 builder.Services.AddScoped<IInvoiceService, InvoiceServiceImpl>();
@@ -824,6 +825,29 @@ await db.Database.ExecuteSqlRawAsync("""
     // Pipeline: tatsächliches Abschlussdatum + GentleHub-Idempotenz für automatisch angelegte Opportunities
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Opportunities' AND COLUMN_NAME='ClosedAt') ALTER TABLE "Opportunities" ADD "ClosedAt" DATETIMEOFFSET(7) NULL;""");
     await db.Database.ExecuteSqlRawAsync("""IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='Opportunities' AND COLUMN_NAME='ExternalRef') ALTER TABLE "Opportunities" ADD "ExternalRef" NVARCHAR(220) NULL;""");
+    // In-App-Benachrichtigungen
+    await db.Database.ExecuteSqlRawAsync("""
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='AppNotifications')
+    BEGIN
+        CREATE TABLE "AppNotifications" (
+            "Id" UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+            "UserId" NVARCHAR(450) NOT NULL,
+            "Kind" NVARCHAR(50) NOT NULL,
+            "Title" NVARCHAR(200) NOT NULL,
+            "Body" NVARCHAR(1000) NULL,
+            "Href" NVARCHAR(300) NULL,
+            "ReadAt" DATETIMEOFFSET(7) NULL,
+            "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+            "CreatedBy" NVARCHAR(MAX) NULL,
+            "UpdatedAt" DATETIMEOFFSET(7) NULL,
+            "UpdatedBy" NVARCHAR(MAX) NULL,
+            "IsDeleted" BIT NOT NULL DEFAULT 0,
+            "DeletedAt" DATETIMEOFFSET(7) NULL,
+            CONSTRAINT "PK_AppNotifications" PRIMARY KEY ("Id")
+        );
+        CREATE INDEX "IX_AppNotifications_UserId_CreatedAt" ON "AppNotifications" ("UserId", "CreatedAt");
+    END
+    """);
 
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
@@ -895,6 +919,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHub<ProjectBoardHub>("/hubs/project-board");
+app.MapHub<NotificationHub>("/hubs/notifications");
 
 // Hangfire dashboard
 app.MapHangfireDashboard("/hangfire");

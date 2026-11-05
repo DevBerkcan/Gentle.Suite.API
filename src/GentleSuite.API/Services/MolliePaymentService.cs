@@ -30,6 +30,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
     private readonly IConfiguration _configuration;
     private readonly IEmailService _email;
     private readonly ILogger<MolliePaymentService> _logger;
+    private readonly GentleSuite.API.Hubs.AppNotifier _notifier;
 
     private const int MaxCollectionAttempts = 3;
     private const int CollectionRetryDelayDays = 3;
@@ -38,8 +39,9 @@ public sealed class MolliePaymentService : IMolliePaymentService
     private static readonly string[] InFlightStatuses = { "open", "pending", "authorized" };
     private static readonly string[] TerminalFailureStatuses = { "failed", "expired", "canceled" };
 
-    public MolliePaymentService(AppDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, IEmailService email, ILogger<MolliePaymentService> logger)
+    public MolliePaymentService(AppDbContext db, IHttpClientFactory httpClientFactory, IConfiguration configuration, IEmailService email, ILogger<MolliePaymentService> logger, GentleSuite.API.Hubs.AppNotifier notifier)
     {
+        _notifier = notifier;
         _db = db;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
@@ -1041,11 +1043,13 @@ public sealed class MolliePaymentService : IMolliePaymentService
 
         if (isNewlyPaid)
         {
+            await _notifier.NotifyAsync("payment-received", $"Zahlung eingegangen: {invoice.InvoiceNumber}", $"{invoice.Customer.CompanyName} · {invoice.GrossTotal:N2} € per Mollie", $"/invoices/{invoice.Id}");
             await SendPaymentReceivedEmailAsync(invoice, ct);
             await CompleteInstallmentPlanIfFullyPaidAsync(invoice.SubscriptionId, ct);
         }
         if (newChargeback)
         {
+            await _notifier.NotifyAsync("chargeback", $"Rücklastschrift: {invoice.InvoiceNumber}", $"{invoice.Customer.CompanyName} · {chargedBack:N2} € zurückgebucht", $"/invoices/{invoice.Id}");
             await ReopenInstallmentPlanAsync(invoice.SubscriptionId, ct);
             await NotifyStaffAsync(
                 "Mollie: Rücklastschrift eingegangen",

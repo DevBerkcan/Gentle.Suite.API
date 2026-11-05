@@ -2029,8 +2029,8 @@ public class OpportunityServiceImpl : IOpportunityService
 // === Support Tickets ===
 public class SupportTicketServiceImpl : ISupportTicketService
 {
-    private readonly AppDbContext _db;
-    public SupportTicketServiceImpl(AppDbContext db) { _db = db; }
+    private readonly AppDbContext _db; private readonly GentleSuite.API.Hubs.AppNotifier _notifier; private readonly ICurrentUserService _cu;
+    public SupportTicketServiceImpl(AppDbContext db, GentleSuite.API.Hubs.AppNotifier notifier, ICurrentUserService cu) { _db = db; _notifier = notifier; _cu = cu; }
     private IQueryable<SupportTicket> Query() => _db.SupportTickets.Include(t => t.Customer).Include(t => t.AssignedTo).Include(t => t.Comments);
     private static TicketListDto ToListDto(SupportTicket t) => new(t.Id, t.CustomerId, t.Customer?.CompanyName ?? "", t.Title, t.Priority, t.Status, t.Category, t.AssignedTo?.FullName, t.SlaDueDate, t.CreatedAt, t.Comments.Count);
     private static TicketDetailDto ToDetailDto(SupportTicket t) => new(t.Id, t.CustomerId, t.Customer?.CompanyName ?? "", t.SubscriptionId, t.Title, t.Description, t.Priority, t.Status, t.Category, t.AssignedToTeamMemberId, t.AssignedTo?.FullName, t.SlaDueDate, t.ResolvedAt, t.CreatedAt, t.Comments.OrderBy(c => c.CreatedAt).Select(c => new TicketCommentDto(c.Id, c.Content, c.AuthorName, c.IsInternal, c.CreatedAt)).ToList());
@@ -2056,7 +2056,9 @@ public class SupportTicketServiceImpl : ISupportTicketService
             }
         }
         _db.SupportTickets.Add(t); await _db.SaveChangesAsync(ct);
-        return ToDetailDto(await Query().FirstAsync(x => x.Id == t.Id, ct));
+        var created = await Query().FirstAsync(x => x.Id == t.Id, ct);
+        await _notifier.NotifyAsync("ticket-created", $"Neues Ticket: {t.Title}", $"{created.Customer?.CompanyName} · Priorität {t.Priority}", "/tickets", _cu.UserId);
+        return ToDetailDto(created);
     }
     public async Task<TicketDetailDto> UpdateAsync(Guid id, UpdateTicketRequest req, CancellationToken ct) { var t = await Query().FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new KeyNotFoundException(); t.Title = req.Title; t.Description = req.Description; t.Priority = req.Priority; t.Category = req.Category; t.AssignedToTeamMemberId = req.AssignedToTeamMemberId; t.SubscriptionId = req.SubscriptionId; await _db.SaveChangesAsync(ct); return ToDetailDto(await Query().FirstAsync(x => x.Id == id, ct)); }
     public async Task<TicketDetailDto> UpdateStatusAsync(Guid id, UpdateTicketStatusRequest req, CancellationToken ct) { var t = await _db.SupportTickets.FindAsync(new object[] { id }, ct) ?? throw new KeyNotFoundException(); t.Status = req.Status; if (req.Status == TicketStatus.Resolved || req.Status == TicketStatus.Closed) t.ResolvedAt ??= DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); return ToDetailDto(await Query().FirstAsync(x => x.Id == id, ct)); }

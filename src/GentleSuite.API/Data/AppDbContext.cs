@@ -77,6 +77,7 @@ public class AppDbContext : IdentityDbContext<AppUser>, IUnitOfWork
     public DbSet<SupportTicket> SupportTickets => Set<SupportTicket>();
     public DbSet<TicketComment> TicketComments => Set<TicketComment>();
     public DbSet<CrmActivity> CrmActivities => Set<CrmActivity>();
+    public DbSet<AppNotification> AppNotifications => Set<AppNotification>();
     public DbSet<CustomerDocument> CustomerDocuments => Set<CustomerDocument>();
 
     protected override void OnModelCreating(ModelBuilder mb)

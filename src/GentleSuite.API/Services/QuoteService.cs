@@ -25,8 +25,9 @@ public class QuoteServiceImpl : IQuoteService
     private readonly IFileStorageService _fs;
     private readonly ILogger<QuoteServiceImpl> _logger;
     private readonly IAgencyContractService _agencyContracts;
-    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService, ISubscriptionService subscriptionSvc, IMolliePaymentService mollie, IFileStorageService fs, ILogger<QuoteServiceImpl> logger, IAgencyContractService agencyContracts)
-    { _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _subscriptionSvc = subscriptionSvc; _mollie = mollie; _fs = fs; _logger = logger; _agencyContracts = agencyContracts; }
+    private readonly GentleSuite.API.Hubs.AppNotifier _notifier;
+    public QuoteServiceImpl(AppDbContext db, IMapper mapper, IEmailService email, IPdfService pdf, IActivityLogService activity, IConfiguration config, INumberSequenceService seq, IInvoiceService invoiceService, ISubscriptionService subscriptionSvc, IMolliePaymentService mollie, IFileStorageService fs, ILogger<QuoteServiceImpl> logger, IAgencyContractService agencyContracts, GentleSuite.API.Hubs.AppNotifier notifier)
+    { _notifier = notifier; _db = db; _invoiceService = invoiceService; _mapper = mapper; _email = email; _pdf = pdf; _activity = activity; _frontendBaseUrl = config["FrontendBaseUrl"] ?? "http://localhost:3000"; _seq = seq; _subscriptionSvc = subscriptionSvc; _mollie = mollie; _fs = fs; _logger = logger; _agencyContracts = agencyContracts; }
 
     public async Task<PagedResult<QuoteListDto>> GetQuotesAsync(PaginationParams p, QuoteStatus? status, Guid? customerId, CancellationToken ct)
     {
@@ -372,6 +373,8 @@ public class QuoteServiceImpl : IQuoteService
         }
         else { quote.Status = QuoteStatus.Rejected; quote.SignatureStatus = SignatureStatus.Declined; await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "Rejected", $"Abgelehnt: {req.Comment}", ct: ct); }
         await _db.SaveChangesAsync(ct);
+        if (quote.Status == QuoteStatus.Accepted)
+            await _notifier.NotifyAsync("quote-accepted", $"Angebot {quote.QuoteNumber} angenommen", $"{quote.Customer.CompanyName} · {quote.SubtotalOneTime:N2} € einmalig" + (quote.SubtotalMonthly > 0 ? $" + {quote.SubtotalMonthly:N2} € mtl." : "") + " (netto)", $"/quotes/{quote.Id}");
 
         if (quote.SignatureStatus == SignatureStatus.Signed)
         {
