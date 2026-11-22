@@ -13,7 +13,31 @@ using GentleSuite.Infrastructure.Services;
 
 namespace GentleSuite.Infrastructure.Pdf;
 
-public record LegalTextSnapshotItem(string Key, string Title, string Content, string? AttachmentFileName = null);
+/// <summary>Legal text as frozen at send time. Type/Stand are only present in snapshots written since AGB go out as their own
+/// PDF; older snapshots (Type null) keep rendering the text inside the document, exactly as they were sent.</summary>
+public record LegalTextSnapshotItem(string Key, string Title, string Content, string? AttachmentFileName = null, LegalDocumentType? Type = null, DateTimeOffset? Stand = null);
+
+/// <summary>AGB that are maintained as text in Gentlesuite are sent as their own PDF attachment (generated from the text),
+/// and the quote/contract only references them.</summary>
+public static class LegalDocs
+{
+    public static bool IsSeparatePdf(LegalTextSnapshotItem i) => i.Type == LegalDocumentType.Agb && string.IsNullOrEmpty(i.AttachmentFileName) && !string.IsNullOrWhiteSpace(i.Content);
+
+    public static LegalTextSnapshotItem FromBlock(LegalTextBlock b) => new(b.Key, b.Title, b.Content, b.AttachmentFileName, b.Type, b.UpdatedAt ?? b.CreatedAt);
+
+    /// <summary>"AGB_Gentle_Group_Stand_22.11.2026.pdf"</summary>
+    public static string FileName(LegalTextSnapshotItem i, string companyName)
+    {
+        static string Clean(string s) => System.Text.RegularExpressions.Regex.Replace(s.Trim(), @"[^\p{L}\p{N}]+", "_").Trim('_');
+        var kind = i.Type == LegalDocumentType.Agb ? "AGB" : Clean(i.Title);
+        var company = Clean(companyName);
+        return $"{kind}{(company.Length > 0 ? "_" + company : "")}{(i.Stand.HasValue ? "_Stand_" + i.Stand.Value.ToString("dd.MM.yyyy") : "")}.pdf";
+    }
+
+    public static string Reference(LegalTextSnapshotItem i, string companyName)
+        => $"Es gelten unsere Allgemeinen Geschäftsbedingungen{(i.Stand.HasValue ? $" (Stand {i.Stand.Value:dd.MM.yyyy})" : "")}. " +
+           $"Sie sind Bestandteil dieses Dokuments und liegen als eigene PDF-Datei bei: {FileName(i, companyName)}.";
+}
 
 /// <summary>Gentle Group brand tokens — the same values as the CRM (Gentle.Suite globals.css / tailwind.config.ts),
 /// so PDFs look like the app: navy, lime accent, soft lilac-grey surfaces, rounded cards.</summary>
@@ -121,12 +145,12 @@ public class PdfService : IPdfService
         var loc = quote.Customer.Locations.FirstOrDefault(l => l.IsPrimary) ?? quote.Customer.Locations.FirstOrDefault();
         var oneTime = quote.Lines.Where(l => l.LineType == QuoteLineType.OneTime).OrderBy(l => l.SortOrder).ToList();
         var recurring = quote.Lines.Where(l => l.LineType == QuoteLineType.RecurringMonthly).OrderBy(l => l.SortOrder).ToList();
-        List<(string Title, string Content)>? legal = null;
+        List<(string Title, string Content, bool IsReference)>? legal = null;
         if (!string.IsNullOrEmpty(quote.LegalTextBlocksSnapshot))
         {
             // Frozen at send time, so a later edit to the master text doesn't change what an already-sent quote shows.
             var snapshot = JsonSerializer.Deserialize<List<LegalTextSnapshotItem>>(quote.LegalTextBlocksSnapshot);
-            if (snapshot?.Any() == true) legal = snapshot.Select(s => (s.Title, string.IsNullOrEmpty(s.AttachmentFileName) ? s.Content : $"Dieses Dokument liegt als Anhang bei ({s.AttachmentFileName}).")).ToList();
+            if (snapshot?.Any() == true) legal = LegalRender(snapshot, co.CompanyName);
         }
         else
         {
@@ -134,8 +158,8 @@ public class PdfService : IPdfService
             var keys = string.IsNullOrEmpty(quote.LegalTextBlocks) ? new List<string>() : (JsonSerializer.Deserialize<List<string>>(quote.LegalTextBlocks) ?? new List<string>());
             var autoKeys = await _db.LegalTextBlocks.Where(b => b.IsActive && b.AutoAttachToQuotes).Select(b => b.Key).ToListAsync(ct);
             var allKeys = keys.Union(autoKeys).ToList();
-            if (allKeys.Count > 0) legal = (await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct))
-                .Select(b => (b.Title, string.IsNullOrEmpty(b.AttachmentFileName) ? b.Content : $"Dieses Dokument liegt als Anhang bei ({b.AttachmentFileName}).")).ToList();
+            if (allKeys.Count > 0) legal = LegalRender((await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct))
+                .Select(LegalDocs.FromBlock), co.CompanyName);
         }
         List<PaymentTermOption>? paymentTerms = null;
         if (!string.IsNullOrEmpty(quote.PaymentTermKeys))
@@ -207,7 +231,7 @@ public class PdfService : IPdfService
                         if (!string.IsNullOrEmpty(sub)) og.Item().PaddingTop(2).PaddingLeft(singleOption ? 0 : 14).Text(sub).FontSize(8).FontColor(Brand.Muted);
                     }
                 }
-                if (legal?.Any() == true) foreach (var b in legal) { LegalBlock(col, b.Title, b.Content); }
+                if (legal?.Any() == true) foreach (var b in legal) { if (b.IsReference) LegalReference(col, b.Title, b.Content); else LegalBlock(col, b.Title, b.Content); }
                 BuildSignatureArea(col, co, quote.SignatureData, quote.SignedByName, quote.SignedByEmail, quote.SignedAt, quote.Customer.CompanyName);
             });
             p.Footer().Element(f => BuildDocFooter(f, co));
@@ -855,11 +879,11 @@ public class PdfService : IPdfService
             }
         }
         var sections = JsonSerializer.Deserialize<List<ContractSectionDto>>(contract.SectionsJson) ?? new();
-        List<(string Title, string Content)>? legal = null;
+        List<(string Title, string Content, bool IsReference)>? legal = null;
         if (!string.IsNullOrEmpty(contract.LegalTextBlocksSnapshot))
         {
             var snapshot = JsonSerializer.Deserialize<List<LegalTextSnapshotItem>>(contract.LegalTextBlocksSnapshot);
-            if (snapshot?.Any() == true) legal = snapshot.Select(s => (s.Title, string.IsNullOrEmpty(s.AttachmentFileName) ? s.Content : $"Dieses Dokument liegt als Anhang bei ({s.AttachmentFileName}).")).ToList();
+            if (snapshot?.Any() == true) legal = LegalRender(snapshot, co.CompanyName);
         }
 
         var isAv = contract.ContractTypeName.StartsWith("AV-Vertrag", StringComparison.OrdinalIgnoreCase);
@@ -893,7 +917,7 @@ public class PdfService : IPdfService
                     Brand.Section(sec, s.Title);
                     sec.Item().PaddingTop(6).Text(s.Content).FontSize(9).LineHeight(1.35f);
                 }
-                if (legal?.Any() == true) foreach (var b in legal) { LegalBlock(col, b.Title, b.Content); }
+                if (legal?.Any() == true) foreach (var b in legal) { if (b.IsReference) LegalReference(col, b.Title, b.Content); else LegalBlock(col, b.Title, b.Content); }
                 BuildBilateralSignatureArea(col, co, contract);
             });
             p.Footer().Element(f => BuildDocFooter(f, co));
@@ -959,6 +983,56 @@ public class PdfService : IPdfService
 
     /// <summary>Legal text (AGB etc.) under the quote: "§ …", "TEIL …" and "Anlage …" lines become small bold subheadings,
     /// so long AGB stay readable instead of one undivided block of grey text.</summary>
+    /// <summary>What appears inside a quote/contract for each legal text: uploaded files and text-maintained AGB are only
+    /// referenced (they go out as their own attachment); everything else (and every pre-change snapshot) is printed in full.</summary>
+    private static List<(string Title, string Content, bool IsReference)> LegalRender(IEnumerable<LegalTextSnapshotItem> items, string companyName)
+        => items.Select(s =>
+            !string.IsNullOrEmpty(s.AttachmentFileName) ? (s.Title, $"Dieses Dokument liegt als Anhang bei ({s.AttachmentFileName}).", true)
+            : LegalDocs.IsSeparatePdf(s) ? (s.Title, LegalDocs.Reference(s, companyName), true)
+            : (s.Title, s.Content, false)).ToList();
+
+    private static void LegalReference(ColumnDescriptor col, string title, string text)
+    {
+        var g = Brand.Group(col, 70);
+        Brand.Section(g, title);
+        g.Item().PaddingTop(8).Background(Brand.Fill).CornerRadius(Brand.Radius).PaddingVertical(10).PaddingHorizontal(12)
+            .Text(text).FontSize(9).FontColor(Brand.Text).LineHeight(1.35f);
+    }
+
+    /// <summary>A legal text (AGB) as its own PDF in the CRM design: running header with "AGB · Stand …", the full text with
+    /// § headings, page numbers. Used as mail attachment and for the download links.</summary>
+    public async Task<byte[]> GenerateLegalTextPdfAsync(LegalTextSnapshotItem item, CompanySettings co, CancellationToken ct = default)
+    {
+        var logo = await LoadLogoAsync(co.LogoPath);
+        var label = (item.Type == LegalDocumentType.Agb ? "AGB" : item.Title) + (item.Stand.HasValue ? $" · Stand {item.Stand.Value:dd.MM.yyyy}" : "");
+        return Document.Create(c => c.Page(p =>
+        {
+            p.Size(PageSizes.A4); p.MarginTop(30); p.MarginBottom(30); p.MarginHorizontal(45);
+            p.DefaultTextStyle(x => x.FontFamily(Brand.Body).FontSize(9).FontColor(Brand.Text));
+            p.Header().Element(h => BuildSlimHeader(h, co, logo, label));
+            p.Content().PaddingTop(18).Column(col =>
+            {
+                col.Item().Text(item.Title).FontFamily(Brand.Display).Bold().FontSize(20).FontColor(Brand.Navy);
+                col.Item().PaddingTop(4).Text(t =>
+                {
+                    t.Span(co.CompanyName).FontColor(Brand.Muted);
+                    if (item.Stand.HasValue) t.Span($" · Stand {item.Stand.Value:dd.MM.yyyy}").FontColor(Brand.Muted);
+                });
+                var para = new System.Text.StringBuilder();
+                void Flush() { if (para.Length > 0) { col.Item().PaddingTop(4).Text(para.ToString().TrimEnd()).FontSize(9).LineHeight(1.4f); para.Clear(); } }
+                foreach (var raw in item.Content.Replace("\r\n", "\n").Split('\n'))
+                {
+                    var line = raw.TrimEnd();
+                    if (line.StartsWith("TEIL ")) { Flush(); Brand.Section(Brand.Group(col, 80), line, 22); }
+                    else if (line.StartsWith("§ ") || line.StartsWith("Anlage ")) { Flush(); col.Item().PaddingTop(12).Text(line).FontFamily(Brand.Display).Bold().FontSize(10).FontColor(Brand.Navy); }
+                    else para.AppendLine(line);
+                }
+                Flush();
+            });
+            p.Footer().Element(f => BuildDocFooter(f, co));
+        })).GeneratePdf();
+    }
+
     private static void LegalBlock(ColumnDescriptor col, string title, string content)
     {
         Brand.Section(Brand.Group(col, 80), title);
