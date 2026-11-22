@@ -101,6 +101,14 @@ builder.Services.AddScoped<IIntegrationService, IntegrationServiceImpl>();
 builder.Services.AddScoped<ICustomerDocumentService, CustomerDocumentServiceImpl>();
 builder.Services.AddScoped<BankSyncJob>();
 builder.Services.AddHttpClient();
+// Vertrags-Agent (OpenAI wie GentleHub). Ai:Provider = "openai" (Standard, aktiv sobald Ai:ApiKey gesetzt ist) oder
+// "dryrun" (nur außerhalb von Production: feste Testantworten, kein Netz, keine Kosten).
+builder.Services.AddHttpClient("openai", c => c.Timeout = TimeSpan.FromMinutes(3));
+if (string.Equals(builder.Configuration["Ai:Provider"], "dryrun", StringComparison.OrdinalIgnoreCase) && !builder.Environment.IsProduction())
+    builder.Services.AddSingleton<GentleSuite.Infrastructure.Ai.IAiJsonClient>(new GentleSuite.Infrastructure.Ai.DryRunAiJsonClient(GentleSuite.Infrastructure.Services.ContractAiService.DryRunAnswer));
+else
+    builder.Services.AddSingleton<GentleSuite.Infrastructure.Ai.IAiJsonClient, GentleSuite.Infrastructure.Ai.OpenAiJsonClient>();
+builder.Services.AddScoped<GentleSuite.Infrastructure.Services.ContractAiService>();
 builder.Services.AddScoped<IChartOfAccountService, ChartOfAccountServiceImpl>();
 builder.Services.AddScoped<IEmailTemplateService, EmailTemplateServiceImpl>();
 builder.Services.AddScoped<IContactListService, ContactListServiceImpl>();
@@ -159,6 +167,10 @@ builder.Services.AddRateLimiter(o =>
     o.AddPolicy("integration-hub", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
         GentleSuite.API.Middleware.IntegrationApiKeyMiddleware.ProvidedKey(ctx) is { Length: > 12 } k ? k[..12] : Ip(ctx),
         _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    // Vertrags-Agent: jeder Aufruf kostet OpenAI-Guthaben → pro angemeldetem Benutzer eng begrenzt.
+    o.AddPolicy("contract-ai", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+        ctx.User.Identity?.Name ?? Ip(ctx),
+        _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     o.AddPolicy("public-mandate-write", ctx => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(Ip(ctx),
         _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
 });

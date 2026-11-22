@@ -385,7 +385,8 @@ public record GenerateContractRequest(
     int? KuendigungsfristMonate,
     List<string> OptionaleKlauselKeys,
     List<string> LeistungsBlockKeys,
-    Guid? SchnellstartTemplateId
+    Guid? SchnellstartTemplateId,
+    string? Leistungsbeschreibung = null // projektbezogener Abschnitt, z. B. vom Vertrags-Agenten vorgeschlagen
 );
 
 // === Activity ===
