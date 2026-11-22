@@ -30,6 +30,9 @@ public static class SchemaPatches
         // Deliberately the FIRST schema statement: every AspNetUsers query (incl. login) selects this column,
         // so it must not be skipped if a later statement in this try-block throws.
         await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('AspNetUsers','AvatarPath') IS NULL ALTER TABLE "AspNetUsers" ADD "AvatarPath" NVARCHAR(512) NULL;""");
+        // Angebots-Layout: purely additive — one new nullable column ("Über uns"-Text für Angebote). Early, because every
+        // CompanySettings query (PDFs, mails, settings) selects it.
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CompanySettings','QuoteAboutText') IS NULL ALTER TABLE "CompanySettings" ADD "QuoteAboutText" NVARCHAR(MAX) NULL;""");
         // Mollie-Überarbeitung: purely additive — new nullable columns + two new tables, no data update. Placed
         // early for the same reason as AvatarPath: every CustomerSubscriptions/Customers/Invoices query selects
         // these columns, so a later failing statement must not leave them missing.

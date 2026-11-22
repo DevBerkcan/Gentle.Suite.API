@@ -178,64 +178,225 @@ public class PdfService : IPdfService
             catch (JsonException) { /* altes/inkompatibles Format — im PDF einfach ausgelassen */ }
         }
 
-        // No cover page for quotes — only contracts get one.
-        return Document.Create(c => { c.Page(p =>
+        // Layout after the classic "Dienstleistungsangebot": cover page, table of contents, numbered chapters,
+        // acceptance with signatures and — as last chapter — the AGB, so the customer gets one single document.
+        var chapters = new List<(string Id, string Title, Action<ColumnDescriptor> Body, bool NewPage)>();
+        void Chapter(string title, Action<ColumnDescriptor> body, bool newPage = false) => chapters.Add(($"kap{chapters.Count + 1}", title, body, newPage));
+        static void Para(ColumnDescriptor c, string text) => c.Item().PaddingTop(8).Text(text.Trim()).FontSize(9.5f).LineHeight(1.4f);
+
+        if (!string.IsNullOrWhiteSpace(co.QuoteAboutText)) Chapter($"Über {co.CompanyName}", c => Para(c, co.QuoteAboutText!));
+        if (!string.IsNullOrWhiteSpace(quote.IntroText)) Chapter("Einleitung", c => Para(c, quote.IntroText!));
+        var described = quote.Lines.OrderBy(l => l.LineType).ThenBy(l => l.SortOrder).Where(l => !string.IsNullOrWhiteSpace(l.Description)).ToList();
+        if (described.Any()) Chapter("Leistungsbeschreibung", c =>
         {
-            p.Size(PageSizes.A4); p.MarginTop(30); p.MarginBottom(30); p.MarginHorizontal(45);
-            p.DefaultTextStyle(x => x.FontFamily(Brand.Body).FontSize(9.5f).FontColor(Brand.Text));
-            p.Header().Element(h => BuildDocHeader(h, co, logo, "Angebot", $"Nr. {quote.QuoteNumber} · V{quote.Version}", quote.Customer, contact, loc, $"Datum: {quote.CreatedAt:dd.MM.yyyy}", quote.ExpiresAt.HasValue ? $"Gültig bis: {quote.ExpiresAt:dd.MM.yyyy}" : null));
-            p.Content().PaddingTop(16).Column(col =>
+            foreach (var l in described)
+                c.Item().PaddingTop(10).ShowEntire().Column(lc =>
+                {
+                    lc.Item().Text(l.Title).FontFamily(Brand.Display).Bold().FontSize(10).FontColor(Brand.Navy);
+                    lc.Item().PaddingTop(3).Text(l.Description!.Trim()).FontSize(9.5f).LineHeight(1.4f);
+                });
+        });
+        Chapter("Konditionen", c =>
+        {
+            if (oneTime.Any())
             {
-                var n = 0;
-                string Num(string title) => $"{++n:00} — {title}";
-                if (!string.IsNullOrEmpty(quote.Subject)) col.Item().Text($"Betr.: {quote.Subject}").FontFamily(Brand.Display).Bold().FontSize(13).FontColor(Brand.Navy);
-                if (!string.IsNullOrEmpty(quote.IntroText)) col.Item().PaddingTop(8).Text(quote.IntroText).FontSize(9);
-                if (oneTime.Any()) { var g = Brand.Group(col, 110); Brand.Section(g, Num("Einmalige Leistungen")); g.Item().PaddingTop(8).Element(e => BuildQuoteTable(e, oneTime, false)); g.Item().AlignRight().PaddingTop(6).Text($"Summe: {quote.SubtotalOneTime:N2} €").Bold().FontColor(Brand.Navy); }
-                if (recurring.Any()) { var g = Brand.Group(col, 110); Brand.Section(g, Num("Monatliche Leistungen")); g.Item().PaddingTop(8).Element(e => BuildQuoteTable(e, recurring, true)); g.Item().AlignRight().PaddingTop(6).Text($"Monatlich: {quote.SubtotalMonthly:N2} €/Mon.").Bold().FontColor(Brand.Navy); }
-                BuildTotalsBox(col, quote.Subtotal, quote.TaxRate, quote.TaxAmount, quote.GrandTotal, quote.TaxMode);
-                if (!string.IsNullOrEmpty(quote.OutroText)) col.Item().PaddingTop(14).Text(quote.OutroText).FontSize(9);
-                if (paymentTerms?.Any() == true)
+                c.Item().PaddingTop(10).Text("Einmalige Leistungen").FontFamily(Brand.Display).Bold().FontSize(10).FontColor(Brand.Navy);
+                c.Item().PaddingTop(6).Element(e => BuildQuoteTable(e, oneTime, false, showDescriptions: !described.Any()));
+                c.Item().AlignRight().PaddingTop(6).Text($"Summe einmalig: {quote.SubtotalOneTime:N2} €").Bold().FontColor(Brand.Navy);
+            }
+            if (recurring.Any())
+            {
+                c.Item().PaddingTop(14).Text("Monatliche Leistungen").FontFamily(Brand.Display).Bold().FontSize(10).FontColor(Brand.Navy);
+                c.Item().PaddingTop(6).Element(e => BuildQuoteTable(e, recurring, true, showDescriptions: !described.Any()));
+                c.Item().AlignRight().PaddingTop(6).Text($"Summe monatlich: {quote.SubtotalMonthly:N2} € / Monat").Bold().FontColor(Brand.Navy);
+            }
+            BuildTotalsBox(c, quote.Subtotal, quote.TaxRate, quote.TaxAmount, quote.GrandTotal, quote.TaxMode);
+            c.Item().PaddingTop(8).Text(quote.TaxMode == TaxMode.SmallBusiness
+                ? "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet."
+                : "Alle Preise verstehen sich zuzüglich der gesetzlichen Umsatzsteuer, soweit nicht als Bruttobetrag ausgewiesen.").FontSize(8.5f).FontColor(Brand.Muted);
+        });
+        if (paymentTerms?.Any() == true || planOptions?.Any() == true) Chapter("Zahlungsbedingungen", c =>
+        {
+            if (paymentTerms?.Any() == true)
+                foreach (var pt in paymentTerms)
                 {
-                    var pg = Brand.Group(col);
-                    Brand.Section(pg, Num("Zahlungsbedingungen"));
-                    foreach (var pt in paymentTerms)
+                    var chosen = pt.Key == quote.ChosenPaymentTermKey;
+                    c.Item().PaddingTop(8).Text(t =>
                     {
-                        var chosen = pt.Key == quote.ChosenPaymentTermKey;
-                        pg.Item().PaddingTop(6).Text(t =>
-                        {
-                            t.Span(chosen ? "☑ " : "☐ ").FontSize(9);
-                            t.Span(pt.Title).Bold().FontSize(9).FontColor(chosen ? Brand.Navy : Brand.Text);
-                        });
-                        pg.Item().PaddingTop(2).PaddingLeft(14).Text(pt.Content).FontSize(8).FontColor(Brand.Muted);
-                    }
+                        if (paymentTerms.Count > 1) t.Span(chosen ? "☑ " : "☐ ").FontSize(9.5f);
+                        t.Span(pt.Title).Bold().FontSize(9.5f).FontColor(chosen ? Brand.Navy : Brand.Text);
+                    });
+                    c.Item().PaddingTop(2).PaddingLeft(paymentTerms.Count > 1 ? 14 : 0).Text(pt.Content).FontSize(9).FontColor(Brand.Muted).LineHeight(1.35f);
                 }
-                if (planOptions?.Any() == true)
+            if (planOptions?.Any() == true)
+            {
+                var single = planOptions.Count == 1;
+                c.Item().PaddingTop(12).Text(single ? "Zahlungsweise" : "Zahlungsoptionen").FontFamily(Brand.Display).Bold().FontSize(10).FontColor(Brand.Navy);
+                foreach (var opt in planOptions)
                 {
-                    var singleOption = planOptions.Count == 1;
-                    var og = Brand.Group(col);
-                    Brand.Section(og, Num(singleOption ? "Zahlungsweise" : "Zahlungsoptionen"));
-                    foreach (var opt in planOptions)
+                    var chosen = opt.Key == quote.ChosenPaymentPlanOptionKey;
+                    c.Item().PaddingTop(6).Text(t =>
                     {
-                        var chosen = opt.Key == quote.ChosenPaymentPlanOptionKey;
-                        og.Item().PaddingTop(6).Text(t =>
-                        {
-                            if (!singleOption) t.Span(chosen ? "☑ " : "☐ ").FontSize(9);
-                            t.Span(opt.Title).Bold().FontSize(9).FontColor(chosen ? Brand.Navy : Brand.Text);
-                            t.Span($"  —  {opt.TotalAmount:N2} €").FontSize(9);
-                        });
-                        var sub = string.Join(" + ", new[]
-                        {
-                            opt.DownPayment.HasValue && opt.DownPayment.Value > 0 ? $"{opt.DownPayment:N2} € Anzahlung" : null,
-                            opt.MonthlyAmount.HasValue && opt.MonthlyAmount.Value > 0 ? $"{opt.MonthlyAmount:N2} €/Monat" + (opt.Months.HasValue ? $" × {opt.Months}" : "") : null,
-                        }.Where(s => s != null));
-                        if (!string.IsNullOrEmpty(sub)) og.Item().PaddingTop(2).PaddingLeft(singleOption ? 0 : 14).Text(sub).FontSize(8).FontColor(Brand.Muted);
-                    }
+                        if (!single) t.Span(chosen ? "☑ " : "☐ ").FontSize(9.5f);
+                        t.Span(opt.Title).Bold().FontSize(9.5f).FontColor(chosen ? Brand.Navy : Brand.Text);
+                        t.Span($"  —  {opt.TotalAmount:N2} €").FontSize(9.5f);
+                    });
+                    var sub = string.Join(" + ", new[]
+                    {
+                        opt.DownPayment.HasValue && opt.DownPayment.Value > 0 ? $"{opt.DownPayment:N2} € Anzahlung" : null,
+                        opt.MonthlyAmount.HasValue && opt.MonthlyAmount.Value > 0 ? $"{opt.MonthlyAmount:N2} €/Monat" + (opt.Months.HasValue ? $" × {opt.Months}" : "") : null,
+                    }.Where(x => x != null));
+                    if (!string.IsNullOrEmpty(sub)) c.Item().PaddingTop(2).PaddingLeft(single ? 0 : 14).Text(sub).FontSize(9).FontColor(Brand.Muted);
                 }
-                if (legal?.Any() == true) foreach (var b in legal) { if (b.IsReference) LegalReference(col, b.Title, b.Content); else LegalBlock(col, b.Title, b.Content); }
-                BuildSignatureArea(col, co, quote.SignatureData, quote.SignedByName, quote.SignedByEmail, quote.SignedAt, quote.Customer.CompanyName);
+            }
+        });
+        if (!string.IsNullOrWhiteSpace(quote.OutroText)) Chapter("Weitere Hinweise", c => Para(c, quote.OutroText!));
+        var hasAgb = legal?.Any(l => !l.IsReference) == true;
+        Chapter("Angebotsannahme", c =>
+        {
+            var until = quote.ExpiresAt.HasValue ? $"bis zum {quote.ExpiresAt:dd.MM.yyyy}" : "für die angegebene Gültigkeitsdauer";
+            Para(c, $"Wir halten uns an dieses Angebot {until} gebunden. Wenn es Ihren Vorstellungen entspricht, bestätigen Sie es bitte bequem online " +
+                    $"über den Link in unserer E-Mail oder senden uns eine unterschriebene Kopie{(string.IsNullOrWhiteSpace(co.Email) ? "" : $" an {co.Email}")} unter Angabe der Angebotsnummer {quote.QuoteNumber}.");
+            Para(c, "Mit Ihrer Bestätigung kommt der Vertrag zustande; eine darüber hinausgehende schriftliche Vereinbarung ist nicht erforderlich." +
+                    (hasAgb ? " Es gelten unsere Allgemeinen Geschäftsbedingungen, die am Ende dieses Angebots abgedruckt sind." : ""));
+            if (quote.ExpiresAt.HasValue)
+                c.Item().PaddingTop(10).Text(t => { t.Span("Angebot gültig bis: ").FontColor(Brand.Muted); t.Span($"{quote.ExpiresAt:dd.MM.yyyy}").Bold().FontColor(Brand.Navy); });
+            c.Item().PaddingTop(14).Text($"{co.City}, den {quote.CreatedAt:dd.MM.yyyy}").FontSize(9.5f);
+            BuildSignatureArea(c, co, quote.SignatureData, quote.SignedByName, quote.SignedByEmail, quote.SignedAt, quote.Customer.CompanyName);
+        });
+        if (legal?.Any() == true)
+            foreach (var (legalTitle, legalContent, isRef) in legal)
+                Chapter(legalTitle, c =>
+                {
+                    if (isRef) c.Item().PaddingTop(8).Background(Brand.Fill).CornerRadius(Brand.Radius).PaddingVertical(10).PaddingHorizontal(12).Text(legalContent).FontSize(9);
+                    else RenderLegalContent(c, legalContent, 8.5f);
+                }, newPage: !isRef);
+
+        var ourContact = JoinNonEmpty("\n", string.IsNullOrWhiteSpace(co.ManagingDirector) ? null : $"Ansprechpartner: {co.ManagingDirector}",
+            string.IsNullOrWhiteSpace(co.Phone) ? null : $"Telefon: {co.Phone}", string.IsNullOrWhiteSpace(co.Email) ? null : $"E-Mail: {co.Email}");
+        var title = string.IsNullOrWhiteSpace(quote.Subject) ? "Angebot" : quote.Subject!;
+
+        return Document.Create(doc =>
+        {
+            // ---- Deckblatt ----
+            doc.Page(p =>
+            {
+                p.Size(PageSizes.A4); p.Margin(0);
+                p.DefaultTextStyle(x => x.FontFamily(Brand.Body).FontSize(10).FontColor(Brand.Text));
+                p.Content().PaddingHorizontal(60).PaddingTop(56).Column(col =>
+                {
+                    col.Item().Height(52).AlignLeft().AlignMiddle().Element(e =>
+                    {
+                        if (logo != null) e.MaxHeight(52).MaxWidth(220).Image(logo).FitArea();
+                        else Brand.Wordmark(e, co.CompanyName, 22);
+                    });
+                    col.Item().PaddingTop(10).Row(r => { r.ConstantItem(36).Height(2.5f).Background(Brand.Lilac); r.RelativeItem(); });
+
+                    col.Item().PaddingTop(56).AlignLeft().Background(Brand.Navy).CornerRadius(11).PaddingVertical(4).PaddingHorizontal(12)
+                        .Text("DIENSTLEISTUNGSANGEBOT").FontFamily(Brand.Display).Bold().FontSize(8).FontColor(Brand.Accent).LetterSpacing(0.18f);
+                    col.Item().PaddingTop(12).Text(title).FontFamily(Brand.Display).Bold().FontSize(26).FontColor(Brand.Navy).LineHeight(1.15f);
+                    col.Item().PaddingTop(4).Text($"{quote.QuoteNumber} · Version {quote.Version}").FontSize(11).FontColor(Brand.Muted);
+
+                    void Party(string lead, string name, string? address, string role, string? subline = null)
+                    {
+                        col.Item().PaddingTop(26).Text(lead).FontSize(9).FontColor(Brand.Muted);
+                        col.Item().PaddingTop(3).Text(name).FontFamily(Brand.Display).Bold().FontSize(15).FontColor(Brand.Navy);
+                        if (!string.IsNullOrWhiteSpace(subline)) col.Item().Text(subline!).FontSize(9.5f);
+                        if (!string.IsNullOrWhiteSpace(address)) col.Item().Text(address!).FontSize(9.5f);
+                        col.Item().Text(role).FontSize(8.5f).FontColor(Brand.Muted);
+                    }
+                    Party("der", co.CompanyName, JoinNonEmpty(" / ", co.Street, JoinNonEmpty(" ", co.ZipCode, co.City)), "(nachfolgend „wir“)",
+                        string.IsNullOrWhiteSpace(co.LegalName) || co.LegalName == co.CompanyName ? null : $"Inhaber {co.LegalName}");
+                    Party("für", quote.Customer.CompanyName, loc == null ? null : JoinNonEmpty(" / ", loc.Street, JoinNonEmpty(" ", loc.ZipCode, loc.City)), "(nachfolgend „Auftraggeber“)");
+
+                    col.Item().PaddingTop(30).Background(Brand.Fill).CornerRadius(12).Padding(18).Table(t =>
+                    {
+                        t.ColumnsDefinition(cd => { cd.RelativeColumn(); cd.RelativeColumn(); cd.RelativeColumn(); });
+                        void Fact(string label, string? value)
+                        {
+                            t.Cell().PaddingVertical(4).Column(fc =>
+                            {
+                                fc.Item().Text(label.ToUpperInvariant()).FontFamily(Brand.Display).Bold().FontSize(6.5f).FontColor(Brand.Muted).LetterSpacing(0.08f);
+                                fc.Item().PaddingTop(2).Text(string.IsNullOrWhiteSpace(value) ? "–" : value!).FontSize(10).SemiBold().FontColor(Brand.Navy);
+                            });
+                        }
+                        Fact("Ansprechpartner", contact?.FullName);
+                        Fact("Datum", quote.CreatedAt.ToString("dd.MM.yyyy"));
+                        Fact("Gültig bis", quote.ExpiresAt?.ToString("dd.MM.yyyy"));
+                    });
+                    col.Item().PaddingTop(10).Background(Brand.Navy).CornerRadius(Brand.Radius).PaddingVertical(11).PaddingHorizontal(16).Row(r =>
+                    {
+                        r.RelativeItem().AlignMiddle().Column(hc =>
+                        {
+                            hc.Item().Text("Gesamtbetrag").FontFamily(Brand.Display).Bold().FontSize(10).FontColor("#FFFFFF");
+                            hc.Item().Text(quote.TaxMode == TaxMode.SmallBusiness ? "gem. § 19 UStG ohne Umsatzsteuer" : $"inkl. {quote.TaxRate:N0} % MwSt.").FontSize(7.5f).FontColor(Brand.OnNavyMuted);
+                        });
+                        r.AutoItem().AlignMiddle().Text($"{quote.GrandTotal:N2} €").FontFamily(Brand.Display).Bold().FontSize(16).FontColor(Brand.Accent);
+                    });
+                });
+                p.Footer().Column(fc =>
+                {
+                    var contactLine = string.Join(" · ", new[] { co.Email, co.Phone, co.Website }.Where(x => !string.IsNullOrWhiteSpace(x)));
+                    fc.Item().PaddingHorizontal(60).Text($"{co.CompanyName} · {co.Street} · {co.ZipCode} {co.City}").FontSize(7.5f).FontColor(Brand.Muted);
+                    if (contactLine.Length > 0) fc.Item().PaddingHorizontal(60).Text(contactLine).FontSize(7.5f).FontColor(Brand.Muted);
+                    fc.Item().PaddingTop(16).Height(10).Row(r => { r.ConstantItem(140).Background(Brand.Accent); r.RelativeItem().Background(Brand.Navy); });
+                });
             });
-            p.Footer().Element(f => BuildDocFooter(f, co));
-        }); }).GeneratePdf();
+
+            // ---- Inhalt + Kapitel ----
+            doc.Page(p =>
+            {
+                p.Size(PageSizes.A4); p.MarginTop(30); p.MarginBottom(30); p.MarginHorizontal(45);
+                p.DefaultTextStyle(x => x.FontFamily(Brand.Body).FontSize(9.5f).FontColor(Brand.Text));
+                p.Header().Column(h =>
+                {
+                    h.Item().Row(r =>
+                    {
+                        r.RelativeItem().Column(lc =>
+                        {
+                            if (logo != null) lc.Item().MaxHeight(26).MaxWidth(130).Image(logo).FitArea();
+                            else lc.Item().Element(e => Brand.Wordmark(e, co.CompanyName, 12));
+                            if (ourContact != null) lc.Item().PaddingTop(3).Text(ourContact).FontSize(7).FontColor(Brand.Muted);
+                        });
+                        r.AutoItem().AlignBottom().Column(rc =>
+                        {
+                            rc.Item().AlignRight().Background(Brand.Fill).CornerRadius(9).PaddingVertical(3).PaddingHorizontal(9)
+                                .Text($"{quote.QuoteNumber} · V{quote.Version}").FontFamily(Brand.Display).Bold().FontSize(7).FontColor(Brand.Navy).LetterSpacing(0.08f);
+                            rc.Item().PaddingTop(3).AlignRight().Text(title).FontSize(7.5f).FontColor(Brand.Muted);
+                        });
+                    });
+                    h.Item().PaddingTop(8).Row(r => { r.ConstantItem(36).Height(2.5f).Background(Brand.Lilac); r.RelativeItem().AlignMiddle().LineHorizontal(0.5f).LineColor(Brand.Line); });
+                });
+                p.Content().PaddingTop(14).Column(col =>
+                {
+                    col.Item().Text("Inhalt").FontFamily(Brand.Display).Bold().FontSize(20).FontColor(Brand.Navy);
+                    col.Item().PaddingTop(10).Column(toc =>
+                    {
+                        for (var i = 0; i < chapters.Count; i++)
+                        {
+                            var (id, ctitle, _, _) = chapters[i];
+                            toc.Item().SectionLink(id).BorderBottom(0.5f).BorderColor(Brand.Line).PaddingVertical(7).Row(r =>
+                            {
+                                r.ConstantItem(28).Text($"{i + 1}.").FontFamily(Brand.Display).Bold().FontColor(Brand.Navy);
+                                r.RelativeItem().Text(ctitle);
+                                r.AutoItem().Text(t => t.BeginPageNumberOfSection(id).FontColor(Brand.Muted));
+                            });
+                        }
+                    });
+                    col.Item().PageBreak();
+                    for (var i = 0; i < chapters.Count; i++)
+                    {
+                        var (id, ctitle, body, newPage) = chapters[i];
+                        if (newPage && i > 0) col.Item().PageBreak();
+                        var g = Brand.Group(col, 110);
+                        var no = i + 1; var pad = i == 0 || newPage ? 0f : 22f;
+                        g.Item().Section(id).Column(sc => Brand.Section(sc, $"{no:00} — {ctitle}", pad));
+                        body(g);
+                    }
+                });
+                p.Footer().Element(f => BuildDocFooter(f, co));
+            });
+        }).GeneratePdf();
     }
 
     public async Task<byte[]> GenerateInvoicePdfAsync(Invoice inv, CompanySettings co, CancellationToken ct = default)
@@ -639,7 +800,7 @@ public class PdfService : IPdfService
         });
     }
 
-    private static void BuildQuoteTable(IContainer container, List<QuoteLine> items, bool monthly)
+    private static void BuildQuoteTable(IContainer container, List<QuoteLine> items, bool monthly, bool showDescriptions = true)
     {
         container.Table(table =>
         {
@@ -660,7 +821,7 @@ public class PdfService : IPdfService
                 table.Cell().Element(Brand.BodyCell).Column(c =>
                 {
                     c.Item().Text(l.Title).Bold().FontSize(9).FontColor(Brand.Navy);
-                    if (!string.IsNullOrEmpty(l.Description)) c.Item().Text(l.Description).FontSize(8).FontColor(Brand.Muted);
+                    if (showDescriptions && !string.IsNullOrEmpty(l.Description)) c.Item().Text(l.Description).FontSize(8).FontColor(Brand.Muted);
                     if (l.DiscountPercent > 0) c.Item().Text($"Rabatt: {l.DiscountPercent:N0}%").FontSize(8).FontColor("#B54708");
                 });
                 table.Cell().Element(Brand.BodyCell).AlignRight().Text(l.Quantity.ToString("N0")).FontSize(8);
@@ -917,8 +1078,15 @@ public class PdfService : IPdfService
                     Brand.Section(sec, s.Title);
                     sec.Item().PaddingTop(6).Text(s.Content).FontSize(9).LineHeight(1.35f);
                 }
-                if (legal?.Any() == true) foreach (var b in legal) { if (b.IsReference) LegalReference(col, b.Title, b.Content); else LegalBlock(col, b.Title, b.Content); }
+                // Signatures first, then the AGB (and other legal texts) as the last part of the contract.
+                if (legal?.Any(b => b.IsReference) == true) foreach (var b in legal.Where(b => b.IsReference)) LegalReference(col, b.Title, b.Content);
                 BuildBilateralSignatureArea(col, co, contract);
+                if (legal?.Any() == true) foreach (var b in legal.Where(b => !b.IsReference))
+                {
+                    col.Item().PageBreak();
+                    Brand.Section(col, b.Title, 0);
+                    RenderLegalContent(col, b.Content, 8.5f);
+                }
             });
             p.Footer().Element(f => BuildDocFooter(f, co));
         }); }).GeneratePdf();
@@ -988,7 +1156,6 @@ public class PdfService : IPdfService
     private static List<(string Title, string Content, bool IsReference)> LegalRender(IEnumerable<LegalTextSnapshotItem> items, string companyName)
         => items.Select(s =>
             !string.IsNullOrEmpty(s.AttachmentFileName) ? (s.Title, $"Dieses Dokument liegt als Anhang bei ({s.AttachmentFileName}).", true)
-            : LegalDocs.IsSeparatePdf(s) ? (s.Title, LegalDocs.Reference(s, companyName), true)
             : (s.Title, s.Content, false)).ToList();
 
     private static void LegalReference(ColumnDescriptor col, string title, string text)
@@ -1018,19 +1185,25 @@ public class PdfService : IPdfService
                     t.Span(co.CompanyName).FontColor(Brand.Muted);
                     if (item.Stand.HasValue) t.Span($" · Stand {item.Stand.Value:dd.MM.yyyy}").FontColor(Brand.Muted);
                 });
-                var para = new System.Text.StringBuilder();
-                void Flush() { if (para.Length > 0) { col.Item().PaddingTop(4).Text(para.ToString().TrimEnd()).FontSize(9).LineHeight(1.4f); para.Clear(); } }
-                foreach (var raw in item.Content.Replace("\r\n", "\n").Split('\n'))
-                {
-                    var line = raw.TrimEnd();
-                    if (line.StartsWith("TEIL ")) { Flush(); Brand.Section(Brand.Group(col, 80), line, 22); }
-                    else if (line.StartsWith("§ ") || line.StartsWith("Anlage ")) { Flush(); col.Item().PaddingTop(12).Text(line).FontFamily(Brand.Display).Bold().FontSize(10).FontColor(Brand.Navy); }
-                    else para.AppendLine(line);
-                }
-                Flush();
+                RenderLegalContent(col, item.Content, 9);
             });
             p.Footer().Element(f => BuildDocFooter(f, co));
         })).GeneratePdf();
+    }
+
+    /// <summary>Legal text with structure: "TEIL …" as section heading, "§ …"/"Anlage …" as bold subheadings, readable body.</summary>
+    private static void RenderLegalContent(ColumnDescriptor col, string content, float size)
+    {
+        var para = new System.Text.StringBuilder();
+        void Flush() { if (para.Length > 0) { col.Item().PaddingTop(4).Text(para.ToString().Trim()).FontSize(size).LineHeight(1.4f); para.Clear(); } }
+        foreach (var raw in content.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = raw.TrimEnd();
+            if (line.StartsWith("TEIL ")) { Flush(); Brand.Section(Brand.Group(col, 80), line, 20); }
+            else if (line.StartsWith("§ ") || line.StartsWith("Anlage ")) { Flush(); col.Item().PaddingTop(11).Text(line).FontFamily(Brand.Display).Bold().FontSize(size + 1).FontColor(Brand.Navy); }
+            else para.AppendLine(line);
+        }
+        Flush();
     }
 
     private static void LegalBlock(ColumnDescriptor col, string title, string content)
