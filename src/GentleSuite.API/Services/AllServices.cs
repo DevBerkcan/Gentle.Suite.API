@@ -1288,6 +1288,8 @@ public class CompanySettingsServiceImpl : ICompanySettingsService
             s.InternalCopyEmail = copy;
         }
         if (req.QuoteFollowUpDays is int d) s.QuoteFollowUpDays = Math.Clamp(d, 1, 60);
+        // null = vom Client nicht gesendet → unverändert; Leerstring = Kapitel "Über uns" ausblenden.
+        if (req.QuoteAboutText != null) s.QuoteAboutText = req.QuoteAboutText.Trim().Length > 0 ? req.QuoteAboutText.Trim()[..Math.Min(req.QuoteAboutText.Trim().Length, 4000)] : null;
         if (req.QuoteFollowUpEmailToCustomer is bool fe) s.QuoteFollowUpEmailToCustomer = fe;
         if (req.DefaultTaxMode == TaxMode.SmallBusiness)
         {
@@ -1610,13 +1612,8 @@ public class AgencyContractServiceImpl : IAgencyContractService
         if (allKeys.Count > 0 && !isAv)
         {
             var blocks = await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
-            var items = blocks.Select(GentleSuite.Infrastructure.Pdf.LegalDocs.FromBlock).ToList();
-            c.LegalTextBlocksSnapshot = JsonSerializer.Serialize(items);
-            // AGB go out as their own PDF (frozen version) with the signature mail; the contract only references them.
-            var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "GentleSuite" };
-            foreach (var item in items.Where(GentleSuite.Infrastructure.Pdf.LegalDocs.IsSeparatePdf))
-                legalAttachments.Add(new EmailAttachment(GentleSuite.Infrastructure.Pdf.LegalDocs.FileName(item, co.CompanyName),
-                    await _pdf.GenerateLegalTextPdfAsync(item, co, ct), "application/pdf"));
+            // Frozen with type and "Stand"; the AGB are printed at the end of the contract PDF.
+            c.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks.Select(GentleSuite.Infrastructure.Pdf.LegalDocs.FromBlock).ToList());
         }
 
         c.Status = AgencyContractStatus.SentForSignature;

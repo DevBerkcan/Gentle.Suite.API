@@ -234,13 +234,8 @@ public class QuoteServiceImpl : IQuoteService
         if (allKeys.Count > 0)
         {
             var blocks = await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
-            var items = blocks.Select(GentleSuite.Infrastructure.Pdf.LegalDocs.FromBlock).ToList();
-            quote.LegalTextBlocksSnapshot = JsonSerializer.Serialize(items);
-            // AGB maintained as text → generated as their own PDF (frozen version) and attached; the quote only references them.
-            var pdfCo = co ?? new CompanySettings { CompanyName = "GentleSuite" };
-            foreach (var item in items.Where(GentleSuite.Infrastructure.Pdf.LegalDocs.IsSeparatePdf))
-                legalAttachments.Add(new EmailAttachment(GentleSuite.Infrastructure.Pdf.LegalDocs.FileName(item, pdfCo.CompanyName),
-                    await _pdf.GenerateLegalTextPdfAsync(item, pdfCo, ct), "application/pdf"));
+            // Frozen with type and "Stand"; the AGB text is printed as last chapter of the quote PDF attached below.
+            quote.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks.Select(GentleSuite.Infrastructure.Pdf.LegalDocs.FromBlock).ToList());
             foreach (var b in blocks.Where(b => !string.IsNullOrEmpty(b.AttachmentPath)))
             {
                 try
@@ -280,7 +275,17 @@ public class QuoteServiceImpl : IQuoteService
         if (!string.IsNullOrWhiteSpace(req.Message))
             variables["Message"] = req.Message;
 
-        await _email.SendTemplatedEmailAsync(recipientEmail, "quote-sent", variables, quote.CustomerId, attachments: legalAttachments.Count > 0 ? legalAttachments : null, ct: ct);
+        // One document for the customer: the complete quote (incl. AGB as last chapter) goes with the mail ("anbei erhalten Sie …").
+        var attachments = new List<EmailAttachment>();
+        try
+        {
+            var pdfCo = co ?? new CompanySettings { CompanyName = "GentleSuite" };
+            await _db.Entry(quote.Customer).Collection(c => c.Locations).LoadAsync(ct);
+            attachments.Add(new EmailAttachment($"Angebot_{quote.QuoteNumber}.pdf", await _pdf.GenerateQuotePdfAsync(quote, pdfCo, ct), "application/pdf"));
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Quote PDF for mail attachment failed for {QuoteId}", quote.Id); }
+        attachments.AddRange(legalAttachments); // uploaded legal files (if any) stay separate attachments
+        await _email.SendTemplatedEmailAsync(recipientEmail, "quote-sent", variables, quote.CustomerId, attachments: attachments.Count > 0 ? attachments : null, ct: ct);
         await _activity.LogAsync(quote.CustomerId, "Quote", quote.Id, "Sent", $"Angebot {quote.QuoteNumber} versendet", ct: ct);
     }
 

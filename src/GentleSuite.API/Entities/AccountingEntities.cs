@@ -138,4 +138,5 @@ public class CompanySettings : BaseEntity
     public string? InternalCopyEmail { get; set; }          // interne BCC-Kopie aller Kundenmails; leer = aus
     public int QuoteFollowUpDays { get; set; } = 7;           // Nachfass-Aufgabe X Tage nach Versand
     public bool QuoteFollowUpEmailToCustomer { get; set; }    // zusätzlich Erinnerungsmail an den Kunden
+    public string? QuoteAboutText { get; set; }               // "Über uns" – erstes Kapitel jedes Angebots-PDFs; leer = Kapitel entfällt
 }
