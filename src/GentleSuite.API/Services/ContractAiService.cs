@@ -130,7 +130,7 @@ public class ContractAiService(AppDbContext db, IAiJsonClient ai, IConfiguration
         // ---- Parse + validate ----
         try
         {
-            var dto = Validate(result, quotes, subs, templates, blocks);
+            var dto = Validate(result, quotes, subs, templates, blocks, wish);
             await LogRunAsync(customer.Id, userEmail, result.Model, result.PromptTokens, result.CompletionTokens, sw.ElapsedMilliseconds, "Ok", null, ct);
             return dto;
         }
@@ -142,7 +142,7 @@ public class ContractAiService(AppDbContext db, IAiJsonClient ai, IConfiguration
     }
 
     private static ContractAiDraftDto Validate(AiJsonResult result, List<Quote> quotes, List<CustomerSubscription> subs,
-        List<ContractTemplate> templates, List<ContractClauseBlock> blocks)
+        List<ContractTemplate> templates, List<ContractClauseBlock> blocks, string wish)
     {
         JsonObject o;
         try
@@ -183,6 +183,12 @@ public class ContractAiService(AppDbContext db, IAiJsonClient ai, IConfiguration
         if (lKeys.Count == 0) hints.Add("Es wurden keine Leistungsbausteine erkannt – bitte in Schritt 2 auswählen.");
         var oKeys = Strings(o["optionaleKlauselKeys"]).Where(optionKeys.Contains).Distinct().ToList();
 
+        // Safety net independent of the model: align blocks with what the basis actually contains.
+        var basisText = quoteId != null
+            ? string.Join(' ', quotes.First(q => q.Id == quoteId) is var bq ? new[] { bq.Subject ?? "" }.Concat(bq.Lines.Select(l => $"{l.Title} {l.Description}")) : Array.Empty<string>())
+            : subs.First(s => s.Id == subId) is var bs ? $"{bs.Plan.Name} {bs.Plan.Description} {bs.Plan.Category}" : "";
+        ApplyBlockRules(lKeys, oKeys, basisText + " " + wish, leistungKeys, optionKeys, blocks, hints);
+
         // Numbers in sane ranges
         var betrag = Math.Round(Math.Clamp(Dec(o["verguetungBetrag"]) ?? 0m, 0m, 10_000_000m), 2);
         decimal expected = quoteId != null
@@ -206,6 +212,55 @@ public class ContractAiService(AppDbContext db, IAiJsonClient ai, IConfiguration
         return new ContractAiDraftDto(quoteId, subId, basisLabel, tpl?.Id, tpl?.Name, lKeys, oKeys,
             betrag, Cut(Str(o["verguetungAnmerkung"]), 200), frist, fest, laufzeit, kuendigung,
             string.IsNullOrWhiteSpace(lb) ? null : lb, Cut(Str(o["begruendung"]), 600), hints, result.Model);
+    }
+
+    /// <summary>Keyword rules on the basis positions + the request: add clearly indicated blocks, drop the logo block when no
+    /// logo is mentioned, and tick the AV clause whenever personal data is likely processed. Every change becomes a hint.</summary>
+    internal static void ApplyBlockRules(List<string> lKeys, List<string> oKeys, string text, HashSet<string> leistungKeys,
+        HashSet<string> optionKeys, List<ContractClauseBlock> blocks, List<string> hints)
+    {
+        var t = text.ToLowerInvariant();
+        string Title(string key) => (blocks.FirstOrDefault(b => b.Key == key)?.Title ?? key).Replace("Spezifizierte Leistungen: ", "");
+        bool Has(string pattern) => Regex.IsMatch(t, pattern);
+
+        var adds = new (string Key, string Pattern, string Why)[]
+        {
+            ("marketing-sea", @"google[\s-]*ads|adwords|\bsea\b|suchmaschinenwerbung|anzeigenkampagne", "Google Ads/SEA"),
+            ("marketing-seo", @"\bseo\b|suchmaschinenoptimierung", "SEO"),
+            ("marketing-social", @"social[\s-]*media|instagram|facebook|tiktok|linkedin", "Social Media"),
+            ("marketing-content", @"content[\s-]*marketing|blogartikel|redaktionsplan", "Content-Marketing"),
+            ("webseiten-hosting", @"hosting|webspace", "Hosting"),
+            ("webseiten-domain", @"\bdomains?\b|domainregistrierung", "Domain"),
+            ("software-app", @"\bapps?\b|\bios\b|android", "App"),
+            ("software-api", @"\bapis?\b|schnittstelle", "API/Schnittstelle"),
+            ("design-print", @"flyer|visitenkarte|\bprint|broschüre", "Print"),
+        };
+        foreach (var (key, pattern, why) in adds)
+            if (leistungKeys.Contains(key) && !lKeys.Contains(key) && Has(pattern))
+            {
+                lKeys.Add(key);
+                hints.Add($"Baustein „{Title(key)}“ ergänzt, weil {why} in Angebot/Anfrage vorkommt.");
+            }
+
+        if (lKeys.Contains("design-logo") && !Has(@"logo"))
+        {
+            lKeys.Remove("design-logo");
+            hints.Add("Baustein „Logodesign“ entfernt – im Angebot und in der Anfrage kommt kein Logo vor.");
+        }
+
+        const string av = "av-vertrag";
+        if (optionKeys.Contains(av) && !oKeys.Contains(av))
+        {
+            var dataBlocks = lKeys.Where(k => k.StartsWith("wartung") || k.StartsWith("software") || k == "webseiten-hosting").ToList();
+            var m = Regex.Match(t, @"buchung|\btermin(?:e|buchung|vereinbarung)?\b|\b(?:online|web)?-?shops?\b|formular|newsletter|login|kundenkonto|kundendaten|\bcrm\b|datenbank|hosting|wartung|tracking|e-mail-postf");
+            if (dataBlocks.Count > 0 || m.Success)
+            {
+                oKeys.Add(av);
+                hints.RemoveAll(h => h.Contains("av-vertrag", StringComparison.OrdinalIgnoreCase) || h.Contains("Auftragsverarbeitung", StringComparison.OrdinalIgnoreCase));
+                var why = m.Success ? $"„{m.Value}“ in Angebot/Anfrage" : $"Baustein „{Title(dataBlocks[0])}“";
+                hints.Add($"Klausel „Datenschutz und Auftragsverarbeitung“ angekreuzt ({why}) – wir verarbeiten dabei voraussichtlich personenbezogene Daten des Kunden.");
+            }
+        }
     }
 
     private async Task LogRunAsync(Guid customerId, string? user, string model, int pt, int ctk, long ms, string status, string? error, CancellationToken ct)
@@ -263,10 +318,18 @@ public class ContractAiService(AppDbContext db, IAiJsonClient ai, IConfiguration
           Wartungs-, Hosting- und Support-Verträge passen meist zu einer Serienrechnung, Projekte (Website, Software, App, Logo) zu einem Angebot.
           Nennt die Anfrage eine Nummer oder ein Paket, nimm genau das.
         - vorlageKey: genau ein key aus "vorlagen", der zur Anfrage passt (z. B. "wartungsvertrag", "webdesign-vertrag", "softwareentwicklungsvertrag").
-        - leistungsBlockKeys: nur keys aus "leistungsbausteine". Starte mit den standardBausteinen der Vorlage und ergänze, was laut Anfrage
-          oder Angebotspositionen dazugehört (z. B. Logo im Angebot → "design-logo", Hosting im Angebot → "webseiten-hosting").
-        - optionaleKlauselKeys: nur keys aus "optionaleKlauseln". "av-vertrag" (Datenschutz/Auftragsverarbeitung) immer dann, wenn wir
-          personenbezogene Daten des Kunden verarbeiten könnten (Hosting, Wartung mit Zugriff, Software mit Nutzerdaten, Shops, Formulare).
+        - leistungsBlockKeys: nur keys aus "leistungsbausteine". Gehe JEDE Angebotsposition (bzw. das Paket) durch und nimm für jede
+          Leistung den passenden Baustein. Die standardBausteine der Vorlage sind nur ein Vorschlag: entferne die, die weder in den
+          Positionen noch in der Anfrage vorkommen. Zuordnung:
+          Website/Seiten/CMS → "webseiten-erstellung"; Impressum/Datenschutzerklärung → "webseiten-impressum"; Hosting/Webspace → "webseiten-hosting";
+          Domain → "webseiten-domain"; Logo → "design-logo" (NUR wenn ein Logo vorkommt); Flyer/Print → "design-print";
+          Google Ads/SEA → "marketing-sea"; SEO → "marketing-seo"; Social Media → "marketing-social"; Content/Texte als Marketing → "marketing-content";
+          Individualsoftware/Portal → "software-entwicklung"; App → "software-app"; API/Schnittstelle → "software-api"; Quellcode-Übergabe → "software-quellcode";
+          Wartung Website → "wartung-leistung"; Wartung Software/APIs → "wartung-software"; Reaktionszeiten/SLA → "wartung-sla";
+          Beratung/Workshop → "beratung-consulting"; UX/UI → "beratung-uxui".
+        - optionaleKlauselKeys: nur keys aus "optionaleKlauseln". Setze "av-vertrag" (Datenschutz/Auftragsverarbeitung) direkt – nicht nur als
+          offenen Punkt –, sobald wir personenbezogene Daten des Kunden oder seiner Kunden verarbeiten könnten: Online-Buchung/Termine,
+          Shop, Formulare, Newsletter, Logins/Kundenkonten, CRM, Tracking, Hosting, Wartung mit Zugriff, Software/Apps mit Nutzerdaten.
         - verguetungBetrag: Zahl in Euro netto. Ohne Angabe in der Anfrage: Projekt → einmalige Nettosumme des Angebots;
           Serienrechnung → Betrag pro Zyklus. verguetungAnmerkung kurz, z. B. "monatlich, zzgl. MwSt." oder "pauschal laut Angebot AN-0012, zzgl. MwSt.".
         - zahlungsfristTage: Standard 14, wenn nichts genannt ist.
@@ -307,7 +370,7 @@ public class ContractAiService(AppDbContext db, IAiJsonClient ai, IConfiguration
             ["basis"] = new JsonObject { ["typ"] = useSub ? "serienrechnung" : "angebot", ["id"] = (string?)basis["id"] },
             ["vorlageKey"] = key,
             ["leistungsBlockKeys"] = tpl?["standardBausteine"]?.DeepClone() ?? new JsonArray(),
-            ["optionaleKlauselKeys"] = new JsonArray("av-vertrag"),
+            ["optionaleKlauselKeys"] = new JsonArray(),
             ["verguetungBetrag"] = monthly.Success ? monthly.Groups[1].Value : null,
             ["verguetungAnmerkung"] = useSub ? "monatlich, zzgl. MwSt." : "pauschal laut Angebot, zzgl. MwSt.",
             ["zahlungsfristTage"] = 14,
