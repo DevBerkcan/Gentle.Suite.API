@@ -688,5 +688,27 @@ public static class SchemaPatches
         END
         """);
 
+        // Vertrags-Agent: purely additive — one new table "AiRuns" (Protokoll je KI-Lauf: Tokens, Dauer, Status; keine Prompts).
+        await db.Database.ExecuteSqlRawAsync("""
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='AiRuns')
+        BEGIN
+            CREATE TABLE "AiRuns" (
+                "Id" UNIQUEIDENTIFIER NOT NULL,
+                "Feature" NVARCHAR(50) NOT NULL,
+                "CustomerId" UNIQUEIDENTIFIER NULL,
+                "UserEmail" NVARCHAR(256) NULL,
+                "Model" NVARCHAR(100) NOT NULL,
+                "PromptTokens" INT NOT NULL,
+                "CompletionTokens" INT NOT NULL,
+                "DurationMs" INT NOT NULL,
+                "Status" NVARCHAR(30) NOT NULL,
+                "Error" NVARCHAR(400) NULL,
+                "CreatedAt" DATETIMEOFFSET(7) NOT NULL,
+                CONSTRAINT "PK_AiRuns" PRIMARY KEY ("Id")
+            );
+            CREATE INDEX "IX_AiRuns_CreatedAt" ON "AiRuns" ("CreatedAt");
+        END
+        """);
+
     }
 }

@@ -1785,6 +1785,13 @@ public class AgencyContractServiceImpl : IAgencyContractService
         static int Rank(string[] order, string cat) { var i = Array.IndexOf(order, cat); return i < 0 ? order.Length : i; }
         var leistungsBlocks = allBlocks.Where(b => req.LeistungsBlockKeys.Contains(b.Key) && !reserved.Contains(b.Category))
             .OrderBy(b => Rank(categoryOrder, b.Category)).ThenBy(b => b.Category).ThenBy(b => b.SortOrder).ToList();
+        if (!string.IsNullOrWhiteSpace(req.Leistungsbeschreibung))
+        {
+            var lb = req.Leistungsbeschreibung.Trim();
+            if (lb.Length > 6000) throw new InvalidOperationException("Die Leistungsbeschreibung ist zu lang (max. 6.000 Zeichen).");
+            if (lb.Contains("[bitte", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Die Leistungsbeschreibung enthält noch Platzhalter „[bitte …]“.");
+            sections.Add(new ContractSectionDto("Leistungsbeschreibung", lb));
+        }
         foreach (var b in leistungsBlocks) sections.Add(new ContractSectionDto(b.Title, b.Content));
 
         if (leistungsBlocks.Any(b => b.IsCreativeWork))
