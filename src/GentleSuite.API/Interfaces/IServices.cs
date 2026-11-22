@@ -488,6 +488,7 @@ public interface IPdfService
     Task<byte[]> GenerateInvoicePdfAsync(Invoice invoice, CompanySettings company, CancellationToken ct = default);
     Task<byte[]> GenerateAgencyContractPdfAsync(AgencyContract contract, CompanySettings company, CancellationToken ct = default);
     Task<byte[]> GenerateEstimatePdfAsync(Estimate estimate, CompanySettings company, CancellationToken ct = default);
+    Task<byte[]> GenerateLegalTextPdfAsync(GentleSuite.Infrastructure.Pdf.LegalTextSnapshotItem item, CompanySettings company, CancellationToken ct = default);
 }
 
 public interface ICurrentUserService

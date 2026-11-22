@@ -614,6 +614,17 @@ public class LegalTextsController(ILegalTextService svc) : ControllerBase
         return File(stream, contentType, fileName);
     }
     [HttpDelete("{id}/attachment")] public async Task<ActionResult<LegalTextBlockDto>> DeleteAttachment(Guid id) => Ok(await svc.DeleteAttachmentAsync(id));
+    /// <summary>Preview of the PDF that goes out as mail attachment (current text, today's "Stand" = last change).</summary>
+    [HttpGet("{id}/pdf")]
+    public async Task<IActionResult> Pdf(Guid id, [FromServices] AppDbContext db, [FromServices] IPdfService pdf, CancellationToken ct)
+    {
+        var b = await db.LegalTextBlocks.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (b == null) return NotFound();
+        if (string.IsNullOrWhiteSpace(b.Content)) return BadRequest(new { error = "Dieser Rechtstext hat keinen Text." });
+        var co = await db.CompanySettings.FirstOrDefaultAsync(ct) ?? new GentleSuite.Domain.Entities.CompanySettings { CompanyName = "GentleSuite" };
+        var item = GentleSuite.Infrastructure.Pdf.LegalDocs.FromBlock(b);
+        return File(await pdf.GenerateLegalTextPdfAsync(item, co, ct), "application/pdf", GentleSuite.Infrastructure.Pdf.LegalDocs.FileName(item, co.CompanyName));
+    }
 }
 
 [ApiController, Route("api/paymentterms"), Authorize]

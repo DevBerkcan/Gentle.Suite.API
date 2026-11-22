@@ -343,7 +343,7 @@ public record ServiceCatalogItemDto(Guid Id, Guid CategoryId, string Name, strin
 public record EmailLogDto(Guid Id, string To, string Subject, EmailStatus Status, string? Error, DateTimeOffset CreatedAt, DateTimeOffset? SentAt, string? TemplateKey);
 
 // === Legal Text ===
-public record LegalTextBlockDto(Guid Id, string Key, string Title, string Content, int SortOrder, LegalDocumentType Type, bool AutoAttachToQuotes, string? AttachmentFileName);
+public record LegalTextBlockDto(Guid Id, string Key, string Title, string Content, int SortOrder, LegalDocumentType Type, bool AutoAttachToQuotes, string? AttachmentFileName, DateTimeOffset CreatedAt = default, DateTimeOffset? UpdatedAt = null);
 public record CreateLegalTextRequest(string Key, string Title, string Content, int SortOrder = 0, LegalDocumentType Type = LegalDocumentType.Sonstiges, bool AutoAttachToQuotes = false);
 
 // === Payment Terms ===

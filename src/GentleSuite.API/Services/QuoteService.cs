@@ -234,7 +234,13 @@ public class QuoteServiceImpl : IQuoteService
         if (allKeys.Count > 0)
         {
             var blocks = await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
-            quote.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks.Select(b => new { b.Key, b.Title, b.Content, b.AttachmentFileName }));
+            var items = blocks.Select(GentleSuite.Infrastructure.Pdf.LegalDocs.FromBlock).ToList();
+            quote.LegalTextBlocksSnapshot = JsonSerializer.Serialize(items);
+            // AGB maintained as text → generated as their own PDF (frozen version) and attached; the quote only references them.
+            var pdfCo = co ?? new CompanySettings { CompanyName = "GentleSuite" };
+            foreach (var item in items.Where(GentleSuite.Infrastructure.Pdf.LegalDocs.IsSeparatePdf))
+                legalAttachments.Add(new EmailAttachment(GentleSuite.Infrastructure.Pdf.LegalDocs.FileName(item, pdfCo.CompanyName),
+                    await _pdf.GenerateLegalTextPdfAsync(item, pdfCo, ct), "application/pdf"));
             foreach (var b in blocks.Where(b => !string.IsNullOrEmpty(b.AttachmentPath)))
             {
                 try
@@ -826,7 +832,21 @@ public class QuoteServiceImpl : IQuoteService
         var quote = await _db.Quotes.FirstOrDefaultAsync(q => q.ApprovalTokenHash == tokenHash, ct) ?? throw new KeyNotFoundException();
         if (!quote.IsCurrentVersion || quote.ApprovalTokenExpiry <= DateTimeOffset.UtcNow || quote.Status is QuoteStatus.Expired or QuoteStatus.Inactive)
             throw new InvalidOperationException("Link expired or invalid.");
-        var block = await _db.LegalTextBlocks.FirstOrDefaultAsync(b => b.Key == key && b.IsActive, ct) ?? throw new KeyNotFoundException("Dokument nicht gefunden.");
+        // Text-maintained AGB: serve the version frozen with this quote (or the current one before sending) as generated PDF.
+        GentleSuite.Infrastructure.Pdf.LegalTextSnapshotItem? frozen = null;
+        if (!string.IsNullOrEmpty(quote.LegalTextBlocksSnapshot))
+            try { frozen = JsonSerializer.Deserialize<List<GentleSuite.Infrastructure.Pdf.LegalTextSnapshotItem>>(quote.LegalTextBlocksSnapshot)?.FirstOrDefault(s => s.Key == key); } catch (JsonException) { }
+        var block = await _db.LegalTextBlocks.FirstOrDefaultAsync(b => b.Key == key && b.IsActive, ct);
+        var item = frozen ?? (block != null ? GentleSuite.Infrastructure.Pdf.LegalDocs.FromBlock(block) : null) ?? throw new KeyNotFoundException("Dokument nicht gefunden.");
+        var isAgbText = string.IsNullOrEmpty(item.AttachmentFileName) && !string.IsNullOrWhiteSpace(item.Content)
+            && (item.Type == LegalDocumentType.Agb || block?.Type == LegalDocumentType.Agb);
+        if (isAgbText)
+        {
+            var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "GentleSuite" };
+            var bytes = await _pdf.GenerateLegalTextPdfAsync(item with { Type = LegalDocumentType.Agb }, co, ct);
+            return (new MemoryStream(bytes), GentleSuite.Infrastructure.Pdf.LegalDocs.FileName(item, co.CompanyName), "application/pdf");
+        }
+        if (block == null) throw new KeyNotFoundException("Dokument nicht gefunden.");
         if (string.IsNullOrEmpty(block.AttachmentPath)) throw new InvalidOperationException("Für dieses Dokument wurde keine Datei hochgeladen.");
         var stream = await _fs.DownloadAsync(block.AttachmentPath, ct);
         return (stream, block.AttachmentFileName ?? "dokument.pdf", block.AttachmentContentType ?? "application/octet-stream");

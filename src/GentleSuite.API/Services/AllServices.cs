@@ -1606,10 +1606,17 @@ public class AgencyContractServiceImpl : IAgencyContractService
         var allKeys = chosenKeys.Union(autoAttachKeys).ToList();
         // The AV-Vertrag is a standalone data-protection agreement; the AGB already came with the quote.
         var isAv = c.ContractTemplateId != null && await _db.ContractTemplates.AnyAsync(t => t.Id == c.ContractTemplateId && t.Key == LegalDocumentSeed.AvTemplateKey, ct);
+        var legalAttachments = new List<EmailAttachment>();
         if (allKeys.Count > 0 && !isAv)
         {
             var blocks = await _db.LegalTextBlocks.Where(b => allKeys.Contains(b.Key) && b.IsActive).OrderBy(b => b.SortOrder).ToListAsync(ct);
-            c.LegalTextBlocksSnapshot = JsonSerializer.Serialize(blocks.Select(b => new { b.Key, b.Title, b.Content, b.AttachmentFileName }));
+            var items = blocks.Select(GentleSuite.Infrastructure.Pdf.LegalDocs.FromBlock).ToList();
+            c.LegalTextBlocksSnapshot = JsonSerializer.Serialize(items);
+            // AGB go out as their own PDF (frozen version) with the signature mail; the contract only references them.
+            var co = await _db.CompanySettings.FirstOrDefaultAsync(ct) ?? new CompanySettings { CompanyName = "GentleSuite" };
+            foreach (var item in items.Where(GentleSuite.Infrastructure.Pdf.LegalDocs.IsSeparatePdf))
+                legalAttachments.Add(new EmailAttachment(GentleSuite.Infrastructure.Pdf.LegalDocs.FileName(item, co.CompanyName),
+                    await _pdf.GenerateLegalTextPdfAsync(item, co, ct), "application/pdf"));
         }
 
         c.Status = AgencyContractStatus.SentForSignature;
@@ -1625,7 +1632,7 @@ public class AgencyContractServiceImpl : IAgencyContractService
                 ["ContractNumber"] = c.ContractNumber,
                 ["ContractTypeName"] = c.ContractTypeName,
                 ["SigningUrl"] = signingUrl
-            }, c.CustomerId, ct: ct);
+            }, c.CustomerId, attachments: legalAttachments.Count > 0 ? legalAttachments : null, ct: ct);
         }
         catch (Exception ex) { _logger.LogError(ex, "Agency contract signature email failed for {ContractId}", id); }
 
