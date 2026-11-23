@@ -397,6 +397,14 @@ public class SubscriptionBillingJob
                 await _mollie.CollectInvoiceAsync(invoice.Id, CancellationToken.None);
                 if (invoice.PaymentCollectionStatus == "scheduled") started++;
             }
+            catch (MollieMandateMissingException ex)
+            {
+                // Not a technical failure: staff were notified once when the mandate became unusable and the
+                // monitoring shows the invoice as waiting for a new payment method. Stays scheduled, so it is
+                // collected automatically as soon as the customer has set up a new mandate.
+                _logger.LogInformation("Collection of invoice {InvoiceNumber} waits for a new mandate: {Message}", invoice.InvoiceNumber, ex.Message);
+                _db.ChangeTracker.Clear();
+            }
             catch (Exception ex)
             {
                 // Keep it scheduled. The next run first searches Mollie by invoice metadata,

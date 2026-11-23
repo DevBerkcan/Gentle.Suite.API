@@ -23,6 +23,14 @@ public sealed class MollieApiException : InvalidOperationException
         : base($"Mollie-Anfrage fehlgeschlagen ({statusCode}).") { StatusCode = statusCode; Detail = detail; }
 }
 
+/// <summary>A collection cannot run because the subscription has no usable Mollie mandate (never set up,
+/// revoked by Mollie after a declined card, or deleted). Not a technical error: the customer has to set up
+/// a new payment method, after which the still scheduled invoice is collected automatically.</summary>
+public sealed class MollieMandateMissingException : InvalidOperationException
+{
+    public MollieMandateMissingException(string message) : base(message) { }
+}
+
 public sealed class MolliePaymentService : IMolliePaymentService
 {
     private readonly AppDbContext _db;
@@ -176,7 +184,14 @@ public sealed class MolliePaymentService : IMolliePaymentService
     {
         var mollieCustomerId = await ResolveMollieCustomerIdAsync(subscription, ct);
         if (string.IsNullOrWhiteSpace(mollieCustomerId)) return false;
-        var mandates = await ListMandatesAsync(mollieCustomerId, ct);
+        List<JsonNode> mandates;
+        try { mandates = await ListMandatesAsync(mollieCustomerId, ct); }
+        catch (MollieApiException ex) when (ex.StatusCode is 404 or 410)
+        {
+            // Mollie customer no longer exists (deleted / other mode): nothing to adopt.
+            _logger.LogWarning("Mollie customer {MollieCustomerId} not found ({Status}) for subscription {SubscriptionId}", mollieCustomerId, ex.StatusCode, subscription.Id);
+            return false;
+        }
         var valid = PickMandate(mandates, "valid", subscription.Customer.MollieMandateId, subscription.MollieMandateId);
         if (valid != null)
         {
@@ -191,6 +206,27 @@ public sealed class MolliePaymentService : IMolliePaymentService
             ApplyMandate(subscription, pending);
         }
         return false;
+    }
+
+    /// <summary>Loads one mandate. Mollie answers 410 Gone for a revoked mandate (e.g. after the card issuer
+    /// declined a recurring payment) and 404 for an unknown one — both mean "no longer usable" → null.</summary>
+    private async Task<JsonNode?> GetMandateOrNullAsync(string mollieCustomerId, string mandateId, CancellationToken ct)
+    {
+        try { return await GetAsync($"customers/{Uri.EscapeDataString(mollieCustomerId)}/mandates/{Uri.EscapeDataString(mandateId)}", ct); }
+        catch (MollieApiException ex) when (ex.StatusCode is 404 or 410)
+        {
+            _logger.LogWarning("Mollie mandate {MandateId} of {MollieCustomerId} is gone ({Status})", mandateId, mollieCustomerId, ex.StatusCode);
+            return null;
+        }
+    }
+
+    /// <summary>Marks the subscription's mandate as unusable so the setup link works again and nothing keeps
+    /// trying to charge it. Id/method/last 4 digits stay for the history.</summary>
+    private static void MarkMandateGone(CustomerSubscription subscription)
+    {
+        subscription.MollieMandateStatus = "invalid";
+        if (subscription.Customer != null && subscription.Customer.MollieMandateId == subscription.MollieMandateId)
+            subscription.Customer.MollieMandateId = null;
     }
 
     private async Task<List<JsonNode>> ListMandatesAsync(string mollieCustomerId, CancellationToken ct)
@@ -658,18 +694,35 @@ public sealed class MolliePaymentService : IMolliePaymentService
         if (string.IsNullOrWhiteSpace(subscription.MollieCustomerId) ||
             string.IsNullOrWhiteSpace(subscription.MollieMandateId) ||
             !IsValid(subscription.MollieMandateStatus))
-            throw new InvalidOperationException("Für das Abonnement liegt kein gültiges Mollie-Mandat vor.");
-
-        var currentMandate = await GetAsync($"customers/{subscription.MollieCustomerId}/mandates/{subscription.MollieMandateId}", ct);
-        ApplyMandate(subscription, currentMandate);
-        if (!IsValid(subscription.MollieMandateStatus) && !await TryAdoptExistingMandateAsync(subscription, ct))
         {
-            subscription.Status = SubscriptionStatus.Paused;
-            subscription.PausedAt = DateTimeOffset.UtcNow;
+            // The customer may have set up a new payment method meanwhile (e.g. via another contract).
+            var adopted = await TryAdoptExistingMandateAsync(subscription, ct);
             await _db.SaveChangesAsync(ct);
-            throw new InvalidOperationException("Das Mollie-Mandat ist nicht mehr gültig; das Abonnement wurde pausiert.");
+            if (!adopted)
+                throw new MollieMandateMissingException("Kein gültiges Mollie-Mandat – der Kunde muss die Zahlungsart neu einrichten.");
         }
-        await _db.SaveChangesAsync(ct);
+        else
+        {
+            var currentMandate = await GetMandateOrNullAsync(subscription.MollieCustomerId!, subscription.MollieMandateId!, ct);
+            if (currentMandate == null) MarkMandateGone(subscription);
+            else ApplyMandate(subscription, currentMandate);
+            if (!IsValid(subscription.MollieMandateStatus) && !await TryAdoptExistingMandateAsync(subscription, ct))
+            {
+                var lostMandateId = subscription.MollieMandateId;
+                subscription.Status = SubscriptionStatus.Paused;
+                subscription.PausedAt = DateTimeOffset.UtcNow;
+                await _db.SaveChangesAsync(ct);
+                // Only reached on the transition valid → unusable, so this goes out once per subscription.
+                await NotifyStaffAsync(
+                    "Mollie-Mandat ungültig – neue Zahlungsart nötig",
+                    $"Das Zahlungsmandat {lostMandateId} von {subscription.Customer.CompanyName} ({subscription.InstallmentSourceTitle ?? subscription.Plan.Name}) ist bei Mollie nicht mehr gültig " +
+                    $"(z. B. von Mollie widerrufen, nachdem die Bank eine Abbuchung abgelehnt hat). Rechnung {invoice.InvoiceNumber} konnte deshalb nicht eingezogen werden. " +
+                    "Das Abo wurde pausiert. Bitte dem Kunden den Einrichtungslink für eine neue Zahlungsart senden – offene Einzüge laufen danach automatisch; das Abo anschließend wieder auf 'Aktiv' setzen.",
+                    ct);
+                throw new MollieMandateMissingException("Das Mollie-Mandat ist nicht mehr gültig; das Abonnement wurde pausiert. Der Kunde muss die Zahlungsart neu einrichten.");
+            }
+            await _db.SaveChangesAsync(ct);
+        }
 
         if (!string.IsNullOrWhiteSpace(invoice.ExternalPaymentReference))
         {
@@ -853,7 +906,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
                 var mandateId = payment["mandateId"]?.GetValue<string>();
                 JsonNode? mandate = null;
                 if (!string.IsNullOrWhiteSpace(mandateId))
-                    mandate = await GetAsync($"customers/{Uri.EscapeDataString(mollieCustomerId)}/mandates/{Uri.EscapeDataString(mandateId)}", ct);
+                    mandate = await GetMandateOrNullAsync(mollieCustomerId, mandateId, ct);
                 if (mandate == null || !IsValid(mandate["status"]?.GetValue<string>()))
                 {
                     var mandates = await ListMandatesAsync(mollieCustomerId, ct);
@@ -1170,8 +1223,9 @@ public sealed class MolliePaymentService : IMolliePaymentService
         if (IsValid(sub.MollieMandateStatus))
         {
             if (!includeValid || string.IsNullOrWhiteSpace(sub.MollieCustomerId) || string.IsNullOrWhiteSpace(sub.MollieMandateId)) return false;
-            var current = await GetAsync($"customers/{Uri.EscapeDataString(sub.MollieCustomerId)}/mandates/{Uri.EscapeDataString(sub.MollieMandateId)}", ct);
-            ApplyMandate(sub, current);
+            var current = await GetMandateOrNullAsync(sub.MollieCustomerId, sub.MollieMandateId, ct);
+            if (current == null) MarkMandateGone(sub);
+            else ApplyMandate(sub, current);
             if (!IsValid(sub.MollieMandateStatus)) await TryAdoptExistingMandateAsync(sub, ct);
         }
         else

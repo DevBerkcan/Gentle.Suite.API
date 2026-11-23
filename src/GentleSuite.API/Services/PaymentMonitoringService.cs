@@ -39,12 +39,18 @@ public class PaymentMonitoringService : IPaymentMonitoringService
         var invoices = await _db.Invoices.AsNoTracking()
             .Where(i => i.SubscriptionId != null && i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Cancelled && i.Status != InvoiceStatus.Draft &&
                         (i.PaymentCollectionStatus != null || i.ChargedBackAt != null))
-            .Select(i => new { i.Id, i.InvoiceNumber, i.SubscriptionId, CustomerName = i.Customer.CompanyName, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate, i.CollectionAttemptCount, i.ChargedBackAt, i.ChargebackAmount, i.GrossTotal })
+            .Select(i => new { i.Id, i.InvoiceNumber, i.SubscriptionId, CustomerName = i.Customer.CompanyName, i.Status, i.PaymentCollectionStatus, i.PaymentCollectionDueDate, i.CollectionAttemptCount, i.ChargedBackAt, i.ChargebackAmount, i.GrossTotal,
+                MandateStatus = _db.CustomerSubscriptions.IgnoreQueryFilters().Where(s => s.Id == i.SubscriptionId).Select(s => s.MollieMandateStatus).FirstOrDefault() })
             .ToListAsync(ct);
         foreach (var i in invoices)
         {
             if (i.ChargedBackAt != null)
                 issues.Add(new("critical", "chargeback", $"Rücklastschrift {i.InvoiceNumber}", $"{i.ChargebackAmount ?? i.GrossTotal:N2} € zurückgebucht — Kunde kontaktieren.", i.CustomerName, i.SubscriptionId, i.Id, i.ChargedBackAt));
+            else if (i.PaymentCollectionStatus == "scheduled" && i.PaymentCollectionDueDate < today &&
+                     !string.Equals(i.MandateStatus, "valid", StringComparison.OrdinalIgnoreCase))
+                issues.Add(new("critical", "collection-no-mandate", $"Einzug {i.InvoiceNumber} wartet auf neue Zahlungsart",
+                    "Das Mollie-Mandat ist ungültig oder wurde widerrufen (z. B. Karte von der Bank abgelehnt). Dem Kunden den Einrichtungslink senden – danach wird automatisch eingezogen.",
+                    i.CustomerName, i.SubscriptionId, i.Id, i.PaymentCollectionDueDate));
             else if (i.PaymentCollectionStatus == "scheduled" && i.PaymentCollectionDueDate < today)
                 issues.Add(new("critical", "collection-overdue", $"Einzug {i.InvoiceNumber} überfällig", $"Geplant für {i.PaymentCollectionDueDate:dd.MM.yyyy}, aber noch nicht gestartet.", i.CustomerName, i.SubscriptionId, i.Id, i.PaymentCollectionDueDate));
             else if (i.PaymentCollectionStatus != null && InFlight.Contains(i.PaymentCollectionStatus) && i.PaymentCollectionDueDate != null && AddBusinessDays(i.PaymentCollectionDueDate.Value, 5) < now)
@@ -65,8 +71,7 @@ public class PaymentMonitoringService : IPaymentMonitoringService
             var mandateValid = string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase);
             var title = s.InstallmentSourceTitle ?? s.Plan?.Name ?? "Abo";
             if (!mandateValid && s.Status != SubscriptionStatus.Paused && now - s.CreatedAt > TimeSpan.FromDays(3))
-                issues.Add(new("warning", "mandate-missing", $"Mandat fehlt: {title}", s.MollieMandateStatus == "pending" ? "Mandat wird von Mollie/Bank noch geprüft." : "Kunde hat die Zahlungsart noch nicht eingerichtet.", s.Customer.CompanyName, s.Id, null, s.CreatedAt));
-            if (!mandateValid && !string.IsNullOrWhiteSpace(s.LastSetupError) && s.LastSetupAttemptAt != null && now - s.LastSetupAttemptAt.Value < TimeSpan.FromDays(14))
+                issues.Add(new("warning", "mandate-missing", $"Mandat fehlt: {title}", s.MollieMandateStatus == "pending" ? "Mandat wird von Mollie/Bank noch geprüft." : "Kunde hat die Zahlungsart noch nicht eingerichtet.", s.Customer.CompanyName, s.Id, null, s.CreatedAt));            if (!mandateValid && !string.IsNullOrWhiteSpace(s.LastSetupError) && s.LastSetupAttemptAt != null && now - s.LastSetupAttemptAt.Value < TimeSpan.FromDays(14))
             {
                 var method = s.LastSetupAttemptMethod == "card" ? "Karte" : s.LastSetupAttemptMethod == "iban" ? "IBAN" : s.LastSetupAttemptMethod ?? "unbekannt";
                 issues.Add(new("warning", "mandate-setup-failed", $"Einrichtung fehlgeschlagen: {title}",
