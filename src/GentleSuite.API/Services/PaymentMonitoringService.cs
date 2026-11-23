@@ -68,7 +68,8 @@ public class PaymentMonitoringService : IPaymentMonitoringService
             .ToListAsync(ct);
         foreach (var s in subs)
         {
-            var mandateValid = string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase);
+            // Zahlungsart Überweisung braucht kein Mandat → keine Mandats-Warnungen.
+            var mandateValid = SubscriptionPayment.IsPaymentReady(s);
             var title = s.InstallmentSourceTitle ?? s.Plan?.Name ?? "Abo";
             if (!mandateValid && s.Status != SubscriptionStatus.Paused && now - s.CreatedAt > TimeSpan.FromDays(3))
                 issues.Add(new("warning", "mandate-missing", $"Mandat fehlt: {title}", s.MollieMandateStatus == "pending" ? "Mandat wird von Mollie/Bank noch geprüft." : "Kunde hat die Zahlungsart noch nicht eingerichtet.", s.Customer.CompanyName, s.Id, null, s.CreatedAt));            if (!mandateValid && !string.IsNullOrWhiteSpace(s.LastSetupError) && s.LastSetupAttemptAt != null && now - s.LastSetupAttemptAt.Value < TimeSpan.FromDays(14))

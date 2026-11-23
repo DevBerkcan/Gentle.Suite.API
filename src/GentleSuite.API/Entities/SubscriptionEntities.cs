@@ -52,6 +52,8 @@ public class CustomerSubscription : BaseEntity
     public bool BusinessCustomerConfirmed { get; set; }
     public DateTimeOffset? BusinessCustomerConfirmedAt { get; set; }
     public DateTimeOffset? ConfirmedAt { get; set; }
+    /// <summary>Mollie = automatic collection via mandate; Transfer = invoice only, the customer pays by bank transfer (no mandate needed).</summary>
+    public SubscriptionPaymentMethod PaymentMethod { get; set; } = SubscriptionPaymentMethod.Mollie;
     public string? MollieCustomerId { get; set; }
     public string? MollieMandateId { get; set; }
     public string? MollieMandateStatus { get; set; }

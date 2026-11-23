@@ -211,6 +211,9 @@ public static class NextCollection
 
         // Gleiche Regel wie SubscriptionBillingJob: Rückstand → Neustart ab heute, dann CollectionSchedule.DueDate.
         var periodStart = CollectionSchedule.IsBacklog(s.NextBillingDate, s.CollectionDayOfMonth, s.BillingAnchorDate != null, today) ? today : s.NextBillingDate;
+        // Überweisung: kein Einzug — "nächster Termin" ist der Tag, an dem die nächste Rechnung erstellt und versendet wird.
+        if (SubscriptionPayment.IsTransfer(s))
+            return new Info(periodStart < today ? today : periodStart, amount, null, true, null);
         return new Info(CollectionSchedule.DueDate(periodStart, s.CollectionDayOfMonth, today, preNotificationDays), amount, null, true, null);
     }
 }
