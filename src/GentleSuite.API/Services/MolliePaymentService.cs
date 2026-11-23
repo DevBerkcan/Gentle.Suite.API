@@ -284,6 +284,9 @@ public sealed class MolliePaymentService : IMolliePaymentService
         var contact = PrimaryContact(subscription);
         var recipient = contact?.Email?.Trim();
 
+        if (SubscriptionPayment.IsTransfer(subscription))
+            return new MandateEmailResultDto(false, recipient, subscription.MandateEmailSentAt, "NotRequired", "Zahlungsart ist Überweisung – der Kunde muss keine Zahlungsart bei Mollie einrichten.");
+
         // Hat der Kunde bereits ein gültiges Mandat (eigenes oder aus einem anderen Vertrag), braucht er keine
         // Einrichtungs-Mail — das Mandat wird übernommen statt den Kunden ein zweites Mal einrichten zu lassen.
         if (!IsValid(subscription.MollieMandateStatus) && !IsEnded(subscription))
@@ -690,6 +693,14 @@ public sealed class MolliePaymentService : IMolliePaymentService
         if (invoice.Status == InvoiceStatus.Paid) return;
         var subscription = (invoice.SubscriptionId == null ? null : await SubscriptionsWithDetails().FirstOrDefaultAsync(s => s.Id == invoice.SubscriptionId, ct))
             ?? throw new InvalidOperationException("Die Rechnung gehört zu keinem Abonnement.");
+        // Zahlungsart Überweisung: nie einziehen. Ein noch geplanter Einzug (z. B. Umstellung während eines Laufs) wird beendet.
+        if (SubscriptionPayment.IsTransfer(subscription) && invoice.PaymentCollectionStatus == "scheduled")
+        {
+            invoice.PaymentCollectionStatus = null;
+            invoice.PaymentCollectionDueDate = null;
+            await _db.SaveChangesAsync(ct);
+            return;
+        }
 
         if (string.IsNullOrWhiteSpace(subscription.MollieCustomerId) ||
             string.IsNullOrWhiteSpace(subscription.MollieMandateId) ||
@@ -1174,6 +1185,7 @@ public sealed class MolliePaymentService : IMolliePaymentService
         var candidateIds = await _db.CustomerSubscriptions.IgnoreQueryFilters()
             .Where(s => !s.IsDeleted && !s.Customer.IsDeleted &&
                         s.Status != SubscriptionStatus.Cancelled && s.Status != SubscriptionStatus.Expired && s.Status != SubscriptionStatus.Completed &&
+                        s.PaymentMethod == SubscriptionPaymentMethod.Mollie &&
                         (s.MollieMandateStatus == null || s.MollieMandateStatus != "valid") &&
                         (s.MollieCustomerId != null || s.Customer.MollieCustomerId != null ||
                          _db.CustomerSubscriptions.IgnoreQueryFilters().Any(o => o.CustomerId == s.CustomerId && o.MollieCustomerId != null)))

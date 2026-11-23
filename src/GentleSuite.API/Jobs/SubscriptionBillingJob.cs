@@ -78,11 +78,12 @@ public class SubscriptionBillingJob
             var dueIds = await _db.CustomerSubscriptions.IgnoreQueryFilters()
                 .Where(s => !s.IsDeleted && !s.Customer.IsDeleted &&
                     s.Status == SubscriptionStatus.Active &&
-                    s.MollieMandateStatus == "valid" &&
                     s.BusinessCustomerConfirmed &&
                     s.AgreedMonthlyPrice > 0 &&
                     s.BillingAuthorizedAt != null &&
-                    s.NextBillingDate < horizon &&
+                    // Mollie: Rechnung (= SEPA-Vorabankündigung) schon vor dem Einzugstermin; Überweisung: Rechnung am Fälligkeitstag.
+                    ((s.PaymentMethod == SubscriptionPaymentMethod.Mollie && s.MollieMandateStatus == "valid" && s.NextBillingDate < horizon) ||
+                     (s.PaymentMethod == SubscriptionPaymentMethod.Transfer && s.NextBillingDate < today.AddDays(1))) &&
                     !(s.IsInstallmentPlan && s.InstallmentsCompleted >= (s.ContractDurationMonths ?? 1)))
                 .OrderBy(s => s.NextBillingDate)
                 .Select(s => s.Id)
@@ -156,8 +157,8 @@ public class SubscriptionBillingJob
         var sub = await BillableSubscriptions().FirstOrDefaultAsync(s => s.Id == subscriptionId)
             ?? throw new KeyNotFoundException("Abonnement wurde nicht gefunden.");
 
-        if (!string.Equals(sub.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Das Zahlungsmandat wurde noch nicht bestätigt. Die Rechnung kann erst danach versendet werden.");
+        if (!SubscriptionPayment.IsPaymentReady(sub))
+            throw new InvalidOperationException("Das Zahlungsmandat wurde noch nicht bestätigt. Die Rechnung kann erst danach versendet werden (oder Zahlungsart auf Überweisung umstellen).");
         if (sub.Status is SubscriptionStatus.Cancelled or SubscriptionStatus.Completed or SubscriptionStatus.Expired)
             throw new InvalidOperationException("Für dieses Abonnement kann keine weitere Rechnung mehr gestellt werden.");
         if (sub.IsInstallmentPlan && sub.InstallmentsCompleted >= (sub.ContractDurationMonths ?? 1))
@@ -258,6 +259,9 @@ public class SubscriptionBillingJob
             // der SEPA-Vorabankündigung (Berliner Datum). Wird nur bei Erstellung gesetzt — spätere Änderungen des
             // Abbuchungstags lassen bereits erstellte Rechnungen unberührt.
             var collectionDueDate = CollectionSchedule.DueDate(periodStart, sub.CollectionDayOfMonth, today, preNotificationDays);
+            // Überweisung: kein Einzug, Zahlungsziel wie bei normalen Rechnungen (Einstellungen → Zahlungsziel).
+            var isTransfer = SubscriptionPayment.IsTransfer(sub);
+            var transferDueDate = today.AddDays(Math.Max(0, co.InvoicePaymentTermDays));
 
             var inv = new Invoice
             {
@@ -272,16 +276,19 @@ public class SubscriptionBillingJob
                     : $"Serienrechnung – {sub.Plan.Name}",
                 TaxMode = co.DefaultTaxMode,
                 InvoiceDate = DateTimeOffset.UtcNow,
-                DueDate = collectionDueDate,
+                DueDate = isTransfer ? transferDueDate : collectionDueDate,
                 SellerTaxId = co.TaxId,
                 SellerVatId = co.VatId,
                 Status = InvoiceStatus.Final,
                 IsFinalized = true,
                 FinalizedAt = DateTimeOffset.UtcNow,
                 RetentionUntil = DateTimeOffset.UtcNow.AddYears(Invoice.RetentionYears),
-                PaymentCollectionStatus = "scheduled",
-                PaymentCollectionDueDate = collectionDueDate,
-                PaymentTerms = $"{MandateLabels.CollectionSentence(sub.MollieMandateMethod, grossTotal, collectionDueDate)} Vertragsgrundlage: {sub.ContractReference ?? "-"}, Version {sub.ContractVersion?.ToString() ?? "-"}. Mollie-Mandat: {sub.MollieMandateId}."
+                PaymentCollectionStatus = isTransfer ? null : "scheduled",
+                PaymentCollectionDueDate = isTransfer ? null : collectionDueDate,
+                PaymentTerms = isTransfer
+                    ? SubscriptionPayment.TransferTerms(grossTotal, transferDueDate, invoiceNumber) +
+                      (sub.ContractReference != null ? $" Vertragsgrundlage: {sub.ContractReference}, Version {sub.ContractVersion?.ToString() ?? "-"}." : "")
+                    : $"{MandateLabels.CollectionSentence(sub.MollieMandateMethod, grossTotal, collectionDueDate)} Vertragsgrundlage: {sub.ContractReference ?? "-"}, Version {sub.ContractVersion?.ToString() ?? "-"}. Mollie-Mandat: {sub.MollieMandateId}."
             };
 
             inv.Lines.Add(new InvoiceLine

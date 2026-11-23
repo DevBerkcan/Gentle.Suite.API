@@ -33,6 +33,9 @@ public static class SchemaPatches
         // Angebots-Layout: purely additive — one new nullable column ("Über uns"-Text für Angebote). Early, because every
         // CompanySettings query (PDFs, mails, settings) selects it.
         await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CompanySettings','QuoteAboutText') IS NULL ALTER TABLE "CompanySettings" ADD "QuoteAboutText" NVARCHAR(MAX) NULL;""");
+        // Zahlungsart je Serienrechnung (0 = Mollie-Einzug, 1 = nur Rechnungsversand/Überweisung). Purely additive with
+        // DEFAULT 0, so every existing subscription keeps Mollie. Early: every CustomerSubscriptions query selects it.
+        await db.Database.ExecuteSqlRawAsync("""IF COL_LENGTH('CustomerSubscriptions','PaymentMethod') IS NULL ALTER TABLE "CustomerSubscriptions" ADD "PaymentMethod" INT NOT NULL CONSTRAINT "DF_CustomerSubscriptions_PaymentMethod" DEFAULT 0;""");
         // Mollie-Überarbeitung: purely additive — new nullable columns + two new tables, no data update. Placed
         // early for the same reason as AvatarPath: every CustomerSubscriptions/Customers/Invoices query selects
         // these columns, so a later failing statement must not leave them missing.

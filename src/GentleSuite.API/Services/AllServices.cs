@@ -776,6 +776,39 @@ public class SubscriptionServiceImpl : ISubscriptionService
         return await GetByIdAsync(sid, ct);
     }
 
+    /// <summary>Zahlungsart umstellen: Mollie-Einzug ↔ nur Rechnungsversand (Kunde überweist). Beim Wechsel auf Überweisung
+    /// werden noch nicht gestartete Einzüge ("scheduled") dieses Abos gestoppt — die Rechnung bleibt offen und wird überwiesen.
+    /// Bereits laufende Einzüge (open/pending/authorized) liegen schon bei der Bank und laufen regulär zu Ende.</summary>
+    public async Task<CustomerSubscriptionDto> SetPaymentMethodAsync(Guid sid, SetPaymentMethodRequest req, CancellationToken ct)
+    {
+        var s = await SubscriptionsQuery().FirstOrDefaultAsync(x => x.Id == sid, ct)
+            ?? throw new KeyNotFoundException("Abonnement wurde nicht gefunden.");
+        if (s.Status is SubscriptionStatus.Cancelled or SubscriptionStatus.Expired or SubscriptionStatus.Completed)
+            throw new InvalidOperationException("Für ein beendetes Abo kann die Zahlungsart nicht mehr geändert werden.");
+        if (s.PaymentMethod == req.PaymentMethod) return await GetByIdAsync(sid, ct);
+
+        SubscriptionPayment.Apply(s, req.PaymentMethod);
+        var stopped = new List<string>();
+        if (req.PaymentMethod == SubscriptionPaymentMethod.Transfer)
+        {
+            var scheduled = await _db.Invoices.Where(i => i.SubscriptionId == sid && i.PaymentCollectionStatus == "scheduled" &&
+                i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Cancelled).ToListAsync(ct);
+            foreach (var inv in scheduled)
+            {
+                inv.PaymentCollectionStatus = null;
+                inv.PaymentCollectionDueDate = null;
+                stopped.Add(inv.InvoiceNumber);
+            }
+        }
+        await _db.SaveChangesAsync(ct);
+
+        var title = s.IsInstallmentPlan ? (s.InstallmentSourceTitle ?? s.Plan.Name) : s.Plan.Name;
+        var label = req.PaymentMethod == SubscriptionPaymentMethod.Transfer ? "nur Rechnungsversand (Kunde überweist)" : "Mollie-Einzug";
+        await _activity.LogAsync(s.CustomerId, "Subscription", s.Id, "PaymentMethodChanged",
+            $"Zahlungsart für „{title}“ auf {label} umgestellt" + (stopped.Count > 0 ? $"; geplanter Einzug gestoppt für {string.Join(", ", stopped)}" : "") + ".", ct: ct);
+        return await GetByIdAsync(sid, ct);
+    }
+
     public async Task<CustomerSubscriptionDto> SetCollectionDayAsync(Guid sid, SetCollectionDayRequest req, CancellationToken ct)
     {
         if (req.Day != null && !CollectionSchedule.IsValidDay(req.Day))
@@ -924,8 +957,8 @@ public class SubscriptionServiceImpl : ISubscriptionService
         var subscription = await BuildSubscriptionAsync(customerId, line.SubscriptionPlanId.Value, quote, quoteLineId, line.Total, null, null, ct);
         return await GetByIdAsync(subscription.Id, ct);
     }
-    public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || !s.BusinessCustomerConfirmed)) throw new InvalidOperationException("Das Abonnement kann erst mit bestätigter B2B-Vertragsgrundlage und gültigem Mollie-Mandat aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
-    public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!string.Equals(s.MollieMandateStatus, "valid", StringComparison.OrdinalIgnoreCase) || !s.BusinessCustomerConfirmed) throw new InvalidOperationException("Das Abonnement kann erst mit bestätigter B2B-Vertragsgrundlage und gültigem Mollie-Mandat aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
+    public async Task UpdateStatusAsync(Guid sid, UpdateSubscriptionStatusRequest req, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (req.Status == SubscriptionStatus.Active && (!SubscriptionPayment.IsPaymentReady(s) || !s.BusinessCustomerConfirmed)) throw new InvalidOperationException("Das Abonnement kann erst mit bestätigter B2B-Vertragsgrundlage und gültigem Mollie-Mandat (oder Zahlungsart Überweisung) aktiviert werden."); s.Status = req.Status; if (req.Status == SubscriptionStatus.Paused) s.PausedAt = DateTimeOffset.UtcNow; if (req.Status == SubscriptionStatus.Cancelled) { s.CancelledAt = DateTimeOffset.UtcNow; s.CancellationReason = req.Reason; s.EndDate = DateTimeOffset.UtcNow; } await _db.SaveChangesAsync(ct); }
+    public async Task ConfirmAsync(Guid sid, CancellationToken ct) { var s = await _db.CustomerSubscriptions.FindAsync(new object[] { sid }, ct) ?? throw new KeyNotFoundException(); if (!SubscriptionPayment.IsPaymentReady(s) || !s.BusinessCustomerConfirmed) throw new InvalidOperationException("Das Abonnement kann erst mit bestätigter B2B-Vertragsgrundlage und gültigem Mollie-Mandat (oder Zahlungsart Überweisung) aktiviert werden."); s.Status = SubscriptionStatus.Active; s.ConfirmedAt = DateTimeOffset.UtcNow; await _db.SaveChangesAsync(ct); }
     public async Task<List<SubscriptionInvoiceDto>> GetInvoicesAsync(Guid sid, CancellationToken ct)
     {
         var rows = await _db.Invoices.AsNoTracking().Where(i => i.SubscriptionId == sid).OrderByDescending(i => i.InvoiceDate)

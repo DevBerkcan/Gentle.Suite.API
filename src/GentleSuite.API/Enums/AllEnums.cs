@@ -32,6 +32,8 @@ public enum EmailStatus { Queued, Sending, Sent, Failed }
 
 // === Subscriptions ===
 public enum SubscriptionStatus { Active, Paused, Cancelled, Expired, PendingConfirmation, Completed }
+/// <summary>How a subscription invoice gets paid: automatic Mollie collection (needs a mandate) or bank transfer by the customer.</summary>
+public enum SubscriptionPaymentMethod { Mollie, Transfer }
 public enum BillingCycle { Monthly, Quarterly, Yearly }
 public enum SubscriptionPlanCategory { Allgemein, DomainHosting, Wartungsvertrag, SLA, Software, Support, Sonstiges }
 

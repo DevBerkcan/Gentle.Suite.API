@@ -172,7 +172,8 @@ public class MappingProfile : Profile
                 s.MollieMandateMethod, s.MandateAccountLast4, null, 0, 0, 0m,
                 s.LastSetupAttemptAt, s.LastSetupAttemptMethod, s.LastSetupError, s.SetupAttemptCount,
                 s.CollectionDayOfMonth,
-                s.ExternalContractReference, s.ExternalContractConfirmedAt, s.ExternalContractConfirmedBy
+                s.ExternalContractReference, s.ExternalContractConfirmedAt, s.ExternalContractConfirmedBy,
+                s.PaymentMethod
             ));
 
         CreateMap<TimeEntry, TimeEntryDto>()
